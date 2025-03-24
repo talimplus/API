@@ -1,0 +1,24 @@
+{
+  "user_created": "Foydalanuvchi muvaffaqiyatli yaratildi",
+  "user_found": "Foydalanuvchi topildi",
+  "all_users": "Organization’ga tegishli barcha foydalanuvchilar",
+  "user_deleted": "Foydalanuvchi muvaffaqiyatli o‘chirildi",
+  "user_updated": "Foydalanuvchi muvaffaqiyatli yangilandi",
+  "email_taken": "Bu email allaqachon ishlatilgan",
+  "phone_taken": "Bu telefon raqami allaqachon ishlatilgan",
+  "not_found": "Foydalanuvchi topilmadi yoki sizga tegishli emas",
+  "validation": {
+    "firstName_required": "FirstName maydoni to'ldirilishi majburiy",
+    "lastName_required": "LastName maydoni to'ldirilishi majburiy",
+    "email_required": "Email maydoni to'ldirilishi majburiy",
+    "phone_required": "Phone maydoni to'ldirilishi majburiy",
+    "phone_invalid": "Phone maydoni to'g'ri telefon raqami bo'lishi kerak",
+    "password_required": "Password maydoni to'ldirilishi majburiy",
+    "role_required": "Role maydoni to'ldirilishi majburiy",
+    "role_invalid": "Role noto'g'ri",
+    "centerId_required": "CenterId maydoni to'ldirilishi majburiy",
+    "centerId_invalid": "CenterId raqam bo'lishi kerak",
+    "salary_invalid": "Salary raqam bo'lishi kerak",
+    "commissionPercentage_invalid": "CommissionPercentage raqam bo'lishi kerak"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "mnemo-bot",
+  "private_key_id": "92b4de6dc17195c23c399b1ce610c84b23832b28",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCuCjZQ7WJ7rqJu\ntWm8k23XUt1IPjUvSvw768IvBrltU0KsTC7gfCIKxetD0Q5Ja7lhfHJfJi5QTTzN\nabyYp4UepMiSNzmIowuB/HjXqwUOAAdoMZju2MnpPp1jLBYhHws42JtQOT0Q5jGx\n3GFkkZ6XEvCI54bEl1erssAjDQ4ZGprT7Znwvcv8oSQQHTEyDSkSuUNp+WObW/pi\njiueErbovmtSjo1CHFrHUrrBhoDmD8XvvQRXlQuCAfUAtxMldVpEgO2Xz4PNuPwx\nIB4Yq8xX8dVZYKsOGd8ULeEtI4esIMR6vkMlIAfyHFqC0bTGC3XCMluNXEh9gAig\ncERzYI3NAgMBAAECggEAFJxaft6CA340t9Itpbq67x1d3dSaJVHmyazbqAiOlJsf\n4fo6sfSZbneuay9alwjWISyk+c4yfWmMOhJb1qM+IVkn9KLsIhmW/wuYfwf+lwAb\nYHRBNYYAcWosJua9byo3QMHsMMW6jOIKABOGiCuzoZYJXNk4bVcz9345gV0mLoQ1\nRnjy0Xqf2pevsvo//0H0Yaqc4jFGfRNxEMo7bN0+6tuPKI+xeeuhdZCZmzlSLwjf\nxkiVKWe32nRDwWkiZQRs6nxZ3IoMBogAe3NUhD/IXxJIFNIfU+mg2u6FUNCRLBF6\nRkrTdUzZRhoJv+KAz4XcGKd0Q/CG5Ak5gRI0A4S9gQKBgQDc17qiJIke3eM+eKH1\nf5jyLTSHRqpRkJ6AaelxknE67Gd3T8qcfDJHv222Ul8sDjypCzxlijbM66jRuGHF\nXpCHcKNA6BfajWkIQFY0mMHo/Y9T0Ap7UlF1/raHWtmXqhFF8IU7KxMDiO0ziDuO\nzkWOnL1c6NoR/ChBA4rSy73dTQKBgQDJvxJYVkv3/ub8WpG0Yvzp4d2cE0XxvzVN\n1J1dN0nJO1Db2IRtiGL/wNYHTShKf7zrsPG99vDPbrjJHS1CSxnlyc4caHlkisxi\n0bLqMq3YJKgMbAxOB01SCLauUxjAAMkis9iCtzj9v+ohDW3Cv//FI5NCsWEgfo1J\njaaQj+cygQKBgA0MMdqijfdk5KgsOGVoxICKazAS3L007ihoGYK8RDRXA0XpUO8t\n50qV5MWA2F6h+LOEFm1pXRN+WNsLKbufeqqF3R9YlxAyiqISKwWwgMRjNrSc9gGT\nO3zdL6uPkouDYMHhE/4K7XSoAlupENu/FBz45bc3iqrFWxt8Ohd6Mh2BAoGAVe0c\nmiU/PAQES40jq8nRYKgDpDsNOlavFFQvJgmrUpsB6HECjkhdqgJu5jM1qu1XAKef\nfsJTdHX7HCViJm8oO5fFQpI4ydrYDGq2IkutgXazYH8QipdPllYBwKPB0d1DzZT9\n7Uaubl00EhnPGvh9rnBlgy1baeSctqwvOjkgRoECgYBrq8nklEF7qrlzZwfhN1sl\nUTr/unAKujGNmG/ViKFsq65oXXd5hxyEEW3DpI5XTJUIieBwYah70lqxjoQzFA8d\nTxmwHHZuuW+nquzSZz8Kv5Ak9WOmuxkdavJbPSv87E8Zo/NKsa/mKlxWX9BFUUPR\nzFaG+5INuwFvQWNSD0fKBQ==\n-----END PRIVATE KEY-----\n",
+  "client_email": "mnemo-bot@mnemo-bot.iam.gserviceaccount.com",
+  "client_id": "109316357285817012723",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/mnemo-bot%40mnemo-bot.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

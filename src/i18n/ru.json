@@ -1,0 +1,24 @@
+{
+  "user_created": "Пользователь успешно создан",
+  "user_found": "Пользователь найден",
+  "all_users": "Все пользователи, относящиеся к организации",
+  "user_deleted": "Пользователь успешно удален",
+  "user_updated": "Пользователь успешно обновлен",
+  "email_taken": "Этот email уже используется",
+  "phone_taken": "Этот номер телефона уже используется",
+  "not_found": "Пользователь не найден или не относится к вам",
+  "validation": {
+    "firstName_required": "Поле FirstName обязательно для заполнения",
+    "lastName_required": "Поле LastName обязательно для заполнения",
+    "email_required": "Поле Email обязательно для заполнения",
+    "phone_required": "Поле Phone обязательно для заполнения",
+    "phone_invalid": "Поле Phone должно быть правильным номером телефона",
+    "password_required": "Поле Password обязательно для заполнения",
+    "role_required": "Поле Role обязательно для заполнения",
+    "role_invalid": "Role неверный",
+    "centerId_required": "Поле CenterId обязательно для заполнения",
+    "centerId_invalid": "CenterId должен быть числом",
+    "salary_invalid": "Salary должен быть числом",
+    "commissionPercentage_invalid": "CommissionPercentage должен быть числом"
+  }
+}

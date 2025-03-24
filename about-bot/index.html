@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bot Tutorial</title>
+  <style>
+      body {
+          font-family: Arial, sans-serif;
+          margin: 0;
+          padding: 0;
+          background-color: #f8f9fa;
+      }
+      .container {
+          max-width: 800px;
+          margin: 20px auto;
+          padding: 10px;
+          background: #ffffff;
+          border-radius: 10px;
+          box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .section {
+          margin-bottom: 20px;
+      }
+      .section img {
+          width: 100%;
+          max-width: 600px;
+          margin: 0 auto 10px;
+          display: block;
+          border-radius: 5px;
+      }
+      .section h3 {
+          font-size: 18px;
+          margin-bottom: 5px;
+          color: #333;
+      }
+      .section p {
+          font-size: 16px;
+          color: #555;
+      }
+  </style>
+</head>
+<body>
+<div class="container" id="content"></div>
+
+<script>
+  // Backenddan keladigan API endpoint
+  const API_URL = "https://bot.sinovdomain.uz/texts/about-bot";
+
+  // HTMLni yangilash funksiyasi
+  function updateHTML(data) {
+    const contentDiv = document.getElementById("content");
+
+    // Har bir bo'limni API'dan kelgan ma'lumotlar bilan yaratish
+    const sections = [
+      { image: "./images/add_new_words_menu.jpg", image1: './images/add_new_words_example.jpg' , key: "about_bot_add_words" },
+      { image: "./images/change_language_bot_menu.jpg", image1: './images/change_language_bot_example.jpg', key: "about_bot_change_language" },
+      { image: "./images/manage_sending_time_menu.jpg", key: "about_bot_manage_time" },
+      { image: './images/manage_sending_time_example.jpg', key: "about_bot_auto_word_sending" },
+      { image: '', key: "word_delivery_time" },
+      { image: '', key: "language_based_responses" },
+      { image: "./images/send_word_image-change_image.jpg", key: "about_bot_change_image" },
+      { image: "./images/send_word_image-next_word.jpg", key: "about_bot_next_word" },
+    ];
+
+    sections.forEach((section, i) => {
+      // Backenddan kelgan so‘zlarni o‘qish
+      const text = data[i].key === section.key ? data[i].text : "No description available.";
+
+      // Dinamik HTML yaratish
+      const sectionDiv = document.createElement("div");
+      sectionDiv.classList.add("section");
+
+      sectionDiv.innerHTML = `
+          <h3>${text}</h3>
+          ${section?.image ? `<img src="${section.image}" alt="${text}">` : ''}
+          ${section?.image1 ? `<img src="${section.image1}" alt="${text}">` : ''}
+          ${section?.image2 ? `<img src="${section.image2}" alt="${text}">` : ''}
+          <br><br>
+          <hr>
+        `;
+
+      contentDiv.appendChild(sectionDiv);
+    });
+  }
+
+  // APIga so‘rov yuborish
+  async function fetchTexts() {
+    const queryParams = new URLSearchParams(window.location.search);
+    const lang = queryParams.get('lang') || 'english';
+    try {
+      const response = await fetch(`${API_URL}?lang=${lang}`, {
+        method: "GET",
+      });
+      const data = await response.json();
+
+      // Ma'lumotni HTML'ga qo‘shish
+      updateHTML(data.aboutBotTexts);
+    } catch (error) {
+      console.error("Error fetching texts:", error);
+    }
+  }
+
+  // Ma'lumotlarni yuklash
+  fetchTexts();
+</script>
+</body>
+</html>
