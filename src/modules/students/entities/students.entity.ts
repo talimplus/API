@@ -20,7 +20,7 @@ export class Student {
   @Column()
   lastName: string;
 
-  @Column({ unique: true })
+  @Column()
   phone: string;
 
   @Column({ type: 'date' })
