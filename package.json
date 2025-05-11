@@ -38,6 +38,7 @@
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^4.73.1",
+    "passport-jwt": "^4.0.1",
     "pg": "^8.13.1",
     "redis": "^4.7.0",
     "reflect-metadata": "^0.2.0",
