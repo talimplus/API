@@ -13,20 +13,27 @@ import {
 import { CentersService } from './centers.service';
 import { CreateCenterDto } from './dto/create-center.dto';
 import { UpdateCenterDto } from './dto/update-center.dto';
-import { Roles } from '@/decorators/roles.decorator';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { Roles } from '@/decorators/roles.decorator';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { PaginatedCenterResponseDto } from '@/modules/centers/dto/paginated-center-response.dto';
+import { CenterResponseDto } from '@/modules/centers/dto/center-reponse.dto';
 
+@ApiTags('Centers')
 @Controller('centers')
 export class CentersController {
   constructor(private readonly centersService: CentersService) {}
 
   @Post()
+  @ApiOperation({ summary: 'Create new center' })
   @Roles(UserRole.ADMIN)
   create(@Body() dto: CreateCenterDto, @Req() req: any) {
     return this.centersService.create(dto, req.user.organizationId);
   }
 
   @Get()
+  @ApiOperation({ summary: 'Get All centers' })
+  @ApiResponse({ type: PaginatedCenterResponseDto })
   @Roles(UserRole.ADMIN)
   async findAll(
     @Req() req: any,
@@ -42,12 +49,15 @@ export class CentersController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Get center by id' })
+  @ApiResponse({ type: CenterResponseDto })
   @Roles(UserRole.ADMIN)
   findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.centersService.findOne(id, req.user.organizationId);
   }
 
   @Put(':id')
+  @ApiOperation({ summary: 'Update center by id' })
   @Roles(UserRole.ADMIN)
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -58,6 +68,7 @@ export class CentersController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: 'Delete center by id' })
   @Roles(UserRole.ADMIN)
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.centersService.remove(id, req.user.organizationId);
