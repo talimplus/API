@@ -3,7 +3,7 @@ import { AppModule } from '@/app.module';
 import { CustomValidationPipe } from './common/pipes/custom-validation.pipe';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
-console.log('Deloy worked 12');
+console.log('Deloy worked');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
