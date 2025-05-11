@@ -7,7 +7,7 @@ on:
 
 jobs:
   deploy:
-    if: github.actor == 'nematoff98'  # Faqat siz push qilsangiz ishlaydi
+    if: github.actor == 'nematoff98'
     runs-on: ubuntu-latest
 
     steps:
@@ -24,8 +24,15 @@ jobs:
           ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
             set -e
             cd /var/www/html/projects/talimplus
+
+            # old papkani saqlab turish uchun vaqtincha nom
+            rm -rf API_temp
+            git clone git@github.com:talimplus/API.git API_temp
+
+            # agar clone muvaffaqiyatli bo‘lsa, eski API ni o‘chiramiz
             rm -rf API
-            git clone git@github.com:talimplus/API.git API
+            mv API_temp API
+
             cd API
             yarn install --frozen-lockfile
             yarn build
