@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout this repo
         uses: actions/checkout@v3
 
       - name: 🔐 Setup SSH
@@ -19,12 +19,14 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: 🚀 Deploy to server via SSH
+      - name: 🚀 SSH into server and deploy
         run: |
           ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
-            set -e  # ⚠️ Xatolik bo‘lsa, jarayonni to‘xtatadi
-            cd /var/www/html/projects/talimplus/API
-            git pull origin main
+            set -e
+            cd /var/www/html/projects/talimplus
+            rm -rf API
+            git clone git@github.com:talimplus/API.git API
+            cd API
             yarn install --frozen-lockfile
             yarn build
             pm2 restart main
