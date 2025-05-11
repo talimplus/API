@@ -1,0 +1,31 @@
+name: 🚀 Auto Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    if: github.actor == 'nematoff98'  # Faqat siz push qilsangiz ishlaydi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: 🔐 Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: 🚀 Deploy to server via SSH
+        run: |
+          ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
+            set -e  # ⚠️ Xatolik bo‘lsa, jarayonni to‘xtatadi
+            cd /var/www/html/projects/talimplus/API
+            git pull origin main
+            yarn install --frozen-lockfile
+            yarn build
+            pm2 restart main
+          EOF
