@@ -34,7 +34,7 @@ jobs:
             mv API_temp API
 
             cd API
-            npm install --frozen-lockfile
+            npm install --omit=dev
             npm run build
-            pm2 restart talimplus
+            npm2 restart ecosystem.config.js --only talimplus
           EOF
