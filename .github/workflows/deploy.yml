@@ -35,6 +35,6 @@ jobs:
 
             cd API
             npm install --frozen-lockfile
-            npm build
-            pm2 restart main
+            npm run build
+            pm2 restart talimplus
           EOF
