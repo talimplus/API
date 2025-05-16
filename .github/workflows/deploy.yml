@@ -21,20 +21,30 @@ jobs:
 
       - name: 🚀 SSH into server and deploy
         run: |
-          ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@{ip} << 'EOF'
             set -e
             cd /var/www/html/projects/talimplus
 
-            # old papkani saqlab turish uchun vaqtincha nom
+            echo "🔁 Cloning latest code..."
             rm -rf API_temp
             git clone git@github.com:talimplus/API.git API_temp
 
-            # agar clone muvaffaqiyatli bo‘lsa, eski API ni o‘chiramiz
             rm -rf API
             mv API_temp API
 
             cd API
+
+            echo "📝 Writing .env file..."
+            cat <<EOT > .env
+            ${{ secrets.ENV_FILE }}
+            EOT
+            
+            echo "📦 Installing dependencies..."
             npm install
+            
+            echo "🏗️ Building project..."
             npm run build
+            
+            echo "🚀 Restarting PM2 app..."
             pm2 restart ecosystem.config.js --only talimplus
           EOF
