@@ -25,21 +25,31 @@ jobs:
             set -e
             cd /var/www/html/projects/talimplus
 
-            # old papkani saqlab turish uchun vaqtincha nom
+            echo "🔁 Cloning latest code..."
             rm -rf API_temp
             git clone git@github.com:talimplus/API.git API_temp
 
-            # agar clone muvaffaqiyatli bo‘lsa, eski API ni o‘chiramiz
             rm -rf API
             mv API_temp API
 
             cd API
-          
+
             echo "📝 Writing .env file..."
             echo "${{ secrets.ENV_FILE }}" > .env
-          EOF
-          
+
+            echo "📦 Installing dependencies..."
             npm install
+
+            echo "🏗️ Building project..."
             npm run build
+
+            echo "🔍 Checking PM2..."
+            if ! command -v pm2 &> /dev/null
+            then
+              echo "📦 Installing PM2 globally..."
+              npm install -g pm2
+            fi
+
+            echo "🚀 Restarting PM2 app..."
             pm2 restart ecosystem.config.js --only talimplus
           EOF
