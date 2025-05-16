@@ -34,7 +34,7 @@ jobs:
             mv API_temp API
 
             cd API
-            yarn install --frozen-lockfile
-            yarn build
+            npm install --frozen-lockfile
+            npm build
             pm2 restart main
           EOF
