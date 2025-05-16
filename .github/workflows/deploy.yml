@@ -21,7 +21,7 @@ jobs:
 
       - name: 🚀 SSH into server and deploy
         run: |
-          ssh -o StrictHostKeyChecking=no root@{ip} << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
             set -e
             cd /var/www/html/projects/talimplus
 
