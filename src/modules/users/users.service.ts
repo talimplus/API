@@ -15,10 +15,12 @@ import { UpdateUserDto } from '@/modules/users/dto/update-user.dto';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { CurrentUser } from '@/common/types/current.user';
+import { OrganizationsService } from '@/modules/organizations/organizations.service';
 
 @Injectable()
 export class UsersService {
   constructor(
+    private readonly organizationsService: OrganizationsService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(Center)
@@ -28,7 +30,6 @@ export class UsersService {
   ) {}
 
   async createAdminUser(data: Partial<User>, organization: Organization) {
-    console.log(organization, 'createAdminUser');
     const hashedPassword = await bcrypt.hash(data.password, 10);
     const user = this.userRepo.create({
       ...data,
@@ -39,7 +40,7 @@ export class UsersService {
     return this.userRepo.save(user);
   }
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, organizationId: number) {
     if (
       ![UserRole.TEACHER, UserRole.MANAGER, UserRole.OTHER].includes(dto.role)
     ) {
@@ -48,6 +49,12 @@ export class UsersService {
       );
     }
 
+    const organization =
+      await this.organizationsService.findById(organizationId);
+
+    if (!organization.id) {
+      throw new BadRequestException('Bunday organization mavjud emas');
+    }
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
     let center = null;
@@ -64,6 +71,7 @@ export class UsersService {
       ...dto,
       password: hashedPassword,
       center,
+      organization,
     });
 
     return this.userRepo.save(user);
@@ -80,8 +88,8 @@ export class UsersService {
     return this.userRepo.save(user);
   }
 
-  async findByEmail(email: string) {
-    return this.userRepo.findOne({ where: { email } });
+  async findByLogin(login: string) {
+    return this.userRepo.findOne({ where: { login } });
   }
 
   async findAll(
@@ -177,9 +185,9 @@ export class UsersService {
     return this.userRepo.remove(user);
   }
 
-  async findByEmailWithCenterOrg(email: string) {
+  async findByEmailWithCenterOrg(login: string) {
     return this.userRepo.findOne({
-      where: { email },
+      where: { login },
       relations: ['organization', 'center', 'center.organization'],
     });
   }

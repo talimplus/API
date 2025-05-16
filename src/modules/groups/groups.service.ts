@@ -26,16 +26,16 @@ export class GroupsService {
     private readonly userRepo: Repository<User>,
   ) {}
 
-  async create(dto: CreateGroupDto) {
+  async create(dto: CreateGroupDto, centerId: number) {
     const center = await this.centerRepo.findOne({
-      where: { id: dto.centerId },
+      where: { id: centerId },
     });
     if (!center) throw new NotFoundException('Bunday center mavjud emas');
 
     const subject = await this.subjectRepo.findOne({
       where: {
         id: dto.subjectId,
-        center: { id: dto.centerId },
+        center: { id: centerId },
       },
     });
 
@@ -50,7 +50,7 @@ export class GroupsService {
       teacher = await this.userRepo.findOne({
         where: {
           id: dto.teacherId,
-          center: { id: dto.centerId },
+          center: { id: centerId },
         },
       });
 

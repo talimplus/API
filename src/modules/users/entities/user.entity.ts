@@ -4,10 +4,14 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  OneToOne,
+  JoinColumn,
 } from 'typeorm';
-import { Center } from '@/modules/centers/entities/centers.entity';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
+import { Student } from '@/modules/students/entities/students.entity';
+import { Center } from '@/modules/centers/entities/centers.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { IsNotEmpty, IsString, Min } from 'class-validator';
 
 @Entity('users')
 export class User {
@@ -20,8 +24,11 @@ export class User {
   @Column()
   lastName: string;
 
+  @IsNotEmpty()
+  @IsString()
   @Column({ unique: true })
-  email: string;
+  @Min(6)
+  login: string;
 
   @Column({ unique: true })
   phone: string;
@@ -37,6 +44,10 @@ export class User {
 
   @Column({ nullable: true })
   commissionPercentage: number;
+
+  @OneToOne(() => Student, (student) => student.user, { nullable: true })
+  @JoinColumn()
+  student: Student;
 
   @ManyToOne(() => Center, (center) => center.users, { onDelete: 'CASCADE' })
   center: Center;

@@ -1,11 +1,12 @@
 import {
-  IsEmail,
   IsEnum,
-  IsNotEmpty,
   MinLength,
   IsNumber,
   IsOptional,
+  IsNotEmpty,
+  IsString,
 } from 'class-validator';
+import { Column } from 'typeorm';
 import { UserRole } from '@/common/enums/user-role.enums';
 
 export class CreateUserDto {
@@ -15,8 +16,10 @@ export class CreateUserDto {
   @IsNotEmpty()
   lastName: string;
 
-  @IsEmail()
-  email: string;
+  @IsNotEmpty()
+  @IsString()
+  @Column({ unique: true })
+  login: string;
 
   @IsNotEmpty()
   phone: string;
@@ -29,6 +32,10 @@ export class CreateUserDto {
 
   @IsNumber()
   centerId?: number;
+
+  @IsNumber()
+  @IsOptional()
+  organizationId?: number;
 
   @IsOptional()
   @IsNumber()

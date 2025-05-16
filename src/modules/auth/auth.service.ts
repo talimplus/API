@@ -19,10 +19,10 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterAuthDto) {
-    const { email, password, organizationName, firstName, lastName, phone } =
+    const { login, password, organizationName, firstName, lastName, phone } =
       dto;
 
-    const existing = await this.usersService.findByEmail(email);
+    const existing = await this.usersService.findByLogin(login);
     if (existing) throw new ConflictException('Email allaqachon mavjud');
 
     const organization = await this.organizationsService.create({
@@ -34,7 +34,7 @@ export class AuthService {
       {
         firstName,
         lastName,
-        email,
+        login,
         phone,
         password,
         role: UserRole.ADMIN,
@@ -47,13 +47,14 @@ export class AuthService {
       user: {
         id: user.id,
         role: user.role,
-        email: user.email,
+        email: user.login,
       },
     };
   }
 
   async login(email: string, password: string) {
     const user = await this.usersService.findByEmailWithCenterOrg(email);
+    console.log(user, 'user');
     if (!user) throw new UnauthorizedException('Foydalanuvchi topilmadi');
 
     const match = await bcrypt.compare(password, user.password);
@@ -61,7 +62,7 @@ export class AuthService {
 
     const payload = {
       sub: user.id,
-      email: user.email,
+      email: user.login,
       role: user.role,
       organizationId: user.organization?.id,
     };
@@ -74,7 +75,7 @@ export class AuthService {
       access_token: this.jwtService.sign(payload),
       user: {
         id: user.id,
-        email: user.email,
+        email: user.login,
         role: user.role,
         centerId: user.center?.id,
       },

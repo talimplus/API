@@ -13,27 +13,27 @@ import {
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
+// import { Roles } from '@/decorators/roles.decorator';
+// import { UserRole } from '@/common/enums/user-role.enums';
 
 @Controller('groups')
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN)
-  create(@Body() dto: CreateGroupDto) {
-    return this.groupsService.create(dto);
+  // @Roles(UserRole.ADMIN)
+  create(@Body() dto: CreateGroupDto, @Req() req: any) {
+    return this.groupsService.create(dto, req.user.centerId);
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN)
+  // @Roles(UserRole.ADMIN)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateGroupDto) {
     return this.groupsService.update(id, dto);
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.TEACHER, UserRole.MANAGER)
+  // @Roles(UserRole.ADMIN, UserRole.TEACHER, UserRole.MANAGER)
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -59,7 +59,7 @@ export class GroupsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  // @Roles(UserRole.ADMIN)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.groupsService.remove(id);
   }

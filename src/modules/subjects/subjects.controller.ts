@@ -13,29 +13,24 @@ import {
 import { SubjectsService } from './subjects.service';
 import { CreateSubjectDto } from './dto/create-subject.dto';
 import { UpdateSubjectDto } from './dto/update-subject.dto';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PaginatedSubjectResponseDto } from '@/modules/subjects/dto/paginated-subject-response';
 import { SubjectResponseDto } from '@/modules/subjects/dto/subject-response.dto';
 
 @ApiTags('Subjects')
 @Controller('subjects')
-@Roles(UserRole.ADMIN) // faqat admin ishlata oladi
 export class SubjectsController {
   constructor(private readonly subjectsService: SubjectsService) {}
 
   @Post()
   @ApiOperation({ summary: 'Create new subject' })
-  @Roles(UserRole.ADMIN)
-  create(@Body() dto: CreateSubjectDto) {
-    return this.subjectsService.create(dto);
+  create(@Body() dto: CreateSubjectDto, @Req() req: any) {
+    return this.subjectsService.create(dto, req.user.centerId);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all subjects' })
   @ApiResponse({ type: PaginatedSubjectResponseDto })
-  @Roles(UserRole.ADMIN)
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -44,7 +39,7 @@ export class SubjectsController {
     @Query('perPage') perPage?: number,
   ) {
     return this.subjectsService.findAll(req.user.organizationId, {
-      centerId: centerId ? +centerId : undefined,
+      centerId: centerId ? +centerId : req.user.centerId,
       name,
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 10,

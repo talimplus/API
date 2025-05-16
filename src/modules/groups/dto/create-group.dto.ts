@@ -7,9 +7,6 @@ export class CreateGroupDto {
   @IsNumber()
   subjectId: number;
 
-  @IsNumber()
-  centerId: number;
-
   @IsOptional()
   @IsNumber()
   teacherId?: number;

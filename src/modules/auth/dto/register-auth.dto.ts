@@ -5,7 +5,7 @@ export class RegisterAuthDto {
   organizationName: string;
 
   @IsEmail()
-  email: string;
+  login: string;
 
   @MinLength(6)
   password: string;

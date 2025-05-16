@@ -15,8 +15,8 @@ export class SubjectsService {
     private readonly centerRepo: Repository<Center>,
   ) {}
 
-  async create(dto: CreateSubjectDto) {
-    const center = await this.centerRepo.findOneBy({ id: dto.centerId });
+  async create(dto: CreateSubjectDto, centerId: number) {
+    const center = await this.centerRepo.findOneBy({ id: centerId });
     if (!center) {
       throw new NotFoundException('Bunday center mavjud emas');
     }

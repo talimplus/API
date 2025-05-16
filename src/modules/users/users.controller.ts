@@ -25,8 +25,9 @@ export class UsersController {
    */
   @Post()
   @Roles(UserRole.ADMIN)
-  async create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  async create(@Body() dto: CreateUserDto, @Req() req: any) {
+    console.log(dto, 'dto');
+    return this.usersService.create(dto, req.user.organizationId);
   }
 
   /**
@@ -34,7 +35,7 @@ export class UsersController {
    */
   @Get('email/:email')
   async findOneByEmail(@Param('email') email: string) {
-    return this.usersService.findByEmail(email);
+    return this.usersService.findByLogin(email);
   }
 
   @Put(':id')
