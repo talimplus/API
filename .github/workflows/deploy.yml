@@ -21,25 +21,23 @@ jobs:
 
       - name: 🚀 SSH into server and deploy
         run: |
-          ssh -o StrictHostKeyChecking=no root@95.130.227.101 <<EOF
+          ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
             set -e
             cd /var/www/html/projects/talimplus
-          
+
             echo "🔁 Cloning latest code..."
             rm -rf API_temp
             git clone git@github.com:talimplus/API.git API_temp
-          
+
             rm -rf API
             mv API_temp API
-          
+
             cd API
-          
+
             echo "📝 Writing .env file..."
-         EOF
-            ssh -o StrictHostKeyChecking=no root@95.130.227.101 "echo '${{ secrets.ENV_FILE }}' > /var/www/html/projects/talimplus/API/.env"
-            
-            ssh -o StrictHostKeyChecking=no root@95.130.227.101 <<EOF
-            cd /var/www/html/projects/talimplus/API
+            cat <<EOT > .env
+            ${{ secrets.ENV_FILE }}
+          EOF
             
             echo "📦 Installing dependencies..."
             npm install
@@ -49,4 +47,4 @@ jobs:
             
             echo "🚀 Restarting PM2 app..."
             pm2 restart ecosystem.config.js --only talimplus
-         EOF
+          EOF
