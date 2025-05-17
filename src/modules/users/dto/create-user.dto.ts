@@ -31,11 +31,7 @@ export class CreateUserDto {
   role: UserRole;
 
   @IsNumber()
-  centerId?: number;
-
-  @IsNumber()
-  @IsOptional()
-  organizationId?: number;
+  centerId: number;
 
   @IsOptional()
   @IsNumber()

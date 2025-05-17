@@ -3,8 +3,6 @@ import { CenterResponseDto } from '@/modules/centers/dto/center-reponse.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { CreateCenterDto } from './dto/create-center.dto';
 import { UpdateCenterDto } from './dto/update-center.dto';
-import { UserRole } from '@/common/enums/user-role.enums';
-import { Roles } from '@/decorators/roles.decorator';
 import { CentersService } from './centers.service';
 import {
   Controller,
@@ -51,25 +49,21 @@ export class CentersController {
   @ApiOperation({ summary: 'Get center by id' })
   @ApiResponse({ type: CenterResponseDto })
   // @Roles(UserRole.ADMIN)
-  findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.centersService.findOne(id, req.user.organizationId);
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.centersService.findOne(id);
   }
 
   @Put(':id')
   @ApiOperation({ summary: 'Update center by id' })
   // @Roles(UserRole.ADMIN)
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateCenterDto,
-    @Req() req: any,
-  ) {
-    return this.centersService.update(id, dto, req.user.organizationId);
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateCenterDto) {
+    return this.centersService.update(id, dto);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete center by id' })
   // @Roles(UserRole.ADMIN)
-  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.centersService.remove(id, req.user.organizationId);
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.centersService.remove(id);
   }
 }

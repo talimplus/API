@@ -7,6 +7,7 @@ import {
   OneToOne,
   JoinColumn,
 } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
@@ -33,6 +34,7 @@ export class User {
   @Column({ unique: true })
   phone: string;
 
+  @Exclude()
   @Column()
   password: string;
 
@@ -45,7 +47,10 @@ export class User {
   @Column({ nullable: true })
   commissionPercentage: number;
 
-  @OneToOne(() => Student, (student) => student.user, { nullable: true })
+  @OneToOne(() => Student, (student) => student.user, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn()
   student: Student;
 

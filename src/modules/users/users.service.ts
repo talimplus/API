@@ -16,6 +16,7 @@ import { Organization } from '@/modules/organizations/entities/organizations.ent
 import { UserRole } from '@/common/enums/user-role.enums';
 import { CurrentUser } from '@/common/types/current.user';
 import { OrganizationsService } from '@/modules/organizations/organizations.service';
+import { instanceToPlain } from 'class-transformer';
 
 @Injectable()
 export class UsersService {
@@ -40,13 +41,28 @@ export class UsersService {
     return this.userRepo.save(user);
   }
 
-  async create(dto: CreateUserDto, organizationId: number) {
+  async create(dto: CreateUserDto, organizationId: number, role?: UserRole) {
+    if (role === UserRole.ADMIN && !dto.centerId)
+      throw new BadRequestException('Admin uchun centerId bo‘lishi kerak');
     if (
-      ![UserRole.TEACHER, UserRole.MANAGER, UserRole.OTHER].includes(dto.role)
+      ![
+        UserRole.TEACHER,
+        UserRole.MANAGER,
+        UserRole.OTHER,
+        UserRole.STUDENT,
+      ].includes(dto.role)
     ) {
       throw new BadRequestException(
-        'Faqat teacher, manager yoki other rollar mumkin',
+        "Faqat teacher, manager yoki Boshqalar sifatida qo'shish mumkin",
       );
+    }
+
+    const existingUser = await this.userRepo.findOne({
+      where: { login: dto.login },
+    });
+
+    if (existingUser) {
+      throw new BadRequestException('Bunday foydalanuvchi mavjud');
     }
 
     const organization =
@@ -78,7 +94,7 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto) {
-    const user = await this.findOne(id, dto.centerId);
+    const user = await this.findOne(id);
 
     if (dto.password) {
       dto.password = await bcrypt.hash(dto.password, 10);
@@ -138,7 +154,7 @@ export class UsersService {
       .getManyAndCount();
 
     return {
-      data,
+      data: instanceToPlain(data),
       meta: {
         total,
         page,
@@ -148,26 +164,26 @@ export class UsersService {
     };
   }
 
-  async findOne(id: number, centerId: number) {
+  async findOne(id: number) {
     const user = await this.userRepo.findOne({
-      where: { id, center: { id: centerId } },
+      where: { id },
     });
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
-    return user;
+    return instanceToPlain(user);
   }
 
   @Roles(UserRole.ADMIN)
-  async remove(id: number, centerId: number, currentUser: CurrentUser) {
+  async remove(id: number, currentUser: CurrentUser) {
     const user = await this.userRepo.findOne({
-      where: { id, center: { id: centerId } },
-      relations: ['center', 'center.organization'],
+      where: { id },
+      relations: ['center', 'organization'],
     });
 
     if (user.id === currentUser?.userId) {
       throw new BadRequestException("Siz o'zingizni o‘chira olmaysiz");
     }
 
-    if (user.center.organization.id !== currentUser?.organizationId) {
+    if (user.organization.id !== currentUser?.organizationId) {
       throw new ForbiddenException('Siz bu foydalanuvchini o‘chira olmaysiz');
     }
 

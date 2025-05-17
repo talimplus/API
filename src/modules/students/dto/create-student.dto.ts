@@ -4,8 +4,10 @@ import {
   IsOptional,
   IsString,
   IsEnum,
+  MinLength,
 } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
+import { Column } from 'typeorm';
 
 export class CreateStudentDto {
   @IsNotEmpty()
@@ -23,11 +25,25 @@ export class CreateStudentDto {
   @IsString()
   birthDate: number;
 
-  @IsEnum(StudentStatus)
-  status: StudentStatus;
+  @IsNotEmpty()
+  @IsString()
+  @Column({ unique: true })
+  login: string;
 
+  @MinLength(6)
+  password: string;
+
+  @IsOptional()
+  @IsEnum(StudentStatus)
+  status?: StudentStatus;
+
+  @IsOptional()
   @IsNumber()
-  centerId: number;
+  userId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  centerId?: number;
 
   @IsOptional()
   @IsNumber()

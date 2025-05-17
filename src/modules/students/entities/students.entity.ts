@@ -28,7 +28,7 @@ export class Student {
   @Column({ type: 'date' })
   birthDate: Date;
 
-  @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.YANGI })
+  @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.NEW })
   status: StudentStatus;
 
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })

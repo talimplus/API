@@ -1,6 +1,6 @@
 export enum StudentStatus {
-  YANGI = 'yangi',
-  OQIMAYDI = 'oqimagan',
-  OQIYAPTI = 'oqiyapti',
-  TOXTAGAN = 'oqishni toxtatgan',
+  NEW = 'new',
+  ACTIVE = 'ACTIVE',
+  IGNORED = 'ignored',
+  STOPPED = 'stopped',
 }

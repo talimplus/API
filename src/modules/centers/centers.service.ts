@@ -69,9 +69,9 @@ export class CentersService {
     };
   }
 
-  async findOne(id: number, organizationId: number) {
+  async findOne(id: number) {
     const center = await this.centerRepo.findOne({
-      where: { id, organization: { id: organizationId } },
+      where: { id },
     });
 
     if (!center) {
@@ -81,14 +81,14 @@ export class CentersService {
     return center;
   }
 
-  async update(id: number, dto: UpdateCenterDto, organizationId: number) {
-    const center = await this.findOne(id, organizationId);
+  async update(id: number, dto: UpdateCenterDto) {
+    const center = await this.findOne(id);
     Object.assign(center, dto);
     return this.centerRepo.save(center);
   }
 
-  async remove(id: number, organizationId: number) {
-    const center = await this.findOne(id, organizationId);
+  async remove(id: number) {
+    const center = await this.findOne(id);
     return this.centerRepo.remove(center);
   }
 }

@@ -26,8 +26,11 @@ export class UsersController {
   @Post()
   @Roles(UserRole.ADMIN)
   async create(@Body() dto: CreateUserDto, @Req() req: any) {
-    console.log(dto, 'dto');
-    return this.usersService.create(dto, req.user.organizationId);
+    return this.usersService.create(
+      dto,
+      req.user.organizationId,
+      req.user.role,
+    );
   }
 
   /**
@@ -73,7 +76,7 @@ export class UsersController {
    */
   @Get(':id')
   async findOneById(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.usersService.findOne(id, req.centerId);
+    return this.usersService.findOne(id);
   }
 
   /**
@@ -81,6 +84,6 @@ export class UsersController {
    */
   @Delete(':id')
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.usersService.remove(id, req.centerId, req.user);
+    return this.usersService.remove(id, req.user);
   }
 }
