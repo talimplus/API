@@ -30,6 +30,14 @@ export class CreateStudentDto {
   @Column({ unique: true })
   login: string;
 
+  @IsOptional()
+  @IsNumber()
+  referrerId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  monthlyFee?: number;
+
   @MinLength(6)
   password: string;
 

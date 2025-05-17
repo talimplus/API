@@ -1,6 +1,7 @@
 import { OrganizationsService } from '@/modules/organizations/organizations.service';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { UpdateStudentDto } from '@/modules/students/dto/update-student.dto';
+import { ReferralsService } from '@/modules/referrals/referrals.service';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { CentersService } from '@/modules/centers/centers.service';
 import { GroupsService } from '@/modules/groups/groups.service';
@@ -14,6 +15,8 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { instanceToPlain } from 'class-transformer';
 
@@ -26,6 +29,8 @@ export class StudentsService {
     private readonly groupService: GroupsService,
     private readonly userService: UsersService,
     private readonly organizationsService: OrganizationsService,
+    @Inject(forwardRef(() => ReferralsService))
+    private readonly referralsService: ReferralsService,
   ) {}
   async findAll(
     organizationId: number,
@@ -137,7 +142,18 @@ export class StudentsService {
       group,
     });
 
-    return this.studentRepo.save(student);
+    const savedStudent = await this.studentRepo.save(student);
+
+    if (dto.referrerId) {
+      const referrer = await this.studentRepo.findOneBy({ id: dto.referrerId });
+      if (!referrer) {
+        throw new BadRequestException('Taklif qilgan o‘quvchi topilmadi');
+      }
+
+      await this.referralsService.create(referrer.id, savedStudent.id);
+    }
+
+    return instanceToPlain(savedStudent);
   }
 
   async update(id: number, dto: UpdateStudentDto) {

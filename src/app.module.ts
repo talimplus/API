@@ -20,6 +20,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
+import { ReferralsModule } from './modules/referrals/referrals.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { Module } from '@nestjs/common';
     BlacklistModule,
     SubscriptionsModule,
     OrganizationsModule,
+    ReferralsModule,
   ],
   providers: [
     {

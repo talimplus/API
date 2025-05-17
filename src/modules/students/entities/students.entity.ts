@@ -6,10 +6,10 @@ import {
   CreateDateColumn,
   OneToOne,
 } from 'typeorm';
+import { StudentStatus } from '@/common/enums/students-status.enums';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { User } from '@/modules/users/entities/user.entity';
-import { StudentStatus } from '@/common/enums/students-status.enums';
 
 @Entity('students')
 export class Student {
@@ -27,6 +27,12 @@ export class Student {
 
   @Column({ type: 'date' })
   birthDate: Date;
+
+  @Column({ type: 'numeric', nullable: true })
+  monthlyFee: number;
+
+  @Column({ type: 'decimal', default: 0 })
+  referralDiscount: number;
 
   @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.NEW })
   status: StudentStatus;

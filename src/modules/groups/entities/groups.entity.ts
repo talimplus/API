@@ -22,6 +22,9 @@ export class Group {
   @ManyToOne(() => Subject, { onDelete: 'CASCADE' })
   subject: Subject;
 
+  @Column({ type: 'numeric', nullable: true })
+  monthlyFee: number;
+
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
 

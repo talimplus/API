@@ -13,5 +13,9 @@ export class CreateGroupDto {
 
   @IsOptional()
   @IsNumber()
+  monthlyFee?: number;
+
+  @IsOptional()
+  @IsNumber()
   centerId?: number;
 }

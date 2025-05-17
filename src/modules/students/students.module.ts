@@ -1,12 +1,13 @@
 import { OrganizationsModule } from '@/modules/organizations/organizations.module';
+import { ReferralsModule } from '@/modules/referrals/referrals.module';
 import { Student } from '@/modules/students/entities/students.entity';
+import { StudentsService } from '@/modules/students/students.service';
 import { CentersModule } from '@/modules/centers/centers.module';
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { StudentsController } from './students.controller';
 import { UsersModule } from '@/modules/users/users.module';
-import { StudentsService } from './students.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 
 @Module({
   imports: [
@@ -15,8 +16,11 @@ import { Module } from '@nestjs/common';
     UsersModule,
     OrganizationsModule,
     GroupsModule,
+    ReferralsModule,
+    forwardRef(() => ReferralsModule),
   ],
-  providers: [StudentsService],
   controllers: [StudentsController],
+  providers: [StudentsService],
+  exports: [StudentsService],
 })
 export class StudentsModule {}
