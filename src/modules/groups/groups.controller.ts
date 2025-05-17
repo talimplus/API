@@ -23,7 +23,7 @@ export class GroupsController {
   @Post()
   // @Roles(UserRole.ADMIN)
   create(@Body() dto: CreateGroupDto, @Req() req: any) {
-    return this.groupsService.create(dto, req.user.centerId);
+    return this.groupsService.create(dto, req.user.centerId, req.user.role);
   }
 
   @Put(':id')

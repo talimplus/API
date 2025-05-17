@@ -26,16 +26,19 @@ export class GroupsService {
     private readonly userRepo: Repository<User>,
   ) {}
 
-  async create(dto: CreateGroupDto, centerId: number) {
+  async create(dto: CreateGroupDto, centerId: number, role: UserRole) {
+    if (role === UserRole.ADMIN && !dto.centerId) {
+      throw new BadRequestException('Admin uchun centerId bo‘lishi kerak');
+    }
     const center = await this.centerRepo.findOne({
-      where: { id: centerId },
+      where: { id: centerId || dto.centerId },
     });
     if (!center) throw new NotFoundException('Bunday center mavjud emas');
 
     const subject = await this.subjectRepo.findOne({
       where: {
         id: dto.subjectId,
-        center: { id: centerId },
+        center: { id: centerId || dto.centerId },
       },
     });
 
@@ -50,7 +53,7 @@ export class GroupsService {
       teacher = await this.userRepo.findOne({
         where: {
           id: dto.teacherId,
-          center: { id: centerId },
+          center: { id: centerId || dto.centerId },
         },
       });
 

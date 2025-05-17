@@ -10,4 +10,8 @@ export class CreateGroupDto {
   @IsOptional()
   @IsNumber()
   teacherId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  centerId?: number;
 }
