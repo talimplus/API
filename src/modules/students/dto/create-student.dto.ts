@@ -55,5 +55,5 @@ export class CreateStudentDto {
 
   @IsOptional()
   @IsNumber()
-  groupId?: number;
+  groupIds?: number[];
 }

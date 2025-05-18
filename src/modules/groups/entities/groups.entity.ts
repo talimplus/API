@@ -3,7 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
-  OneToMany,
+  ManyToMany,
   CreateDateColumn,
 } from 'typeorm';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
@@ -31,7 +31,7 @@ export class Group {
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   teacher: User;
 
-  @OneToMany(() => Student, (student) => student.group)
+  @ManyToMany(() => Student, (student) => student.groups)
   students: Student[];
 
   @CreateDateColumn({ type: 'timestamp' })

@@ -6,12 +6,12 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 import { Student } from '@/modules/students/entities/students.entity';
-import { Center } from '@/modules/centers/entities/centers.entity';
+import { Group } from '@/modules/groups/entities/groups.entity';
 
 export enum PaymentStatus {
-  TOQILDI = 'tolandi',
-  QISMAN = 'qisman tolandi',
-  TOLANMADI = 'tolanmadi',
+  PAID = 'paid',
+  UNPAID = 'unpaid',
+  PARTIAL = 'partial',
 }
 
 @Entity('payments')
@@ -19,24 +19,27 @@ export class Payment {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Center, { onDelete: 'CASCADE' })
-  center: Center;
-
   @ManyToOne(() => Student, { onDelete: 'CASCADE' })
   student: Student;
 
-  @Column({ type: 'decimal' })
-  amount: number;
+  @ManyToOne(() => Group, { onDelete: 'SET NULL', nullable: true })
+  group: Group;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2 })
+  amountDue: number;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
+  amountPaid: number;
 
   @Column({
     type: 'enum',
     enum: PaymentStatus,
-    default: PaymentStatus.TOLANMADI,
+    default: PaymentStatus.UNPAID,
   })
   status: PaymentStatus;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  paymentDate: Date;
+  @Column({ type: 'date' })
+  forMonth: Date;
 
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;

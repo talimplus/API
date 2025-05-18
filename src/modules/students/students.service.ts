@@ -5,12 +5,15 @@ import { ReferralsService } from '@/modules/referrals/referrals.service';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { CentersService } from '@/modules/centers/centers.service';
 import { GroupsService } from '@/modules/groups/groups.service';
+import { Group } from '@/modules/groups/entities/groups.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { Student } from './entities/students.entity';
 import { InjectRepository } from '@nestjs/typeorm';
+import { instanceToPlain } from 'class-transformer';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { In } from 'typeorm';
 import {
   BadRequestException,
   Injectable,
@@ -18,13 +21,14 @@ import {
   Inject,
   forwardRef,
 } from '@nestjs/common';
-import { instanceToPlain } from 'class-transformer';
 
 @Injectable()
 export class StudentsService {
   constructor(
     @InjectRepository(Student)
     private readonly studentRepo: Repository<Student>,
+    @InjectRepository(Group)
+    private readonly groupRepo: Repository<Group>,
     private readonly centerService: CentersService,
     private readonly groupService: GroupsService,
     private readonly userService: UsersService,
@@ -94,6 +98,13 @@ export class StudentsService {
     });
   }
 
+  async findByActiveStatus(): Promise<Student[]> {
+    return await this.studentRepo.find({
+      where: { status: StudentStatus.ACTIVE },
+      relations: ['group', 'center'],
+    });
+  }
+
   async create(
     dto: CreateStudentDto,
     centerId: number,
@@ -109,11 +120,9 @@ export class StudentsService {
       throw new BadRequestException('Bunday organizatsiya mavjud emas');
     }
 
-    const group = await this.groupService.findOne(dto.groupId);
+    const groupIds = dto.groupIds;
 
-    if (!group) {
-      throw new BadRequestException('Bunday guruh mavjud emas');
-    }
+    const groups = await this.groupRepo.findBy({ id: In(groupIds) });
 
     const user = await this.userService.create(
       {
@@ -135,11 +144,13 @@ export class StudentsService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       phone: dto.phone,
+      monthlyFee: dto.monthlyFee,
+      referralDiscount: 0,
       birthDate: dto.birthDate,
       status: StudentStatus.NEW,
       center,
       user,
-      group,
+      groups: groups,
     });
 
     const savedStudent = await this.studentRepo.save(student);

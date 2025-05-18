@@ -1,9 +1,15 @@
-import { Module } from '@nestjs/common';
+import { Referral } from '@/modules/referrals/entities/referal.entity';
+import { Payment } from '@/modules/payments/entities/payment.entity';
+import { StudentsModule } from '@/modules/students/students.module';
+import { PaymentsController } from './payments.controller';
+import { PaymentsService } from './payments.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Student } from '@/modules/students/entities/students.entity';
-import { Center } from '@/modules/centers/entities/centers.entity';
+import { Module } from '@nestjs/common';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Student, Center])],
+  imports: [TypeOrmModule.forFeature([Payment, Referral]), StudentsModule],
+  controllers: [PaymentsController],
+  providers: [PaymentsService],
+  exports: [PaymentsService],
 })
 export class PaymentsModule {}

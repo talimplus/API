@@ -5,8 +5,12 @@ import {
   ManyToOne,
   CreateDateColumn,
   OneToOne,
+  OneToMany,
+  ManyToMany,
+  JoinTable,
 } from 'typeorm';
 import { StudentStatus } from '@/common/enums/students-status.enums';
+import { Payment } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -28,6 +32,9 @@ export class Student {
   @Column({ type: 'date' })
   birthDate: Date;
 
+  @OneToMany(() => Payment, (payment) => payment.student)
+  payments: Payment[];
+
   @Column({ type: 'numeric', nullable: true })
   monthlyFee: number;
 
@@ -40,8 +47,9 @@ export class Student {
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
 
-  @ManyToOne(() => Group, { onDelete: 'SET NULL', nullable: true })
-  group: Group;
+  @ManyToMany(() => Group, (group) => group.students)
+  @JoinTable()
+  groups: Group[];
 
   @OneToOne(() => User, (user) => user.student, {
     nullable: true,
