@@ -24,6 +24,7 @@ export class CentersController {
 
   @Post()
   @ApiOperation({ summary: 'Create new center' })
+  @ApiResponse({ type: CenterResponseDto })
   // @Roles(UserRole.ADMIN)
   create(@Body() dto: CreateCenterDto, @Req() req: any) {
     return this.centersService.create(dto, req.user.organizationId);
