@@ -16,6 +16,10 @@ export class SubjectsService {
   ) {}
 
   async create(dto: CreateSubjectDto, centerId: number) {
+    if (!centerId && !dto.centerId) {
+      throw new NotFoundException('Bunday center mavjud emas');
+    }
+    if (!centerId) centerId = dto.centerId;
     const center = await this.centerRepo.findOneBy({ id: centerId });
     if (!center) {
       throw new NotFoundException('Bunday center mavjud emas');
