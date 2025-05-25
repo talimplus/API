@@ -90,7 +90,19 @@ export class SubjectsService {
 
   async update(id: number, dto: UpdateSubjectDto, centerId: number) {
     const subject = await this.findOne(id, centerId);
-    Object.assign(subject, dto);
+    if (dto.centerId) {
+      const newCenter = await this.centerRepo.findOne({
+        where: { id: dto.centerId },
+      });
+      if (!newCenter) {
+        throw new NotFoundException('Yangi markaz topilmadi');
+      }
+      subject.center = newCenter;
+    }
+
+    if (dto.name) {
+      subject.name = dto.name;
+    }
     return this.subjectRepo.save(subject);
   }
 
