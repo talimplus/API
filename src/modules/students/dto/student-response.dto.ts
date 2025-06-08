@@ -1,5 +1,4 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 
 export class StudentResponseDto {
@@ -26,7 +25,4 @@ export class StudentResponseDto {
 
   @ApiProperty({ enum: StudentStatus, example: StudentStatus.NEW })
   status: StudentStatus;
-
-  @ApiProperty({ type: () => UserResponseDto, nullable: true })
-  user: UserResponseDto;
 }

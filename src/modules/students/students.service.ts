@@ -42,6 +42,7 @@ export class StudentsService {
       centerId,
       name,
       phone,
+      status,
       page = 1,
       perPage = 10,
       groupId,
@@ -50,6 +51,7 @@ export class StudentsService {
       name?: string;
       phone?: string;
       page?: number;
+      status: StudentStatus;
       perPage?: number;
       groupId?: number;
     },
@@ -58,7 +60,6 @@ export class StudentsService {
 
     const query = this.studentRepo
       .createQueryBuilder('student')
-      .leftJoinAndSelect('student.user', 'user')
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
@@ -70,6 +71,11 @@ export class StudentsService {
         { name: `%${name}%` },
       );
     }
+
+    if (status) {
+      query.andWhere('group.name ILIKE :status', { status: `%${status}%` });
+    }
+
     if (phone)
       query.andWhere('user.phone ILIKE :phone', { phone: `%${phone}%` });
 
