@@ -53,6 +53,14 @@ export class StudentsController {
     });
   }
 
+  @Get('/referrals')
+  async findAllReferrals(@Req() req: any) {
+    return this.studentService.getReferredStudents(
+      req.user.organizationId,
+      req.user.centerId,
+    );
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get student by id' })
   @ApiResponse({ type: StudentResponseDto })

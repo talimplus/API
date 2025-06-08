@@ -95,6 +95,27 @@ export class StudentsService {
     };
   }
 
+  async getReferredStudents(organizationId: number, centerId?: number) {
+    console.log(organizationId);
+    console.log(centerId);
+    const query = this.studentRepo
+      .createQueryBuilder('student')
+      .leftJoin('student.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('student.status IN (:...statuses)', {
+        statuses: [StudentStatus.NEW, StudentStatus.ACTIVE],
+      });
+
+    if (centerId) {
+      query.andWhere('center.id = :centerId', { centerId });
+    }
+
+    const students = await query.orderBy('student.createdAt', 'DESC').getMany();
+
+    return instanceToPlain(students);
+  }
+
   async findById(id: number) {
     return this.studentRepo.findOne({
       where: { id },
