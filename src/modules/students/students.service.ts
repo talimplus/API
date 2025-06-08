@@ -96,8 +96,6 @@ export class StudentsService {
   }
 
   async getReferredStudents(organizationId: number, centerId?: number) {
-    console.log(organizationId);
-    console.log(centerId);
     const query = this.studentRepo
       .createQueryBuilder('student')
       .leftJoin('student.center', 'center')
