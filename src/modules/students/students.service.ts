@@ -4,7 +4,6 @@ import { UpdateStudentDto } from '@/modules/students/dto/update-student.dto';
 import { ReferralsService } from '@/modules/referrals/referrals.service';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { CentersService } from '@/modules/centers/centers.service';
-import { GroupsService } from '@/modules/groups/groups.service';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { UserRole } from '@/common/enums/user-role.enums';
@@ -30,7 +29,6 @@ export class StudentsService {
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
     private readonly centerService: CentersService,
-    private readonly groupService: GroupsService,
     private readonly userService: UsersService,
     private readonly organizationsService: OrganizationsService,
     @Inject(forwardRef(() => ReferralsService))
@@ -67,22 +65,22 @@ export class StudentsService {
     if (centerId) query.andWhere('center.id = :centerId', { centerId });
     if (name) {
       query.andWhere(
-        '(user.firstName ILIKE :name OR user.lastName ILIKE :name)',
+        '(student.firstName ILIKE :name OR student.lastName ILIKE :name)',
         { name: `%${name}%` },
       );
     }
 
     if (status) {
-      query.andWhere('group.name ILIKE :status', { status: `%${status}%` });
+      query.andWhere('student.status = :status', { status });
     }
 
     if (phone)
-      query.andWhere('user.phone ILIKE :phone', { phone: `%${phone}%` });
+      query.andWhere('student.phone ILIKE :phone', { phone: `%${phone}%` });
 
     if (groupId) query.andWhere('student.groupId = :groupId', { groupId });
 
     const [data, total] = await query
-      .orderBy('user.createdAt', 'DESC')
+      .orderBy('student.createdAt', 'DESC')
       .skip(skip)
       .take(perPage)
       .getManyAndCount();
