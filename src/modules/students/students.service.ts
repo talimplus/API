@@ -54,6 +54,8 @@ export class StudentsService {
       groupId?: number;
     },
   ) {
+    console.log(organizationId);
+    console.log(centerId);
     const skip = (page - 1) * perPage;
 
     const query = this.studentRepo
@@ -135,10 +137,24 @@ export class StudentsService {
   }
 
   async findById(id: number) {
-    return this.studentRepo.findOne({
+    const student = await this.studentRepo.findOne({
       where: { id },
       relations: ['user', 'center'],
     });
+
+    if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+
+    const result: any = instanceToPlain(student);
+
+    // Faqat parol o‘zgartirilmagan bo‘lsa, `tempPassword` ni qaytaramiz
+    result.login = student.user.login;
+
+    // Parolni qayta generatsiya qilish
+    const birth = student.birthDate ? new Date(student.birthDate) : new Date();
+    const formattedBirth = `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+    result.tempPassword = `${student.firstName.toLowerCase()}${student.lastName.toLowerCase()}${formattedBirth}`;
+
+    return result;
   }
 
   async findByActiveStatus(): Promise<Student[]> {
@@ -166,14 +182,19 @@ export class StudentsService {
     const groupIds = dto.groupIds;
 
     const groups = await this.groupRepo.findBy({ id: In(groupIds) });
+    const birth = dto.birthDate ? new Date(dto.birthDate) : new Date();
+    const formattedBirth = `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+    const autoLogin = `${dto.firstName.toLowerCase()}.${dto.lastName.toLowerCase()}.${Date.now().toString().slice(-4)}`;
+    const rawPassword = `${dto.firstName.toLowerCase()}${dto.lastName.toLowerCase()}${formattedBirth}`;
+    const hashedPassword = await bcrypt.hash(rawPassword, 10);
 
     const user = await this.userService.create(
       {
         firstName: dto.firstName,
         lastName: dto.lastName,
-        login: dto.login,
+        login: autoLogin,
         phone: dto.phone,
-        password: dto.password,
+        password: hashedPassword,
         role: UserRole.STUDENT,
         centerId: centerId || dto.centerId,
       },
@@ -207,7 +228,11 @@ export class StudentsService {
       await this.referralsService.create(referrer.id, savedStudent.id);
     }
 
-    return instanceToPlain(savedStudent);
+    return {
+      ...instanceToPlain(savedStudent),
+      login: autoLogin,
+      tempPassword: rawPassword,
+    };
   }
 
   async update(id: number, dto: UpdateStudentDto) {

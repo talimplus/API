@@ -4,11 +4,9 @@ import {
   IsOptional,
   IsString,
   IsEnum,
-  MinLength,
   IsArray,
 } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
-import { Column } from 'typeorm';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateStudentDto {
@@ -31,12 +29,6 @@ export class CreateStudentDto {
   @IsString()
   birthDate: number;
 
-  @ApiProperty({ example: 'Ali12345' })
-  @IsNotEmpty()
-  @IsString()
-  @Column({ unique: true })
-  login: string;
-
   @ApiProperty({
     example: 3,
     description: "Taklif ilgan o'quvchi idsi",
@@ -54,10 +46,6 @@ export class CreateStudentDto {
   @IsOptional()
   @IsNumber()
   monthlyFee?: number;
-
-  @ApiProperty({ example: 'Ali12345' })
-  @MinLength(6)
-  password: string;
 
   @ApiProperty({ example: StudentStatus.NEW, required: false })
   @IsOptional()
