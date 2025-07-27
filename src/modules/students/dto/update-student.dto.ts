@@ -2,6 +2,7 @@ import { PartialType } from '@nestjs/mapped-types';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  IsArray,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -80,12 +81,14 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
   @IsNumber()
   centerId?: number;
 
-  @ApiProperty({
-    example: 2,
-    description: "O'quvchi biriktirilayotgan gurux idsi",
-    required: false,
-  })
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @ApiProperty({
+    example: [2],
+    description: "O'quvchi biriktirilayotgan guruh IDlari",
+    required: false,
+    type: [Number],
+  })
   groupIds?: number[];
 }
