@@ -54,14 +54,13 @@ export class StudentsService {
       groupId?: number;
     },
   ) {
-    console.log(organizationId);
-    console.log(centerId);
     const skip = (page - 1) * perPage;
 
     const query = this.studentRepo
       .createQueryBuilder('student')
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
+      .leftJoin('student.groups', 'group')
       .where('organization.id = :organizationId', { organizationId });
 
     if (centerId) query.andWhere('center.id = :centerId', { centerId });
@@ -79,7 +78,9 @@ export class StudentsService {
     if (phone)
       query.andWhere('student.phone ILIKE :phone', { phone: `%${phone}%` });
 
-    if (groupId) query.andWhere('student.groupId = :groupId', { groupId });
+    if (groupId) {
+      query.andWhere('group.id = :groupId', { groupId });
+    }
 
     const [data, total] = await query
       .orderBy('student.createdAt', 'DESC')

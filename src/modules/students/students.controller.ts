@@ -38,7 +38,7 @@ export class StudentsController {
     @Query('name') name?: string,
     @Query('phone') phone?: string,
     @Query('status') status?: StudentStatus,
-    @Query('centerId') groupId?: number,
+    @Query('groupId') groupId?: number,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
