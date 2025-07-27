@@ -35,7 +35,7 @@ export class User {
   phone: string;
 
   @Exclude()
-  @Column()
+  @Column({ select: false })
   password: string;
 
   @Column({ type: 'enum', enum: UserRole, default: UserRole.ADMIN })
