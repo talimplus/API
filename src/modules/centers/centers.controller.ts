@@ -1,6 +1,6 @@
 import { PaginatedCenterResponseDto } from '@/modules/centers/dto/paginated-center-response.dto';
 import { CenterResponseDto } from '@/modules/centers/dto/center-reponse.dto';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { CreateCenterDto } from './dto/create-center.dto';
 import { UpdateCenterDto } from './dto/update-center.dto';
 import { CentersService } from './centers.service';
@@ -33,6 +33,9 @@ export class CentersController {
   @Get()
   @ApiOperation({ summary: 'Get All centers' })
   @ApiResponse({ type: PaginatedCenterResponseDto })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'perPage', required: false })
+  @ApiQuery({ name: 'name', required: false })
   async findAll(
     @Req() req: any,
     @Query('page') page?: number,

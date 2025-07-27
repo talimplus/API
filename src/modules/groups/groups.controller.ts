@@ -13,7 +13,7 @@ import {
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PaginatedGroupResponseDto } from '@/modules/groups/dto/paginated-group-response.dto';
 import { GroupResponseDto } from '@/modules/groups/dto/group-response.dto';
 // import { Roles } from '@/decorators/roles.decorator';
@@ -44,6 +44,11 @@ export class GroupsController {
   // @Roles(UserRole.ADMIN, UserRole.TEACHER, UserRole.MANAGER)
   @ApiOperation({ summary: 'Get all groups' })
   @ApiResponse({ type: PaginatedGroupResponseDto })
+  @ApiQuery({ name: 'centerId', required: false })
+  @ApiQuery({ name: 'name', required: false })
+  @ApiQuery({ name: 'teacherId', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'perPage', required: false })
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,

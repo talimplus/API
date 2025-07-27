@@ -5,6 +5,7 @@ import {
   IsString,
   IsEnum,
   MinLength,
+  IsArray,
 } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { Column } from 'typeorm';
@@ -77,12 +78,14 @@ export class CreateStudentDto {
   @IsNumber()
   centerId?: number;
 
-  @ApiProperty({
-    example: 2,
-    description: "O'quvchi biriktirilayotgan gurux idsi",
-    required: false,
-  })
   @IsOptional()
-  @IsNumber()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @ApiProperty({
+    example: [2],
+    description: "O'quvchi biriktirilayotgan guruh IDlari",
+    required: false,
+    type: [Number],
+  })
   groupIds?: number[];
 }
