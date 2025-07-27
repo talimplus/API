@@ -144,6 +144,25 @@ export class GroupsService {
     };
   }
 
+  async getAllByOrganizationAndCenter(
+    organizationId: number,
+    centerId: number,
+  ): Promise<Group[]> {
+    return this.groupRepo.find({
+      where: {
+        center: {
+          id: centerId,
+          organization: {
+            id: organizationId,
+          },
+        },
+      },
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+  }
+
   async findOne(id: number) {
     return this.groupRepo.findOne({
       where: { id },

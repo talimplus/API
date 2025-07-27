@@ -49,6 +49,13 @@ export class CentersController {
     });
   }
 
+  @Get('/all')
+  @ApiOperation({ summary: 'Get all centers (no pagination)' })
+  @ApiResponse({ type: [CenterResponseDto] })
+  async getAllCenters(@Req() req: any) {
+    return this.centersService.getAllByCenters(req.user.organizationId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get center by id' })
   @ApiResponse({ type: CenterResponseDto })

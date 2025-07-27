@@ -69,6 +69,17 @@ export class CentersService {
     };
   }
 
+  async getAllByCenters(organizationId: number): Promise<Center[]> {
+    return this.centerRepo.find({
+      where: {
+        organization: { id: organizationId },
+      },
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+  }
+
   async findOne(id: number) {
     const center = await this.centerRepo.findOne({
       where: { id },

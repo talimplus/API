@@ -68,6 +68,16 @@ export class GroupsController {
     );
   }
 
+  @Get('/all')
+  @ApiOperation({ summary: 'Get all groups (no pagination)' })
+  @ApiResponse({ type: [GroupResponseDto] })
+  async getAllGroups(@Req() req: any) {
+    return this.groupsService.getAllByOrganizationAndCenter(
+      req.user.organizationId,
+      req.user.centerId,
+    );
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get one group' })
   @ApiResponse({ type: GroupResponseDto })
