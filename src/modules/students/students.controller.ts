@@ -53,6 +53,16 @@ export class StudentsController {
     });
   }
 
+  @Get('/all')
+  @ApiOperation({ summary: 'Get all students without pagination' })
+  @ApiResponse({ type: [StudentResponseDto] })
+  async getAllStudents(@Req() req: any) {
+    return this.studentService.getAllByOrganizationAndCenter(
+      req.user.organizationId,
+      req.user.centerId,
+    );
+  }
+
   @Get('/referrals')
   async findAllReferrals(@Req() req: any) {
     return this.studentService.getReferredStudents(

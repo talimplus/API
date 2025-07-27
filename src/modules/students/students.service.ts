@@ -95,6 +95,26 @@ export class StudentsService {
     };
   }
 
+  async getAllByOrganizationAndCenter(
+    organizationId: number,
+    centerId: number,
+  ): Promise<Student[]> {
+    return this.studentRepo.find({
+      where: {
+        center: {
+          id: centerId,
+          organization: {
+            id: organizationId,
+          },
+        },
+      },
+      relations: ['center'],
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+  }
+
   async getReferredStudents(organizationId: number, centerId?: number) {
     const query = this.studentRepo
       .createQueryBuilder('student')
