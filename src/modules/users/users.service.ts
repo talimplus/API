@@ -202,9 +202,13 @@ export class UsersService {
   }
 
   async findByEmailWithCenterOrg(login: string) {
-    return this.userRepo.findOne({
-      where: { login },
-      relations: ['organization', 'center', 'center.organization'],
-    });
+    return this.userRepo
+      .createQueryBuilder('user')
+      .addSelect('user.password') // parolni qo‘shyapmiz
+      .leftJoinAndSelect('user.center', 'center')
+      .leftJoinAndSelect('center.organization', 'centerOrg')
+      .leftJoinAndSelect('user.organization', 'organization')
+      .where('user.login = :login', { login })
+      .getOne();
   }
 }
