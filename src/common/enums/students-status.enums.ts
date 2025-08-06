@@ -3,4 +3,5 @@ export enum StudentStatus {
   ACTIVE = 'ACTIVE',
   IGNORED = 'ignored',
   STOPPED = 'stopped',
+  FINISHED = 'finished',
 }
