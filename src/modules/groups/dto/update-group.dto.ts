@@ -1,5 +1,7 @@
-import { IsNumber, IsOptional } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, ValidateNested } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
 
 export class UpdateGroupDto {
   @ApiProperty({
@@ -10,6 +12,7 @@ export class UpdateGroupDto {
   @IsOptional()
   name?: string;
 
+  @IsOptional()
   @ApiProperty({
     example: 2,
     description: 'Tanlangan fan idsi',
@@ -35,6 +38,21 @@ export class UpdateGroupDto {
   @IsOptional()
   @IsNumber()
   monthlyFee?: number;
+
+  @ApiProperty({
+    description: 'Group schedule',
+    type: [ScheduleDayDto],
+    example: [
+      { day: 'monday', startTime: '14:30' },
+      { day: 'wednesday', startTime: '14:30' },
+      { day: 'friday', startTime: '14:30' },
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleDayDto)
+  days?: ScheduleDayDto[];
 
   @ApiProperty({
     example: 3,

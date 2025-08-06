@@ -1,7 +1,10 @@
 import { dataSourceOptions } from 'db/data-source';
 import { StudentHistoryModule } from '@/modules/student-history/student-history.module';
-import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
-import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { GroupScheduleModule } from '@/modules/group_schedule/group_schedule.module';
+import { SubscriptionsModule } from '@/modules/subscriptions/subscriptions.module';
+import { OrganizationsModule } from '@/modules/organizations/organizations.module';
+import { AttendanceModule } from '@/modules/attendance/attendance.module';
+import { ReferralsModule } from '@/modules/referrals/referrals.module';
 import { BlacklistModule } from '@/modules/blacklist/blacklist.module';
 import { StudentsModule } from '@/modules/students/students.module';
 import { SubjectsModule } from '@/modules/subjects/subjects.module';
@@ -20,7 +23,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
-import { ReferralsModule } from './modules/referrals/referrals.module';
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
     SubscriptionsModule,
     OrganizationsModule,
     ReferralsModule,
+    // GroupScheduleModule,
+    // AttendanceModule,
   ],
   providers: [
     {

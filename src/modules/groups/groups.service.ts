@@ -11,7 +11,9 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
 
 @Injectable()
 export class GroupsService {
@@ -24,6 +26,8 @@ export class GroupsService {
     private readonly subjectRepo: Repository<Subject>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(GroupSchedule)
+    private readonly scheduleRepo: Repository<GroupSchedule>,
   ) {}
 
   async create(dto: CreateGroupDto, centerId: number, role: UserRole) {
@@ -71,27 +75,63 @@ export class GroupsService {
       teacher,
     });
 
-    return this.groupRepo.save(group);
+    const savedGroup = await this.groupRepo.save(group);
+
+    if (dto.days && dto.days.length > 0) {
+      const schedules = dto.days.map((day) =>
+        this.scheduleRepo.create({
+          day: day.day,
+          startTime: day.startTime,
+          group: savedGroup,
+        }),
+      );
+      await this.scheduleRepo.save(schedules);
+    }
+
+    return savedGroup;
   }
 
   async update(id: number, dto: UpdateGroupDto) {
-    const group = await this.groupRepo.findOneByOrFail({ id });
+    const group = await this.groupRepo.findOneBy({ id });
+
+    if (!group) throw new NotFoundException('Group not found');
 
     if (dto.name) group.name = dto.name;
-    if (dto.subjectId)
-      group.subject = await this.subjectRepo.findOneByOrFail({
+    if (dto.subjectId) {
+      group.subject = await this.subjectRepo.findOneBy({
         id: dto.subjectId,
       });
-    if (dto.centerId)
-      group.center = await this.centerRepo.findOneByOrFail({
+      if (!group.subject) throw new NotFoundException('Subject not found');
+    }
+    if (dto.centerId) {
+      group.center = await this.centerRepo.findOneBy({
         id: dto.centerId,
       });
-    if (dto.teacherId)
-      group.teacher = await this.userRepo.findOneByOrFail({
+      if (!group.center) throw new NotFoundException('Center not found');
+    }
+    if (dto.teacherId) {
+      group.teacher = await this.userRepo.findOneBy({
         id: dto.teacherId,
       });
+      if (!group.teacher) throw new NotFoundException('Teacher not found');
+    }
 
-    return this.groupRepo.save(group);
+    const savedGroup = await this.groupRepo.save(group);
+
+    if (dto.days && dto.days.length > 0) {
+      await this.scheduleRepo.delete({ group: { id } });
+
+      const newSchedules = dto.days.map((day) =>
+        this.scheduleRepo.create({
+          day: day.day,
+          startTime: day.startTime,
+          group,
+        }),
+      );
+      await this.scheduleRepo.save(newSchedules);
+    }
+
+    return savedGroup;
   }
 
   async findAll(
@@ -100,6 +140,7 @@ export class GroupsService {
     centerId?: number,
     name?: string,
     teacherId?: number,
+    days?: WeekDay[],
     page?: number,
     perPage?: number,
   ) {
@@ -112,6 +153,7 @@ export class GroupsService {
       .leftJoinAndSelect('group.center', 'center')
       .leftJoinAndSelect('group.subject', 'subject')
       .leftJoinAndSelect('group.teacher', 'teacher')
+      .leftJoinAndSelect('group.schedules', 'schedule')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
 
@@ -125,6 +167,10 @@ export class GroupsService {
 
     if (teacherId) {
       query.andWhere('teacher.id = :teacherId', { teacherId });
+    }
+
+    if (days?.length) {
+      query.andWhere('schedule.day IN (:...days)', { days });
     }
 
     const [data, total] = await query

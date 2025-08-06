@@ -14,6 +14,7 @@ import { Payment } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 
 @Entity('students')
 export class Student {
@@ -46,6 +47,9 @@ export class Student {
 
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
+
+  @OneToMany(() => Attendance, (a) => a.student)
+  attendance: Attendance[];
 
   @ManyToMany(() => Group, (group) => group.students)
   @JoinTable()

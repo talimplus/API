@@ -1,7 +1,7 @@
 import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { StudentsService } from '@/modules/students/students.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { Repository } from 'typeorm';
 
 @Injectable()
@@ -9,6 +9,7 @@ export class ReferralsService {
   constructor(
     @InjectRepository(Referral)
     private readonly referralRepo: Repository<Referral>,
+    @Inject(forwardRef(() => StudentsService))
     private readonly studentsService: StudentsService,
   ) {}
   async create(referrerId: number, referredId: number) {

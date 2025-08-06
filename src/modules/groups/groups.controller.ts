@@ -16,6 +16,7 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PaginatedGroupResponseDto } from '@/modules/groups/dto/paginated-group-response.dto';
 import { GroupResponseDto } from '@/modules/groups/dto/group-response.dto';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
 // import { Roles } from '@/decorators/roles.decorator';
 // import { UserRole } from '@/common/enums/user-role.enums';
 
@@ -55,6 +56,7 @@ export class GroupsController {
     @Query('name') name?: string,
     @Query('teacherId') teacherId?: number,
     @Query('page') page?: number,
+    @Query('days') days?: WeekDay[],
     @Query('perPage') perPage?: number,
   ) {
     return this.groupsService.findAll(
@@ -63,6 +65,7 @@ export class GroupsController {
       centerId,
       name,
       teacherId,
+      days,
       page,
       perPage,
     );
