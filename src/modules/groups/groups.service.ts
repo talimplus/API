@@ -157,6 +157,10 @@ export class GroupsService {
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
 
+    if (role === UserRole.TEACHER && teacherId) {
+      query.andWhere('teacher.id = :teacherId', { teacherId });
+    }
+
     if (role !== UserRole.ADMIN && centerId) {
       query.andWhere('center.id = :centerId', { centerId });
     }
