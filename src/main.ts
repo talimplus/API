@@ -13,7 +13,16 @@ async function bootstrap() {
     .setTitle('Learning Center CRM')
     .setDescription('API documentation')
     .setVersion('1.0')
-    .addBearerAuth() // agar JWT token ishlatsa, kerak bo‘lmasa olib tashlang
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        in: 'header',
+      },
+      'access-token',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
