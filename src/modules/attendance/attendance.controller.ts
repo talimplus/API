@@ -28,7 +28,7 @@ export class AttendanceController {
 
   @Put(':id')
   @ApiOperation({ summary: 'Update attendance record' })
-  @ApiBody({ type: UpdateAttendanceDto, isArray: true })
+  @ApiBody({ type: UpdateAttendanceDto })
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateAttendanceDto,
