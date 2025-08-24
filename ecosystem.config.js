@@ -8,7 +8,7 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 3011,
+        PORT: 3004,
         DB_HOST: 'localhost',
         DB_PORT: 5432,
         DB_USER: 'talimplus',
