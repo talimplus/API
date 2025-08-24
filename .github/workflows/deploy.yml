@@ -21,9 +21,9 @@ jobs:
 
       - name: 🚀 SSH into server and deploy
         run: |
-          ssh -o StrictHostKeyChecking=no root@95.130.227.101 << 'EOF'
+          ssh -o StrictHostKeyChecking=no nematov@5.180.151.142 << 'EOF'
             set -e
-            cd /var/www/html/projects/talimplus
+            cd /home/nematov/projects/talimplus
 
             echo "🔁 Cloning latest code..."
             rm -rf API_temp
