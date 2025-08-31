@@ -44,8 +44,8 @@ export class GroupsService {
 
     let room;
     if (dto.roomId) {
-      room = await this.centerRepo.findOne({
-        where: { id: centerId || dto.roomId },
+      room = await this.roomRepo.findOne({
+        where: { id: dto.roomId, center: { id: centerId } },
       });
       if (!room) throw new NotFoundException('Bunday xona mavjud emas');
     }
