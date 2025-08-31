@@ -31,6 +31,14 @@ export class UpdateGroupDto {
   teacherId?: number;
 
   @ApiProperty({
+    example: 2,
+    description: 'Guruxga biriktirilgan xona idsi',
+  })
+  @IsOptional()
+  @IsNumber()
+  roomId?: number;
+
+  @ApiProperty({
     example: 400000,
     description: "Bu guruxdagi o'quvchilarning default oylik to'lovi",
     required: false,

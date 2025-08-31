@@ -11,6 +11,7 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
@@ -26,6 +27,8 @@ export class GroupsService {
     private readonly subjectRepo: Repository<Subject>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Room)
+    private readonly roomRepo: Repository<Room>,
     @InjectRepository(GroupSchedule)
     private readonly scheduleRepo: Repository<GroupSchedule>,
   ) {}
@@ -38,6 +41,11 @@ export class GroupsService {
       where: { id: centerId || dto.centerId },
     });
     if (!center) throw new NotFoundException('Bunday center mavjud emas');
+
+    const room = await this.centerRepo.findOne({
+      where: { id: centerId || dto.roomId },
+    });
+    if (!room) throw new NotFoundException('Bunday xona mavjud emas');
 
     const subject = await this.subjectRepo.findOne({
       where: {
@@ -73,6 +81,7 @@ export class GroupsService {
       center,
       subject,
       teacher,
+      room,
     });
 
     const savedGroup = await this.groupRepo.save(group);
@@ -109,6 +118,12 @@ export class GroupsService {
       });
       if (!group.center) throw new NotFoundException('Center not found');
     }
+    if (dto.roomId) {
+      group.room = await this.roomRepo.findOneBy({
+        id: dto.roomId,
+      });
+      if (!group.room) throw new NotFoundException('Room not found');
+    }
     if (dto.teacherId) {
       group.teacher = await this.userRepo.findOneBy({
         id: dto.teacherId,
@@ -140,6 +155,7 @@ export class GroupsService {
     centerId?: number,
     name?: string,
     teacherId?: number,
+    roomId?: number,
     days?: WeekDay[],
     page?: number,
     perPage?: number,
@@ -153,6 +169,7 @@ export class GroupsService {
       .leftJoinAndSelect('group.center', 'center')
       .leftJoinAndSelect('group.subject', 'subject')
       .leftJoinAndSelect('group.teacher', 'teacher')
+      .leftJoinAndSelect('group.room', 'room')
       .leftJoinAndSelect('group.schedules', 'schedule')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
@@ -171,6 +188,10 @@ export class GroupsService {
 
     if (teacherId) {
       query.andWhere('teacher.id = :teacherId', { teacherId });
+    }
+
+    if (roomId) {
+      query.andWhere('room.id = :roomId', { roomId });
     }
 
     if (days?.length) {
@@ -216,7 +237,7 @@ export class GroupsService {
   async findOne(id: number) {
     return this.groupRepo.findOne({
       where: { id },
-      relations: ['center', 'teacher', 'subject', 'students'],
+      relations: ['center', 'teacher', 'subject', 'students', 'room'],
     });
   }
 

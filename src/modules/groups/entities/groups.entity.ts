@@ -12,6 +12,7 @@ import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
+import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { User } from '@/modules/users/entities/user.entity';
 
 @Entity('groups')
@@ -30,6 +31,9 @@ export class Group {
 
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
+
+  @ManyToOne(() => Room, { onDelete: 'CASCADE' })
+  room: Room;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   teacher: User;

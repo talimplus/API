@@ -10,6 +10,7 @@ import { Student } from '@/modules/students/entities/students.entity';
 import { GroupScheduleModule } from '@/modules/group_schedule/group_schedule.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
+import { Room } from '@/modules/rooms/entities/rooms.entity';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.
       Center,
       User,
       Student,
+      Room,
       GroupSchedule,
     ]),
     forwardRef(() => GroupScheduleModule),
