@@ -42,10 +42,13 @@ export class GroupsService {
     });
     if (!center) throw new NotFoundException('Bunday center mavjud emas');
 
-    const room = await this.centerRepo.findOne({
-      where: { id: centerId || dto.roomId },
-    });
-    if (!room) throw new NotFoundException('Bunday xona mavjud emas');
+    let room;
+    if (dto.roomId) {
+      room = await this.centerRepo.findOne({
+        where: { id: centerId || dto.roomId },
+      });
+      if (!room) throw new NotFoundException('Bunday xona mavjud emas');
+    }
 
     const subject = await this.subjectRepo.findOne({
       where: {
