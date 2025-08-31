@@ -13,11 +13,17 @@ import { UpdateAttendanceDto } from '@/modules/attendance/dto/update-attendance.
 import { AttendanceService } from '@/modules/attendance/attendance.service';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AttendanceResponseDto } from '@/modules/attendance/dto/attendance-response.dto';
+import { FilterAttendanceDto } from '@/modules/attendance/dto/filter-attendance.dto';
 
 @ApiTags('Attendance')
 @Controller('attendance')
 export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
+
+  @Get()
+  findAll(@Query() filter: FilterAttendanceDto) {
+    return this.attendanceService.findAll(filter);
+  }
 
   @Post()
   @ApiOperation({ summary: 'Mark student attendance' })
@@ -36,7 +42,7 @@ export class AttendanceController {
     return this.attendanceService.update(id, dto);
   }
 
-  @Get()
+  @Get('/today')
   @ApiOperation({ summary: 'Get attendance for group and date' })
   @ApiResponse({
     status: 200,

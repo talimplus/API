@@ -6,6 +6,9 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { FilterAttendanceDto } from '@/modules/attendance/dto/filter-attendance.dto';
+import * as dayjs from 'dayjs';
+import { Between } from 'typeorm';
 
 @Injectable()
 export class AttendanceService {
@@ -19,6 +22,37 @@ export class AttendanceService {
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
   ) {}
+
+  async findAll(filter: FilterAttendanceDto) {
+    let { startDate, endDate } = filter;
+    const { groupId, studentId } = filter;
+
+    // Agar sana berilmagan bo‘lsa, oxirgi oy oralig‘i
+    if (!startDate || !endDate) {
+      const now = dayjs();
+      const firstDay = now.startOf('month').format('YYYY-MM-DD');
+      const lastDay = now.endOf('month').format('YYYY-MM-DD');
+      startDate = startDate || firstDay;
+      endDate = endDate || lastDay;
+    }
+
+    const query = this.attendanceRepo.createQueryBuilder('attendance');
+
+    query.where('attendance.date BETWEEN :startDate AND :endDate', {
+      startDate,
+      endDate,
+    });
+
+    if (groupId) {
+      query.andWhere('attendance.groupId = :groupId', { groupId });
+    }
+
+    if (studentId) {
+      query.andWhere('attendance.studentId = :studentId', { studentId });
+    }
+
+    return await query.getMany();
+  }
 
   async create(dtos: CreateAttendanceDto[]) {
     const attendances = [];
@@ -59,10 +93,13 @@ export class AttendanceService {
   }
 
   async findByGroupAndDate(groupId: number, date: string) {
+    const start = dayjs(date).startOf('day').toDate(); // 00:00:00
+    const end = dayjs(date).endOf('day').toDate(); // 23:59:59
+
     return this.attendanceRepo.find({
       where: {
         group: { id: groupId },
-        date: new Date(date),
+        date: Between(start, end),
       },
       relations: ['student', 'group'],
     });

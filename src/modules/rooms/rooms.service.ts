@@ -47,8 +47,6 @@ export class RoomsService {
       perPage?: number;
     },
   ) {
-    const skip = (page - 1) * perPage;
-
     const query = this.roomRepo
       .createQueryBuilder('room')
       .leftJoinAndSelect('room.center', 'center')
@@ -65,7 +63,6 @@ export class RoomsService {
 
     const [data, total] = await query
       .orderBy('room.createdAt', 'DESC')
-      .skip(skip)
       .take(perPage)
       .getManyAndCount();
 
