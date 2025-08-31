@@ -81,6 +81,7 @@ export class GroupsService {
 
     const group = this.groupRepo.create({
       name: dto.name,
+      monthlyFee: dto.monthlyFee,
       center,
       subject,
       teacher,
