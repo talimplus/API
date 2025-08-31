@@ -13,7 +13,7 @@ import {
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { PaginatedRoomResponseDto } from '@/modules/rooms/dto/paginated-room-response';
 import { RoomResponseDto } from '@/modules/rooms/dto/room-response.dto';
 
@@ -31,18 +31,16 @@ export class RoomsController {
   @Get()
   @ApiOperation({ summary: 'Get all rooms' })
   @ApiResponse({ type: PaginatedRoomResponseDto })
+  @ApiQuery({ name: 'centerId', required: false })
+  @ApiQuery({ name: 'name', required: false })
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
     @Query('name') name?: string,
-    @Query('page') page?: number,
-    @Query('perPage') perPage?: number,
   ) {
     return this.roomsService.findAll(req.user.organizationId, {
       centerId: centerId ? +centerId : req.user.centerId,
       name,
-      page: page ? +page : 1,
-      perPage: perPage ? +perPage : 10,
     });
   }
 

@@ -38,13 +38,9 @@ export class RoomsService {
     {
       centerId,
       name,
-      page = 1,
-      perPage = 10,
     }: {
       centerId?: number;
       name?: string;
-      page?: number;
-      perPage?: number;
     },
   ) {
     const query = this.roomRepo
@@ -63,16 +59,12 @@ export class RoomsService {
 
     const [data, total] = await query
       .orderBy('room.createdAt', 'DESC')
-      .take(perPage)
       .getManyAndCount();
 
     return {
       data,
       meta: {
         total,
-        page,
-        perPage,
-        totalPages: Math.ceil(total / perPage),
       },
     };
   }
