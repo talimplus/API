@@ -251,7 +251,7 @@ export class GroupsService {
   async findOne(id: number) {
     return this.groupRepo.findOne({
       where: { id },
-      relations: ['center', 'teacher', 'subject', 'students', 'room'],
+      relations: ['center', 'teacher', 'subject', 'students', 'room', 'schedules'],
     });
   }
 

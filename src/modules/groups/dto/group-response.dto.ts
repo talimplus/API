@@ -4,6 +4,7 @@ import { SubjectResponseDto } from '@/modules/subjects/dto/subject-response.dto'
 import { CenterResponseDto } from '@/modules/centers/dto/center-reponse.dto';
 import { RoomResponseDto } from '@/modules/rooms/dto/room-response.dto';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
 
 export class GroupResponseDto {
   @ApiProperty({ example: 1 })
@@ -38,4 +39,15 @@ export class GroupResponseDto {
 
   @ApiProperty({ type: () => RoomResponseDto, nullable: true })
   room: RoomResponseDto;
+
+  @ApiProperty({
+    type: [ScheduleDayDto],
+    required: false,
+    description: 'Gurux schedule (kun + boshlanish vaqti)',
+    example: [
+      { day: 'monday', startTime: '14:30' },
+      { day: 'wednesday', startTime: '14:30' },
+    ],
+  })
+  schedules?: ScheduleDayDto[];
 }
