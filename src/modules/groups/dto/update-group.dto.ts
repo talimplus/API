@@ -1,7 +1,15 @@
-import { IsArray, IsNumber, IsOptional, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 
 export class UpdateGroupDto {
   @ApiProperty({
@@ -11,6 +19,42 @@ export class UpdateGroupDto {
   })
   @IsOptional()
   name?: string;
+
+  @ApiProperty({
+    example: 'Asia/Tashkent',
+    required: false,
+    description: 'Gurux timezone (IANA)',
+  })
+  @IsOptional()
+  @IsString()
+  timezone?: string;
+
+  @ApiProperty({
+    example: '2026-01-01',
+    required: false,
+    description: 'Gurux startDate (DATE)',
+  })
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @ApiProperty({
+    example: '2026-06-01',
+    required: false,
+    description: 'Gurux endDate (DATE)',
+  })
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @ApiProperty({
+    example: GroupStatus.ACTIVE,
+    enum: GroupStatus,
+    required: false,
+    description: 'Gurux statusi',
+  })
+  @IsOptional()
+  status?: GroupStatus;
 
   @IsOptional()
   @ApiProperty({

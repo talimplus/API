@@ -86,6 +86,10 @@ export class GroupsService {
       subject,
       teacher,
       room,
+      timezone: dto.timezone,
+      startDate: dto.startDate ? new Date(dto.startDate) : undefined,
+      endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+      status: dto.status,
     });
 
     const savedGroup = await this.groupRepo.save(group);
@@ -110,6 +114,12 @@ export class GroupsService {
     if (!group) throw new NotFoundException('Group not found');
 
     if (dto.name) group.name = dto.name;
+    if (dto.timezone) group.timezone = dto.timezone;
+    if (dto.startDate) group.startDate = new Date(dto.startDate);
+    if (dto.endDate !== undefined) {
+      group.endDate = dto.endDate ? new Date(dto.endDate) : null;
+    }
+    if (dto.status) group.status = dto.status;
     if (dto.subjectId) {
       group.subject = await this.subjectRepo.findOneBy({
         id: dto.subjectId,

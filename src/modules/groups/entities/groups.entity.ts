@@ -14,6 +14,7 @@ import { Student } from '@/modules/students/entities/students.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 
 @Entity('groups')
 export class Group {
@@ -22,6 +23,29 @@ export class Group {
 
   @Column()
   name: string;
+
+  /**
+   * IANA timezone name, used for all lessonDate calculations and "today" comparisons.
+   * Example: Asia/Tashkent
+   */
+  @Column({ default: 'Asia/Tashkent' })
+  timezone: string;
+
+  /**
+   * Group start boundary in local group timezone.
+   * Lesson existence is computed only within [startDate..endDate?].
+   */
+  @Column({ type: 'date', default: () => 'CURRENT_DATE' })
+  startDate: Date;
+
+  /**
+   * Optional group end boundary in local group timezone (inclusive).
+   */
+  @Column({ type: 'date', nullable: true })
+  endDate?: Date | null;
+
+  @Column({ type: 'enum', enum: GroupStatus, default: GroupStatus.ACTIVE })
+  status: GroupStatus;
 
   @ManyToOne(() => Subject, { onDelete: 'CASCADE' })
   subject: Subject;

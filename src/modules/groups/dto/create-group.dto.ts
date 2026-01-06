@@ -1,13 +1,16 @@
 import {
   IsArray,
+  IsDateString,
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsString,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 
 export class CreateGroupDto {
   @ApiProperty({
@@ -16,6 +19,44 @@ export class CreateGroupDto {
   })
   @IsNotEmpty()
   name: string;
+
+  @ApiProperty({
+    example: 'Asia/Tashkent',
+    description:
+      "Gurux timezone (IANA). Barcha attendance lessonDate logikasi shu timezone bo'yicha ishlaydi.",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  timezone?: string;
+
+  @ApiProperty({
+    example: '2026-01-01',
+    description:
+      "Gurux boshlanish sanasi (DATE). Lesson existence faqat schedule + shu chegara asosida hisoblanadi.",
+    required: false,
+  })
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @ApiProperty({
+    example: '2026-06-01',
+    description: 'Gurux tugash sanasi (DATE). Ixtiyoriy (nullable).',
+    required: false,
+  })
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @ApiProperty({
+    example: GroupStatus.ACTIVE,
+    enum: GroupStatus,
+    required: false,
+    description: 'Gurux statusi',
+  })
+  @IsOptional()
+  status?: GroupStatus;
 
   @ApiProperty({
     example: 2,

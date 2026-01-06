@@ -3,6 +3,7 @@ import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
 import { SubjectResponseDto } from '@/modules/subjects/dto/subject-response.dto';
 import { CenterResponseDto } from '@/modules/centers/dto/center-reponse.dto';
 import { RoomResponseDto } from '@/modules/rooms/dto/room-response.dto';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 
 export class GroupResponseDto {
   @ApiProperty({ example: 1 })
@@ -10,6 +11,18 @@ export class GroupResponseDto {
 
   @ApiProperty({ example: 'Ingliz tili guruh 1' })
   name: string;
+
+  @ApiProperty({ example: 'Asia/Tashkent' })
+  timezone: string;
+
+  @ApiProperty({ example: '2026-01-01' })
+  startDate: string;
+
+  @ApiProperty({ example: '2026-06-01', required: false, nullable: true })
+  endDate?: string | null;
+
+  @ApiProperty({ enum: GroupStatus, example: GroupStatus.ACTIVE })
+  status: GroupStatus;
 
   @ApiProperty({ example: 400000 })
   monthlyFee: number;
