@@ -36,10 +36,11 @@ export class Payment {
   @Column({ nullable: true })
   groupId: number | null;
 
-  @Column({ type: 'numeric', precision: 10, scale: 2 })
+  // NOTE: numeric(10,2) overflows for fees like 123,123,123.00 (needs >= 11 digits precision).
+  @Column({ type: 'numeric', precision: 14, scale: 2 })
   amountDue: number;
 
-  @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
   amountPaid: number;
 
   /**

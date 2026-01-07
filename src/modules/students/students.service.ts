@@ -288,17 +288,25 @@ export class StudentsService {
   }
 
   async changeStatus(id: number, status: StudentStatus) {
-    const student = await this.findById(id);
+    const student = await this.studentRepo.findOne({ where: { id } });
+    if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+
+    // When student becomes ACTIVE, they start paying from that moment.
     if (status === StudentStatus.ACTIVE && !student.activatedAt) {
       student.activatedAt = new Date();
     }
+
     student.status = status;
     const saved = await this.studentRepo.save(student);
+
     if (status === StudentStatus.ACTIVE) {
-      await this.paymentsService.ensurePaymentsForStudent(student.id, {
-        onlyCurrentMonth: false,
+      // Create/ensure payments for current month for all groups the student belongs to.
+      // (Payment creation is group-based; if student has no groups, nothing is created.)
+      await this.paymentsService.ensurePaymentsForStudent(saved.id, {
+        onlyCurrentMonth: true,
       });
     }
+
     return saved;
   }
 }

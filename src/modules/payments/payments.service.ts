@@ -141,6 +141,114 @@ export class PaymentsService {
   }
 
   /**
+   * Recalculate open payments (UNPAID/PARTIAL) when pricing inputs change:
+   * - student.monthlyFee / group.monthlyFee
+   * - student.discountPercent
+   *
+   * Bound to a small window for safety (default: last 3 months).
+   * PAID payments are never changed.
+   */
+  private async recalculateOpenPaymentsForOrganization(
+    organizationId: number,
+    opts?: { maxMonthsBack?: number },
+  ) {
+    const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
+    const windowStart = dayjs()
+      .startOf('month')
+      .subtract(maxMonthsBack - 1, 'month')
+      .format('YYYY-MM-01');
+    const windowEnd = dayjs().startOf('month').format('YYYY-MM-01');
+
+    const payments = await this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .leftJoin('student.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('payments.status != :paid', { paid: PaymentStatus.PAID })
+      .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
+        windowStart,
+        windowEnd,
+      })
+      .getMany();
+
+    if (!payments.length) return;
+
+    const toSave: Payment[] = [];
+    const toDeleteIds: number[] = [];
+
+    for (const p of payments as any[]) {
+      if (!p.group || !p.student) continue;
+      if (!p.group.schedules?.length) continue;
+
+      const timezone = p.group.timezone || 'Asia/Tashkent';
+      const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
+
+      const studentActiveStart = this.computeStudentActiveStartForMonth({
+        student: p.student,
+        group: p.group,
+        forMonth,
+      });
+      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
+        {
+          group: p.group,
+          forMonth,
+          studentActiveStart,
+        },
+      );
+
+      // Keep the system free of useless zero-bill payments:
+      // if nothing is billable and nothing was paid -> delete open payment
+      const amountPaid = Number(p.amountPaid ?? 0);
+      if (!lessonsPlanned || !lessonsBillable) {
+        if (amountPaid === 0) {
+          toDeleteIds.push(p.id);
+        }
+        continue;
+      }
+
+      const amountDue = this.computeAmountDue({
+        student: p.student,
+        group: p.group,
+        lessonsPlanned,
+        lessonsBillable,
+      });
+
+      const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
+
+      // If discount/fee changed and now due is below already-paid amount,
+      // clamp amountPaid to amountDue and mark PAID.
+      let newAmountPaid = amountPaid;
+      let newStatus = p.status;
+      if (newAmountPaid > amountDue) {
+        newAmountPaid = amountDue;
+      }
+      if (newAmountPaid === amountDue) newStatus = PaymentStatus.PAID;
+      else if (newAmountPaid > 0) newStatus = PaymentStatus.PARTIAL;
+      else newStatus = PaymentStatus.UNPAID;
+
+      p.lessonsPlanned = lessonsPlanned;
+      p.lessonsBillable = lessonsBillable;
+      p.amountDue = amountDue as any;
+      p.amountPaid = newAmountPaid as any;
+      p.status = newStatus;
+      p.dueDate = dueDate as any;
+      p.hardDueDate = hardDueDate as any;
+
+      toSave.push(p);
+    }
+
+    if (toDeleteIds.length) {
+      await this.paymentRepo.delete(toDeleteIds);
+    }
+    if (toSave.length) {
+      await this.paymentRepo.save(toSave);
+    }
+  }
+
+  /**
    * Ensure missing monthly payments exist for all ACTIVE students (and each group they belong to).
    * - Never overwrites existing payments
    * - Never creates duplicates (guarded by unique constraint + existence set)
@@ -327,9 +435,14 @@ export class PaymentsService {
     try {
       await this.paymentRepo.save(toCreate as any);
     } catch (e) {
-      // best-effort: ignore unique conflicts; other errors should surface
+      // Ignore only unique conflicts; surface everything else (like numeric overflow)
+      const code = (e as any)?.code ?? (e as any)?.driverError?.code;
+      if (code === '23505') {
+        return;
+      }
       // eslint-disable-next-line no-console
       console.warn('ensurePayments save error:', (e as any)?.message ?? e);
+      throw e;
     }
   }
 
@@ -391,6 +504,10 @@ export class PaymentsService {
     // Ensure missing monthly payments are present when listing payments
     try {
       await this.ensurePaymentsForOrganization(organizationId, {
+        maxMonthsBack: 3,
+      });
+      // Also recalculate open payments in the same bounded window (pricing/discount updates)
+      await this.recalculateOpenPaymentsForOrganization(organizationId, {
         maxMonthsBack: 3,
       });
     } catch (e) {
