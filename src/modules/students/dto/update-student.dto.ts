@@ -7,6 +7,8 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
+  Min,
   MinLength,
 } from 'class-validator';
 import { Column } from 'typeorm';
@@ -56,6 +58,26 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
   @IsOptional()
   @IsNumber()
   monthlyFee?: number;
+
+  @ApiProperty({
+    example: 10,
+    description: 'Universal discount percent (0..100)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number;
+
+  @ApiProperty({
+    example: 'Referral discount',
+    description: 'Discount reason (optional)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  discountReason?: string;
 
   @ApiProperty({ example: 'Ali12345', required: false })
   @IsOptional()

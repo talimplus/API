@@ -5,6 +5,8 @@ import {
   IsString,
   IsEnum,
   IsArray,
+  Max,
+  Min,
 } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { ApiProperty } from '@nestjs/swagger';
@@ -46,6 +48,27 @@ export class CreateStudentDto {
   @IsOptional()
   @IsNumber()
   monthlyFee?: number;
+
+  @ApiProperty({
+    example: 10,
+    description: 'Universal discount percent (0..100)',
+    required: false,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent?: number;
+
+  @ApiProperty({
+    example: 'Referral discount',
+    description: 'Discount reason (optional)',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  discountReason?: string;
 
   @ApiProperty({ example: StudentStatus.NEW, required: false })
   @IsOptional()

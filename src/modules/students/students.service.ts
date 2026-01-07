@@ -8,6 +8,7 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { UsersService } from '@/modules/users/users.service';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { Student } from './entities/students.entity';
+import { PaymentsService } from '@/modules/payments/payments.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Repository } from 'typeorm';
@@ -33,6 +34,8 @@ export class StudentsService {
     private readonly organizationsService: OrganizationsService,
     @Inject(forwardRef(() => ReferralsService))
     private readonly referralsService: ReferralsService,
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService: PaymentsService,
   ) {}
   async findAll(
     organizationId: number,
@@ -161,7 +164,7 @@ export class StudentsService {
   async findByActiveStatus(): Promise<Student[]> {
     return await this.studentRepo.find({
       where: { status: StudentStatus.ACTIVE },
-      relations: ['group', 'center'],
+      relations: ['groups', 'center'],
     });
   }
 
@@ -210,7 +213,8 @@ export class StudentsService {
       lastName: dto.lastName,
       phone: dto.phone,
       monthlyFee: dto.monthlyFee,
-      referralDiscount: 0,
+      discountPercent: dto.discountPercent ?? 0,
+      discountReason: dto.discountReason ?? null,
       birthDate: dto.birthDate,
       status: StudentStatus.NEW,
       center,
@@ -262,13 +266,39 @@ export class StudentsService {
         "Bunday foydalanuvchi mavjud emas Yoki nomalum Xato ro'y berdi",
       );
 
+    // group assignment update (ManyToMany)
+    const shouldEnsureCurrentMonthPayments =
+      Array.isArray(dto.groupIds) && dto.groupIds.length > 0;
+    if (dto.groupIds) {
+      const groups = await this.groupRepo.findBy({ id: In(dto.groupIds) });
+      student.groups = groups;
+    }
+
     Object.assign(student, dto);
-    return instanceToPlain(this.studentRepo.save(student));
+    const saved = await this.studentRepo.save(student);
+
+    if (shouldEnsureCurrentMonthPayments && saved.status === StudentStatus.ACTIVE) {
+      // Ensure at least current month payments exist for assigned groups
+      await this.paymentsService.ensurePaymentsForStudent(saved.id, {
+        onlyCurrentMonth: true,
+      });
+    }
+
+    return instanceToPlain(saved);
   }
 
   async changeStatus(id: number, status: StudentStatus) {
     const student = await this.findById(id);
+    if (status === StudentStatus.ACTIVE && !student.activatedAt) {
+      student.activatedAt = new Date();
+    }
     student.status = status;
-    return this.studentRepo.save(student);
+    const saved = await this.studentRepo.save(student);
+    if (status === StudentStatus.ACTIVE) {
+      await this.paymentsService.ensurePaymentsForStudent(student.id, {
+        onlyCurrentMonth: false,
+      });
+    }
+    return saved;
   }
 }

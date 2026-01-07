@@ -4,6 +4,8 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  Index,
+  JoinColumn,
 } from 'typeorm';
 import { Student } from '@/modules/students/entities/students.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
@@ -15,21 +17,55 @@ export enum PaymentStatus {
 }
 
 @Entity('payments')
+@Index(['studentId', 'groupId', 'forMonth'], { unique: true })
 export class Payment {
   @PrimaryGeneratedColumn()
   id: number;
 
   @ManyToOne(() => Student, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'studentId' })
   student: Student;
 
+  @Column()
+  studentId: number;
+
   @ManyToOne(() => Group, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'groupId' })
   group: Group;
+
+  @Column({ nullable: true })
+  groupId: number | null;
 
   @Column({ type: 'numeric', precision: 10, scale: 2 })
   amountDue: number;
 
   @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
   amountPaid: number;
+
+  /**
+   * Soft deadline (usually 10th of month in group timezone).
+   */
+  @Column({ type: 'date', nullable: true })
+  dueDate: Date | null;
+
+  /**
+   * Hard deadline (usually 15th of month).
+   */
+  @Column({ type: 'date', nullable: true })
+  hardDueDate: Date | null;
+
+  /**
+   * Total scheduled lessons in the month for this group (schedule-driven).
+   */
+  @Column({ type: 'int', nullable: true })
+  lessonsPlanned: number | null;
+
+  /**
+   * How many lessons the student must pay for that month (<= lessonsPlanned).
+   * For mid-month activation, this is smaller.
+   */
+  @Column({ type: 'int', nullable: true })
+  lessonsBillable: number | null;
 
   @Column({
     type: 'enum',

@@ -39,11 +39,25 @@ export class Student {
   @Column({ type: 'numeric', nullable: true })
   monthlyFee: number;
 
-  @Column({ type: 'decimal', default: 0 })
-  referralDiscount: number;
+  /**
+   * Universal discount percent (0..100). Applies to all payments for this student.
+   * Examples: referral, voucher, manual discount.
+   */
+  @Column({ type: 'numeric', default: 0 })
+  discountPercent: number;
+
+  @Column({ type: 'text', nullable: true })
+  discountReason?: string | null;
 
   @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.NEW })
   status: StudentStatus;
+
+  /**
+   * Timestamp when student first became ACTIVE.
+   * If unknown historically, fallback to createdAt at runtime.
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  activatedAt?: Date | null;
 
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;

@@ -7,55 +7,103 @@ export class AttendanceLessonExistenceSeparation1760000000001
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // ---- groups: add schedule boundaries + timezone + status (needed for schedule-driven lesson existence)
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        CREATE TYPE "public"."groups_status_enum" AS ENUM('active', 'inactive', 'completed');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     await queryRunner.query(
-      `CREATE TYPE "public"."groups_status_enum" AS ENUM('active', 'inactive', 'completed')`,
+      `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS "timezone" character varying NOT NULL DEFAULT 'Asia/Tashkent'`,
     );
     await queryRunner.query(
-      `ALTER TABLE "groups" ADD "timezone" character varying NOT NULL DEFAULT 'Asia/Tashkent'`,
+      `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS "startDate" date NOT NULL DEFAULT CURRENT_DATE`,
     );
     await queryRunner.query(
-      `ALTER TABLE "groups" ADD "startDate" date NOT NULL DEFAULT CURRENT_DATE`,
+      `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS "endDate" date`,
     );
-    await queryRunner.query(`ALTER TABLE "groups" ADD "endDate" date`);
     await queryRunner.query(
-      `ALTER TABLE "groups" ADD "status" "public"."groups_status_enum" NOT NULL DEFAULT 'active'`,
+      `ALTER TABLE "groups" ADD COLUMN IF NOT EXISTS "status" "public"."groups_status_enum" NOT NULL DEFAULT 'active'`,
     );
 
     // ---- attendance: persisted facts only, keyed by (groupId, studentId, lessonDate)
-    await queryRunner.query(
-      `CREATE TYPE "public"."attendance_status_enum" AS ENUM('present', 'absent', 'late', 'excused')`,
-    );
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        CREATE TYPE "public"."attendance_status_enum" AS ENUM('present', 'absent', 'late', 'excused');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
 
     // Rename date -> lessonDate (DATE in group timezone)
-    await queryRunner.query(
-      `ALTER TABLE "attendance" RENAME COLUMN "date" TO "lessonDate"`,
-    );
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='attendance' AND column_name='date'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='attendance' AND column_name='lessonDate'
+        ) THEN
+          ALTER TABLE "attendance" RENAME COLUMN "date" TO "lessonDate";
+        END IF;
+      END $$;
+    `);
 
     // Rename reason -> comment
-    await queryRunner.query(
-      `ALTER TABLE "attendance" RENAME COLUMN "reason" TO "comment"`,
-    );
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='attendance' AND column_name='reason'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='attendance' AND column_name='comment'
+        ) THEN
+          ALTER TABLE "attendance" RENAME COLUMN "reason" TO "comment";
+        END IF;
+      END $$;
+    `);
     await queryRunner.query(
       `ALTER TABLE "attendance" ALTER COLUMN "comment" TYPE text`,
     );
 
     // status + audit columns
     await queryRunner.query(
-      `ALTER TABLE "attendance" ADD "status" "public"."attendance_status_enum" NOT NULL DEFAULT 'present'`,
+      `ALTER TABLE "attendance" ADD COLUMN IF NOT EXISTS "status" "public"."attendance_status_enum" NOT NULL DEFAULT 'present'`,
     );
-    await queryRunner.query(
-      `UPDATE "attendance" SET "status" = CASE WHEN "isPresent" = true THEN 'present' ELSE 'absent' END`,
-    );
-    await queryRunner.query(`ALTER TABLE "attendance" DROP COLUMN "isPresent"`);
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='attendance' AND column_name='isPresent'
+        ) THEN
+          UPDATE "attendance"
+          SET "status" = CASE WHEN "isPresent" = true THEN 'present' ELSE 'absent' END;
+          ALTER TABLE "attendance" DROP COLUMN "isPresent";
+        END IF;
+      END $$;
+    `);
 
     await queryRunner.query(
-      `ALTER TABLE "attendance" ADD "submittedById" integer`,
+      `ALTER TABLE "attendance" ADD COLUMN IF NOT EXISTS "submittedById" integer`,
     );
     await queryRunner.query(
-      `ALTER TABLE "attendance" ADD "submittedAt" TIMESTAMP NOT NULL DEFAULT now()`,
+      `ALTER TABLE "attendance" ADD COLUMN IF NOT EXISTS "submittedAt" TIMESTAMP NOT NULL DEFAULT now()`,
     );
     await queryRunner.query(
-      `ALTER TABLE "attendance" ADD "updatedAt" TIMESTAMP NOT NULL DEFAULT now()`,
+      `ALTER TABLE "attendance" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP NOT NULL DEFAULT now()`,
+    );
+
+    // Clean invalid legacy rows before making keys non-null
+    await queryRunner.query(
+      `DELETE FROM "attendance" WHERE "studentId" IS NULL OR "groupId" IS NULL`,
     );
 
     await queryRunner.query(
@@ -65,13 +113,34 @@ export class AttendanceLessonExistenceSeparation1760000000001
       `ALTER TABLE "attendance" ALTER COLUMN "groupId" SET NOT NULL`,
     );
 
-    await queryRunner.query(
-      `ALTER TABLE "attendance" ADD CONSTRAINT "UQ_attendance_group_student_lessonDate" UNIQUE ("groupId", "studentId", "lessonDate")`,
-    );
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'UQ_attendance_group_student_lessonDate'
+        ) THEN
+          ALTER TABLE "attendance"
+          ADD CONSTRAINT "UQ_attendance_group_student_lessonDate"
+          UNIQUE ("groupId", "studentId", "lessonDate");
+        END IF;
+      END $$;
+    `);
 
-    await queryRunner.query(
-      `ALTER TABLE "attendance" ADD CONSTRAINT "FK_attendance_submitted_by" FOREIGN KEY ("submittedById") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE NO ACTION`,
-    );
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'FK_attendance_submitted_by'
+        ) THEN
+          ALTER TABLE "attendance"
+          ADD CONSTRAINT "FK_attendance_submitted_by"
+          FOREIGN KEY ("submittedById") REFERENCES "users"("id")
+          ON DELETE SET NULL ON UPDATE NO ACTION;
+        END IF;
+      END $$;
+    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

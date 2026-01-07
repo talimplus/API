@@ -10,6 +10,7 @@ import { OrganizationsModule } from '@/modules/organizations/organizations.modul
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { ReferralsModule } from '@/modules/referrals/referrals.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
+import { PaymentsModule } from '@/modules/payments/payments.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AttendanceModule } from '@/modules/attendance/attendance.module';
     forwardRef(() => GroupsModule),
     forwardRef(() => ReferralsModule),
     forwardRef(() => AttendanceModule),
+    forwardRef(() => PaymentsModule),
   ],
   controllers: [StudentsController],
   providers: [StudentsService],
