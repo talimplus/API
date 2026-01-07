@@ -88,6 +88,7 @@ export class UpdateGroupDto {
     required: false,
   })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   monthlyFee?: number;
 

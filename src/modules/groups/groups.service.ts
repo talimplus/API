@@ -120,6 +120,7 @@ export class GroupsService {
       group.endDate = dto.endDate ? new Date(dto.endDate) : null;
     }
     if (dto.status) group.status = dto.status;
+    if (dto.monthlyFee !== undefined) group.monthlyFee = dto.monthlyFee;
     if (dto.subjectId) {
       group.subject = await this.subjectRepo.findOneBy({
         id: dto.subjectId,

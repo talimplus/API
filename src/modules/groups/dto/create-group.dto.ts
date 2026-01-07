@@ -87,6 +87,7 @@ export class CreateGroupDto {
     required: false,
   })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   monthlyFee?: number;
 
