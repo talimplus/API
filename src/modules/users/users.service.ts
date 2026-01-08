@@ -164,6 +164,69 @@ export class UsersService {
     };
   }
 
+  /**
+   * Ishchilar (studentsiz userlar): teacher/manager/other.
+   * Frontend selectlar (teacher tanlash, xodimlar ro'yxati) uchun ishlatiladi.
+   */
+  async findEmployees(
+    organizationId: number,
+    {
+      centerId,
+      name,
+      phone,
+      page = 1,
+      perPage = 10,
+    }: {
+      centerId?: number;
+      name?: string;
+      phone?: string;
+      page?: number;
+      perPage?: number;
+    },
+  ) {
+    const skip = (page - 1) * perPage;
+
+    const query = this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('user.role IN (:...roles)', {
+        roles: [UserRole.TEACHER, UserRole.MANAGER, UserRole.OTHER],
+      });
+
+    if (centerId) {
+      query.andWhere('center.id = :centerId', { centerId });
+    }
+
+    if (name) {
+      query.andWhere(
+        '(user.firstName ILIKE :name OR user.lastName ILIKE :name)',
+        { name: `%${name}%` },
+      );
+    }
+
+    if (phone) {
+      query.andWhere('user.phone ILIKE :phone', { phone: `%${phone}%` });
+    }
+
+    const [data, total] = await query
+      .orderBy('user.createdAt', 'DESC')
+      .skip(skip)
+      .take(perPage)
+      .getManyAndCount();
+
+    return {
+      data: instanceToPlain(data),
+      meta: {
+        total,
+        page,
+        perPage,
+        totalPages: Math.ceil(total / perPage),
+      },
+    };
+  }
+
   async findOne(id: number) {
     const user = await this.userRepo.findOne({
       where: { id },

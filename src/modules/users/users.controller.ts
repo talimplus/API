@@ -85,6 +85,30 @@ export class UsersController {
   }
 
   /**
+   * 👷 Ishchilar ro'yxati (studentlar emas): teacher/manager/other
+   */
+  @Get('employees')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Get employees (non-students)' })
+  @ApiResponse({ type: PaginatedUserResponseDto })
+  async findEmployees(
+    @Req() req: any,
+    @Query('centerId') centerId?: number,
+    @Query('name') name?: string,
+    @Query('phone') phone?: string,
+    @Query('page') page?: number,
+    @Query('perPage') perPage?: number,
+  ) {
+    return this.usersService.findEmployees(req.user.organizationId, {
+      centerId: centerId ? +centerId : undefined,
+      name,
+      phone,
+      page: page ? +page : 1,
+      perPage: perPage ? +perPage : 10,
+    });
+  }
+
+  /**
    * 🔍 ID bo‘yicha foydalanuvchini olish (faqat markazdagi bo‘lsa)
    */
   @Get(':id')
