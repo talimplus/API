@@ -9,7 +9,7 @@ import {
   PaymentStatus,
 } from '@/modules/payments/entities/payment.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Brackets, QueryFailedError, Repository } from 'typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Student } from '@/modules/students/entities/students.entity';
@@ -68,15 +68,21 @@ export class PaymentsService {
     const monthStart = dayjs(forMonth).tz(timezone).startOf('month');
     const monthEnd = monthStart.endOf('month');
 
-    const groupStartDate = dayjs(group.startDate).format('YYYY-MM-DD');
-    const groupEndDate = group.endDate
-      ? dayjs(group.endDate).format('YYYY-MM-DD')
-      : null;
+    /**
+     * BUSINESS RULE:
+     * - group.monthlyFee represents a full-month price (independent of when the group was created during the month).
+     * Therefore:
+     * - lessonsPlanned = schedule-matching lesson count for the FULL calendar month (monthStart..monthEnd),
+     *   ignoring group.startDate.
+     * - lessonsBillable = lessons the student must pay for, based on studentActiveStart (which already accounts for
+     *   group.startDate and student.activatedAt/createdAt).
+     */
 
-    const lessonDates = computeLessonDates({
+    // Planned lessons for the full month (ignore group boundaries)
+    const plannedDates = computeLessonDates({
       timezone,
-      groupStartDate,
-      groupEndDate,
+      groupStartDate: monthStart.format('YYYY-MM-DD'),
+      groupEndDate: monthEnd.format('YYYY-MM-DD'),
       schedules: group.schedules ?? [],
       window: {
         mode: 'range',
@@ -85,10 +91,11 @@ export class PaymentsService {
       },
     });
 
-    const lessonsPlanned = lessonDates.length;
+    const lessonsPlanned = plannedDates.length;
     if (!lessonsPlanned) return { lessonsPlanned: 0, lessonsBillable: 0 };
 
-    const lessonsBillable = lessonDates.filter(
+    // Billable lessons: subset of the full month schedule starting from studentActiveStart
+    const lessonsBillable = plannedDates.filter(
       (d) => d >= studentActiveStart,
     ).length;
 
@@ -491,6 +498,7 @@ export class PaymentsService {
       overdueOnly,
       studentId,
       groupId,
+      search,
     }: {
       page: number;
       perPage: number;
@@ -499,6 +507,7 @@ export class PaymentsService {
       overdueOnly?: boolean;
       studentId?: number;
       groupId?: number;
+      search?: string;
     },
   ) {
     // Ensure missing monthly payments are present when listing payments
@@ -543,6 +552,18 @@ export class PaymentsService {
 
     if (groupId) {
       query.andWhere('payments.groupId = :groupId', { groupId });
+    }
+
+    if (search && search.trim()) {
+      const q = `%${search.trim()}%`;
+      query.andWhere(
+        new Brackets((qb) => {
+          qb.where('student.firstName ILIKE :q', { q })
+            .orWhere('student.lastName ILIKE :q', { q })
+            .orWhere('student.phone ILIKE :q', { q })
+            .orWhere('group.name ILIKE :q', { q });
+        }),
+      );
     }
 
     if (forMonth) {

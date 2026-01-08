@@ -42,6 +42,13 @@ export class PaymentsController {
   })
   @ApiQuery({ name: 'studentId', required: false, type: Number })
   @ApiQuery({ name: 'groupId', required: false, type: Number })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description:
+      'Search by student firstName/lastName/phone or group name (case-insensitive, partial match).',
+    example: 'ali',
+  })
   async findAll(
     @Req() req: any,
     @Query('page') page?: number,
@@ -51,6 +58,7 @@ export class PaymentsController {
     @Query('overdueOnly') overdueOnly?: string, // 'true' | 'false'
     @Query('studentId') studentId?: number,
     @Query('groupId') groupId?: number,
+    @Query('search') search?: string,
   ) {
     return this.paymentsService.findAll(req.user.organizationId, {
       page: page ? +page : 1,
@@ -60,6 +68,7 @@ export class PaymentsController {
       overdueOnly: overdueOnly === 'true',
       studentId: studentId ? +studentId : undefined,
       groupId: groupId ? +groupId : undefined,
+      search,
     });
   }
 

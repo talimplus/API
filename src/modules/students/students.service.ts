@@ -277,7 +277,10 @@ export class StudentsService {
     Object.assign(student, dto);
     const saved = await this.studentRepo.save(student);
 
-    if (shouldEnsureCurrentMonthPayments && saved.status === StudentStatus.ACTIVE) {
+    if (
+      shouldEnsureCurrentMonthPayments &&
+      saved.status === StudentStatus.ACTIVE
+    ) {
       // Ensure at least current month payments exist for assigned groups
       await this.paymentsService.ensurePaymentsForStudent(saved.id, {
         onlyCurrentMonth: true,
@@ -292,7 +295,11 @@ export class StudentsService {
     if (!student) throw new NotFoundException('O‘quvchi topilmadi');
 
     // When student becomes ACTIVE, they start paying from that moment.
-    if (status === StudentStatus.ACTIVE && !student.activatedAt) {
+    // Always set activatedAt on transition into ACTIVE (so proration is based on the real activation moment).
+    if (
+      status === StudentStatus.ACTIVE &&
+      student.status !== StudentStatus.ACTIVE
+    ) {
       student.activatedAt = new Date();
     }
 

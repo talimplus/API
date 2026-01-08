@@ -33,7 +33,7 @@ export class CreateGroupDto {
   @ApiProperty({
     example: '2026-01-01',
     description:
-      "Gurux boshlanish sanasi (DATE). Lesson existence faqat schedule + shu chegara asosida hisoblanadi.",
+      'Gurux boshlanish sanasi (DATE). Lesson existence faqat schedule + shu chegara asosida hisoblanadi.',
     required: false,
   })
   @IsOptional()
@@ -84,12 +84,11 @@ export class CreateGroupDto {
   @ApiProperty({
     example: 400000,
     description: "Bu guruxdagi o'quvchilarning default oylik to'lovi",
-    required: false,
   })
-  @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  monthlyFee?: number;
+  @IsNotEmpty()
+  monthlyFee: number;
 
   @ApiProperty({
     description: 'Group schedule',
