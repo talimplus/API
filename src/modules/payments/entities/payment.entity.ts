@@ -44,6 +44,16 @@ export class Payment {
   amountPaid: number;
 
   /**
+   * How much money was refunded to the student for this payment (cumulative).
+   * This preserves history while amountPaid can represent net received (after refunds).
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  refundedAmount: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  refundedAt?: Date | null;
+
+  /**
    * Soft deadline (usually 10th of month in group timezone).
    */
   @Column({ type: 'date', nullable: true })

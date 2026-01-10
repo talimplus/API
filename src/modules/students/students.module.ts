@@ -11,10 +11,11 @@ import { GroupsModule } from '@/modules/groups/groups.module';
 import { ReferralsModule } from '@/modules/referrals/referrals.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
+import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Student, Group]),
+    TypeOrmModule.forFeature([Student, Group, StudentDiscountPeriod]),
     CentersModule,
     UsersModule,
     OrganizationsModule,

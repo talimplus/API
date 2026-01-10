@@ -15,6 +15,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
+import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 
 @Entity('students')
 export class Student {
@@ -59,6 +60,12 @@ export class Student {
   @Column({ type: 'timestamp', nullable: true })
   activatedAt?: Date | null;
 
+  /**
+   * Timestamp when student became STOPPED (used for refunds / billing end boundary).
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  stoppedAt?: Date | null;
+
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
 
@@ -68,6 +75,9 @@ export class Student {
   @ManyToMany(() => Group, (group) => group.students)
   @JoinTable()
   groups: Group[];
+
+  @OneToMany(() => StudentDiscountPeriod, (d) => d.student)
+  discountPeriods: StudentDiscountPeriod[];
 
   @OneToOne(() => User, (user) => user.student, {
     nullable: true,

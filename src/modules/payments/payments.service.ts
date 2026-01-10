@@ -17,6 +17,9 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import { TeacherEarningsService } from '@/modules/teacher-earnings/teacher-earnings.service';
+import { Inject, forwardRef } from '@nestjs/common';
+import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -26,7 +29,71 @@ export class PaymentsService {
     private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(Student)
     private readonly studentRepo: Repository<Student>,
+    @InjectRepository(StudentDiscountPeriod)
+    private readonly discountPeriodRepo: Repository<StudentDiscountPeriod>,
+    @Inject(forwardRef(() => TeacherEarningsService))
+    private readonly teacherEarningsService: TeacherEarningsService,
   ) {}
+
+  private discountCache = new Map<string, number>();
+
+  private async resolveDiscountPercentForMonth(args: {
+    student: Student;
+    forMonth: string; // YYYY-MM-01
+  }): Promise<number> {
+    const { student, forMonth } = args;
+    const key = `${student.id}:${forMonth}`;
+    const cached = this.discountCache.get(key);
+    if (cached !== undefined) return cached;
+
+    const row = await this.discountPeriodRepo
+      .createQueryBuilder('d')
+      .where('d.studentId = :studentId', { studentId: student.id })
+      .andWhere('d.fromMonth <= :forMonth', { forMonth })
+      .andWhere('(d.toMonth IS NULL OR d.toMonth >= :forMonth)', { forMonth })
+      .orderBy('d.fromMonth', 'DESC')
+      .addOrderBy('d.createdAt', 'DESC')
+      .getOne();
+
+    const pct = Math.max(
+      0,
+      Math.min(100, Number(row?.percent ?? student.discountPercent ?? 0)),
+    );
+    this.discountCache.set(key, pct);
+    return pct;
+  }
+
+  private async triggerTeacherEarningsRecalcForPayment(paymentId: number) {
+    // We intentionally do not block the payment flow on earnings calculations.
+    // If this fails, payroll can still be recalculated via /teacher-earnings/calculate.
+    const info = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select([
+        'p.forMonth as "forMonth"',
+        't.id as "teacherId"',
+        'org.id as "organizationId"',
+      ])
+      .leftJoin('p.group', 'g')
+      .leftJoin('g.teacher', 't')
+      .leftJoin('t.organization', 'org')
+      .where('p.id = :paymentId', { paymentId })
+      .getRawOne<{
+        forMonth: string;
+        teacherId: number | null;
+        organizationId: number | null;
+      }>();
+
+    if (!info?.teacherId || !info?.organizationId || !info?.forMonth) return;
+
+    // Month offset: payments.forMonth = earning month, salary is paid in next month
+    const payYm = dayjs(info.forMonth).add(1, 'month').format('YYYY-MM');
+    await this.teacherEarningsService.calculateTeacherEarningsForMonth(
+      info.organizationId,
+      info.teacherId,
+      payYm,
+      { force: true },
+    );
+  }
 
   @Cron(CronExpression.EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT)
   async generateMonthlyPayments() {
@@ -60,8 +127,10 @@ export class PaymentsService {
     group: Group;
     forMonth: string; // YYYY-MM-01
     studentActiveStart: string; // YYYY-MM-DD
+    studentActiveEndExclusive?: string; // YYYY-MM-DD (optional)
   }): { lessonsPlanned: number; lessonsBillable: number } {
-    const { group, forMonth, studentActiveStart } = args;
+    const { group, forMonth, studentActiveStart, studentActiveEndExclusive } =
+      args;
     const timezone = group.timezone || 'Asia/Tashkent';
 
     // IMPORTANT: parse first, then apply timezone
@@ -95,9 +164,13 @@ export class PaymentsService {
     if (!lessonsPlanned) return { lessonsPlanned: 0, lessonsBillable: 0 };
 
     // Billable lessons: subset of the full month schedule starting from studentActiveStart
-    const lessonsBillable = plannedDates.filter(
-      (d) => d >= studentActiveStart,
-    ).length;
+    // and optionally ending before studentActiveEndExclusive (used for STOPPED refunds).
+    const lessonsBillable = plannedDates.filter((d) => {
+      if (d < studentActiveStart) return false;
+      if (studentActiveEndExclusive && d >= studentActiveEndExclusive)
+        return false;
+      return true;
+    }).length;
 
     return { lessonsPlanned, lessonsBillable };
   }
@@ -127,22 +200,152 @@ export class PaymentsService {
     return max.format('YYYY-MM-DD');
   }
 
+  private computeStudentActiveEndExclusiveForMonth(args: {
+    student: Student;
+    group: Group;
+    forMonth: string; // YYYY-MM-01
+  }): string | null {
+    const { student, group, forMonth } = args;
+    if (!student.stoppedAt) return null;
+
+    const timezone = group.timezone || 'Asia/Tashkent';
+    const monthStart = dayjs(forMonth).tz(timezone).startOf('month');
+    const monthEnd = monthStart.endOf('month');
+
+    const stoppedDay = dayjs(student.stoppedAt).tz(timezone).startOf('day');
+    // If stopped outside this month, no end boundary for this month.
+    if (stoppedDay.isBefore(monthStart.startOf('day'))) {
+      // stopped before month start => nothing billable this month; endExclusive = monthStart
+      return monthStart.format('YYYY-MM-DD');
+    }
+    if (stoppedDay.isAfter(monthEnd.startOf('day'))) {
+      return null;
+    }
+    // Refund from stopped day inclusive => endExclusive = stopped day
+    return stoppedDay.format('YYYY-MM-DD');
+  }
+
+  async adjustPaymentsForStudentStopped(studentId: number) {
+    this.discountCache.clear();
+    const student = await this.studentRepo.findOne({
+      where: { id: studentId },
+      relations: ['groups'],
+    });
+    if (!student) return;
+    if (!student.stoppedAt) return;
+
+    const currentMonth = dayjs().startOf('month').format('YYYY-MM-01');
+
+    const payments = await this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .where('payments.studentId = :studentId', { studentId })
+      .andWhere('payments.forMonth = :forMonth', { forMonth: currentMonth })
+      .getMany();
+
+    if (!payments.length) return;
+
+    const toSave: Payment[] = [];
+    for (const p of payments as any[]) {
+      if (!p.group || !p.student) continue;
+      if (!p.group.schedules?.length) continue;
+
+      const timezone = p.group.timezone || 'Asia/Tashkent';
+      const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
+
+      const studentActiveStart = this.computeStudentActiveStartForMonth({
+        student: p.student,
+        group: p.group,
+        forMonth,
+      });
+      const studentActiveEndExclusive =
+        this.computeStudentActiveEndExclusiveForMonth({
+          student: p.student,
+          group: p.group,
+          forMonth,
+        });
+
+      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
+        {
+          group: p.group,
+          forMonth,
+          studentActiveStart,
+          studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
+        },
+      );
+
+      const discountPercent = await this.resolveDiscountPercentForMonth({
+        student: p.student,
+        forMonth,
+      });
+      const amountDue = this.computeAmountDue({
+        student: p.student,
+        group: p.group,
+        lessonsPlanned,
+        lessonsBillable,
+        discountPercent,
+      });
+
+      const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
+
+      const prevPaid = Number(p.amountPaid ?? 0);
+      const prevRefunded = Number(p.refundedAmount ?? 0);
+
+      let newPaid = prevPaid;
+      let newRefunded = prevRefunded;
+      let refundedAt: Date | null = p.refundedAt ?? null;
+
+      if (newPaid > amountDue) {
+        const refund = this.round2(newPaid - amountDue);
+        newRefunded = this.round2(newRefunded + refund);
+        newPaid = amountDue;
+        refundedAt = new Date();
+      }
+
+      let newStatus = p.status;
+      if (newPaid === amountDue) newStatus = PaymentStatus.PAID;
+      else if (newPaid > 0) newStatus = PaymentStatus.PARTIAL;
+      else newStatus = PaymentStatus.UNPAID;
+
+      p.lessonsPlanned = lessonsPlanned;
+      p.lessonsBillable = lessonsBillable;
+      p.amountDue = amountDue as any;
+      p.amountPaid = newPaid as any;
+      p.refundedAmount = newRefunded as any;
+      p.refundedAt = refundedAt as any;
+      p.status = newStatus;
+      p.dueDate = dueDate as any;
+      p.hardDueDate = hardDueDate as any;
+
+      toSave.push(p);
+    }
+
+    if (toSave.length) {
+      await this.paymentRepo.save(toSave as any);
+      // Trigger teacher earnings recalculation for affected payments
+      for (const p of toSave) {
+        // eslint-disable-next-line no-await-in-loop
+        await this.triggerTeacherEarningsRecalcForPayment(p.id);
+      }
+    }
+  }
+
   private computeAmountDue(args: {
     student: Student;
     group: Group;
     lessonsPlanned: number;
     lessonsBillable: number;
+    discountPercent: number;
   }): number {
-    const { student, group, lessonsPlanned, lessonsBillable } = args;
+    const { student, group, lessonsPlanned, lessonsBillable, discountPercent } =
+      args;
     const baseMonthlyFee = Number(student.monthlyFee ?? group.monthlyFee ?? 0);
     if (!lessonsPlanned) return 0;
 
     // Apply discount AFTER lesson-based prorating
     const proratedFee = baseMonthlyFee * (lessonsBillable / lessonsPlanned);
-    const discountPercent = Math.max(
-      0,
-      Math.min(100, Number(student.discountPercent ?? 0)),
-    );
     const finalFee = proratedFee * (1 - discountPercent / 100);
     return this.round2(Math.max(0, finalFee));
   }
@@ -159,6 +362,7 @@ export class PaymentsService {
     organizationId: number,
     opts?: { maxMonthsBack?: number },
   ) {
+    this.discountCache.clear();
     const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
     const windowStart = dayjs()
       .startOf('month')
@@ -221,6 +425,10 @@ export class PaymentsService {
         group: p.group,
         lessonsPlanned,
         lessonsBillable,
+        discountPercent: await this.resolveDiscountPercentForMonth({
+          student: p.student,
+          forMonth,
+        }),
       });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
@@ -309,6 +517,7 @@ export class PaymentsService {
     opts: { onlyCurrentMonth: boolean; maxMonthsBack?: number },
   ) {
     if (!students.length) return;
+    this.discountCache.clear();
 
     const studentIds = students.map((s) => s.id);
     const groupIds = Array.from(
@@ -403,11 +612,16 @@ export class PaymentsService {
             continue;
           }
 
+          const discountPercent = await this.resolveDiscountPercentForMonth({
+            student,
+            forMonth,
+          });
           const amountDue = this.computeAmountDue({
             student,
             group,
             lessonsPlanned,
             lessonsBillable,
+            discountPercent,
           });
 
           const { dueDate, hardDueDate } = this.computeDueDates(
@@ -463,7 +677,15 @@ export class PaymentsService {
     payment.amountPaid = payment.amountDue;
     payment.status = PaymentStatus.PAID;
 
-    return this.paymentRepo.save(payment);
+    const saved = await this.paymentRepo.save(payment);
+
+    // Recalculate teacher earnings snapshot for that payment month (late payments included)
+    void this.triggerTeacherEarningsRecalcForPayment(paymentId).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
+    });
+
+    return saved;
   }
 
   // Qisman to‘lov qilish
@@ -485,7 +707,15 @@ export class PaymentsService {
       payment.status = PaymentStatus.PARTIAL;
     }
 
-    return this.paymentRepo.save(payment);
+    const saved = await this.paymentRepo.save(payment);
+
+    // Recalculate teacher earnings on any money received (partial payments included)
+    void this.triggerTeacherEarningsRecalcForPayment(paymentId).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
+    });
+
+    return saved;
   }
 
   async findAll(
@@ -609,6 +839,7 @@ export class PaymentsService {
           : null,
         isOverdue,
         remainingAmount,
+        refundedAmount: Number((p as any).refundedAmount ?? 0),
         lessonsPlanned: p.lessonsPlanned ?? 0,
         lessonsBillable: p.lessonsBillable ?? 0,
       };
@@ -660,6 +891,7 @@ export class PaymentsService {
         : null,
       isOverdue,
       remainingAmount,
+      refundedAmount: Number((payment as any).refundedAmount ?? 0),
       lessonsPlanned: (payment as any).lessonsPlanned ?? 0,
       lessonsBillable: (payment as any).lessonsBillable ?? 0,
     };

@@ -33,6 +33,36 @@ export class TeacherEarningsService {
     return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
+  private async applyCarryoverToNextUnpaidEarningMonth(
+    organizationId: number,
+    teacherId: number,
+    sourceEarningMonth: string, // YYYY-MM-01
+  ) {
+    // We only look ahead a limited window to prevent pathological loops.
+    // Next unpaid month is usually the immediate next month.
+    for (let i = 1; i <= 12; i++) {
+      const candidate = dayjs(sourceEarningMonth)
+        .add(i, 'month')
+        .startOf('month')
+        .format('YYYY-MM-01');
+
+      // If the pay month (candidate + 1) is already paid, we cannot change it; move forward.
+      // eslint-disable-next-line no-await-in-loop
+      const paidOut = await this.isSalaryPaidOut(teacherId, candidate);
+      if (paidOut) continue;
+
+      // Recalculate to apply any unapplied carryovers into this candidate month.
+      // eslint-disable-next-line no-await-in-loop
+      await this.calculateTeacherEarningsForMonth(
+        organizationId,
+        teacherId,
+        dayjs(candidate).format('YYYY-MM'),
+        { force: true },
+      );
+      return;
+    }
+  }
+
   private normalizeForMonthYM(ym?: string): string {
     if (!ym) throw new BadRequestException('forMonth is required (YYYY-MM)');
     const v = ym.trim();
@@ -47,22 +77,39 @@ export class TeacherEarningsService {
     return `${v}-01`;
   }
 
-  private async isSalaryPaidOut(teacherId: number, forMonth: string): Promise<boolean> {
+  /**
+   * Month offset rule:
+   * - earnings month = M
+   * - salary is paid in M+1 (pay month)
+   *
+   * StaffSalary.forMonth stores the PAY month for teachers.
+   */
+  private async isSalaryPaidOut(
+    teacherId: number,
+    payMonth: string, // YYYY-MM-01
+  ): Promise<boolean> {
     const row = await this.staffSalaryRepo.findOne({
-      where: { userId: teacherId, forMonth: forMonth as any },
+      where: { userId: teacherId, forMonth: payMonth as any },
     });
     return row?.status === StaffSalaryStatus.PAID;
   }
 
-  private async computeCommissionAmount(teacherId: number, forMonth: string): Promise<number> {
+  private async computeCommissionAmount(
+    teacherId: number,
+    earningMonth: string, // YYYY-MM-01
+  ): Promise<number> {
     // Only PAID student payments count; paid late will be included when recalculated.
     const raw = await this.paymentRepo
       .createQueryBuilder('p')
       .select('COALESCE(SUM(p.amountPaid), 0)', 'sum')
       .leftJoin('p.group', 'g')
       .leftJoin('g.teacher', 't')
-      .where('p.forMonth = :forMonth', { forMonth })
-      .andWhere('p.status = :status', { status: PaymentStatus.PAID })
+      .where('p.forMonth = :forMonth', { forMonth: earningMonth })
+      // Count commission on all money actually received (partial payments included)
+      .andWhere('p.status IN (:...statuses)', {
+        statuses: [PaymentStatus.PAID, PaymentStatus.PARTIAL],
+      })
+      .andWhere('p.amountPaid > 0')
       .andWhere('t.id = :teacherId', { teacherId })
       .getRawOne<{ sum: string }>();
 
@@ -78,10 +125,10 @@ export class TeacherEarningsService {
   async calculateTeacherEarningsForMonth(
     organizationId: number,
     teacherId: number,
-    forMonthYM: string,
+    payMonthYM: string,
     opts?: { force?: boolean },
   ) {
-    const forMonth = this.normalizeForMonthYM(forMonthYM);
+    const payMonth = this.normalizeForMonthYM(payMonthYM);
     const force = !!opts?.force;
 
     const teacher = await this.userRepo
@@ -97,67 +144,87 @@ export class TeacherEarningsService {
     }
 
     const existing = await this.earningRepo.findOne({
-      where: { teacherId, forMonth: forMonth as any },
+      where: { teacherId, forMonth: payMonth as any },
       relations: ['teacher'],
     });
     if (existing && !force) return existing;
+
+    const earningMonth = dayjs(payMonth)
+      .subtract(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM-01');
 
     const baseSalary = Number(teacher.salary ?? 0);
     const commissionPct = Math.max(
       0,
       Math.min(100, Number(teacher.commissionPercentage ?? 0)),
     );
-    const grossPaid = await this.computeCommissionAmount(teacherId, forMonth);
+    const grossPaid = await this.computeCommissionAmount(teacherId, earningMonth);
     const commissionAmount = this.round2(
       Math.max(0, grossPaid * (commissionPct / 100)),
     );
 
-    const paidOut = await this.isSalaryPaidOut(teacherId, forMonth);
+    const paidOut = await this.isSalaryPaidOut(teacherId, payMonth);
 
-    // If already paid out, do not overwrite; store positive diff as carryover.
+    // If pay month was already marked PAID and commission increased (late payments),
+    // record the incremental commission as a carryover applied to THIS SAME pay month.
     if (paidOut && existing) {
-      const newTotal = this.round2(baseSalary + commissionAmount);
-      const oldTotal = Number(existing.totalEarning ?? 0);
-      const diff = this.round2(newTotal - oldTotal);
+      const prevCommission = Number(existing.commissionAmount ?? 0);
+      const diff = this.round2(commissionAmount - prevCommission);
       if (diff > 0) {
         await this.carryRepo.save(
           this.carryRepo.create({
             teacherId,
-            sourceForMonth: forMonth as any,
+            sourceForMonth: earningMonth as any,
             amount: diff as any,
-            appliedForMonth: null,
-            appliedAt: null,
+            appliedForMonth: payMonth as any,
+            appliedAt: new Date(),
           }),
         );
       }
-      return existing;
     }
 
-    // Apply any unapplied carryovers into this month (only when not paid out)
-    const carryovers = await this.carryRepo.find({
+    // Carryover semantics:
+    // - carryover rows are immutable amounts
+    // - appliedForMonth marks which earnings month received that carryover
+    // On recalculation (force=true), we MUST preserve already-applied carryovers for this month.
+    const alreadyApplied = await this.carryRepo
+      .createQueryBuilder('c')
+      .select('COALESCE(SUM(c.amount), 0)', 'sum')
+      .where('c.teacherId = :teacherId', { teacherId })
+      .andWhere('c.appliedForMonth = :forMonth', { forMonth: payMonth })
+      .getRawOne<{ sum: string }>();
+    const alreadyAppliedSum = Number(alreadyApplied?.sum ?? 0);
+
+    // Apply any currently-unapplied carryovers into this month (only when not paid out)
+    const toApply = await this.carryRepo.find({
       where: { teacherId, appliedForMonth: null },
       order: { createdAt: 'ASC' },
     });
-    const carryOverCommission = this.round2(
-      carryovers.reduce((sum, c) => sum + Number(c.amount ?? 0), 0),
+    const toApplySum = this.round2(
+      toApply.reduce((sum, c) => sum + Number(c.amount ?? 0), 0),
     );
-    if (carryovers.length) {
+    if (toApply.length) {
       const now = new Date();
-      for (const c of carryovers) {
-        c.appliedForMonth = forMonth as any;
+      for (const c of toApply) {
+        c.appliedForMonth = payMonth as any;
         c.appliedAt = now;
       }
-      await this.carryRepo.save(carryovers);
+      await this.carryRepo.save(toApply);
     }
 
-    const totalEarning = this.round2(baseSalary + commissionAmount + carryOverCommission);
+    const carryOverCommission = this.round2(alreadyAppliedSum + toApplySum);
+
+    // Total to pay for this pay month is base + full commission calculated from earningMonth.
+    // carryOverCommission is informational (how much was added after the pay month was first settled).
+    const totalEarning = this.round2(baseSalary + commissionAmount);
 
     const snapshot =
       existing ??
       this.earningRepo.create({
         teacherId,
         teacher: teacher as any,
-        forMonth: forMonth as any,
+        forMonth: payMonth as any,
       });
 
     snapshot.baseSalarySnapshot = baseSalary as any;
@@ -166,7 +233,30 @@ export class TeacherEarningsService {
     snapshot.totalEarning = totalEarning as any;
     snapshot.calculatedAt = new Date();
 
-    return this.earningRepo.save(snapshot);
+    const savedSnapshot = await this.earningRepo.save(snapshot);
+
+    // Keep StaffSalary row for this pay month in sync, even if it was previously marked PAID.
+    const salaryRow = await this.staffSalaryRepo.findOne({
+      where: { userId: teacherId, forMonth: payMonth as any },
+    });
+    if (salaryRow) {
+      salaryRow.baseSalary = savedSnapshot.totalEarning as any;
+      const paidAmount = Number((salaryRow as any).paidAmount ?? 0);
+      const base = Number((salaryRow as any).baseSalary ?? 0);
+      if (paidAmount >= base) {
+        salaryRow.status = StaffSalaryStatus.PAID;
+        salaryRow.paidAt = salaryRow.paidAt ?? new Date();
+      } else if (paidAmount > 0) {
+        salaryRow.status = StaffSalaryStatus.PARTIAL;
+        salaryRow.paidAt = null;
+      } else {
+        salaryRow.status = StaffSalaryStatus.UNPAID;
+        salaryRow.paidAt = null;
+      }
+      await this.staffSalaryRepo.save(salaryRow);
+    }
+
+    return savedSnapshot;
   }
 
   async ensureTeacherEarningsForMonth(organizationId: number, forMonthYM: string) {

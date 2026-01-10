@@ -32,5 +32,50 @@ export class StaffSalaryResponseDto {
 
   @ApiProperty({ type: () => UserResponseDto })
   user: UserResponseDto;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: '2025-12-01',
+    description:
+      'For teachers only: earnings month that this salary payment corresponds to (month offset rule).',
+  })
+  earningForMonth?: string | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 2000000,
+    description:
+      'For teachers only: base salary snapshot used when calculating earnings for earningForMonth.',
+  })
+  earningBaseSalarySnapshot?: number | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 725000.5,
+    description:
+      'For teachers only: commission amount calculated from PAID student payments for earningForMonth.',
+  })
+  earningCommissionAmount?: number | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 0,
+    description:
+      'For teachers only: carryover commission applied into earningForMonth (late payment adjustments).',
+  })
+  earningCarryOverCommission?: number | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 2725000.5,
+    description:
+      'For teachers only: total earning for earningForMonth (baseSalarySnapshot + commissionAmount + carryOverCommission).',
+  })
+  earningTotalEarning?: number | null;
 }
 

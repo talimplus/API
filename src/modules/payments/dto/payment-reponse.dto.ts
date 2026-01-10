@@ -20,6 +20,12 @@ export class PaymentResponseDto {
   amountPaid: number;
 
   @ApiProperty({
+    example: 50000.0,
+    description: 'How much was refunded to the student for this month (cumulative)',
+  })
+  refundedAmount: number;
+
+  @ApiProperty({
     example: 100000.0,
     description: 'amountDue - amountPaid',
   })

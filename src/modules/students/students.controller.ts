@@ -4,6 +4,7 @@ import {
   Req,
   Post,
   Get,
+  Delete,
   Param,
   ParseIntPipe,
   Query,
@@ -16,6 +17,12 @@ import { StudentStatus } from '@/common/enums/students-status.enums';
 import { ApiOperation, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { PaginatedStudentResponseDto } from '@/modules/students/dto/paginate-student-response.dto';
 import { StudentResponseDto } from '@/modules/students/dto/student-response.dto';
+import { Roles } from '@/decorators/roles.decorator';
+import { UserRole } from '@/common/enums/user-role.enums';
+import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
+import { UpdateStudentDiscountPeriodDto } from '@/modules/students/dto/update-student-discount-period.dto';
+import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student-discount-period-response.dto';
+import { ApiBody } from '@nestjs/swagger';
 
 @ApiTags('Students')
 @Controller('students')
@@ -108,5 +115,57 @@ export class StudentsController {
     @Query('status') status: StudentStatus,
   ) {
     return this.studentService.changeStatus(id, status);
+  }
+
+  @Get(':id/discount-periods')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'List student discount periods' })
+  @ApiResponse({ type: [StudentDiscountPeriodResponseDto] })
+  async listDiscountPeriods(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.studentService.listDiscountPeriods(req.user.organizationId, id);
+  }
+
+  @Post(':id/discount-periods')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Create student discount period' })
+  @ApiBody({ type: CreateStudentDiscountPeriodDto })
+  @ApiResponse({ type: StudentDiscountPeriodResponseDto })
+  async createDiscountPeriod(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateStudentDiscountPeriodDto,
+  ) {
+    return this.studentService.createDiscountPeriod(req.user.organizationId, id, dto);
+  }
+
+  @Put(':id/discount-periods/:periodId')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Update student discount period' })
+  @ApiBody({ type: UpdateStudentDiscountPeriodDto })
+  @ApiResponse({ type: StudentDiscountPeriodResponseDto })
+  async updateDiscountPeriod(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('periodId', ParseIntPipe) periodId: number,
+    @Body() dto: UpdateStudentDiscountPeriodDto,
+  ) {
+    return this.studentService.updateDiscountPeriod(
+      req.user.organizationId,
+      id,
+      periodId,
+      dto,
+    );
+  }
+
+  @Delete(':id/discount-periods/:periodId')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Delete student discount period' })
+  @ApiResponse({ schema: { example: { success: true } } })
+  async deleteDiscountPeriod(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('periodId', ParseIntPipe) periodId: number,
+  ) {
+    return this.studentService.deleteDiscountPeriod(req.user.organizationId, id, periodId);
   }
 }

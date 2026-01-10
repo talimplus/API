@@ -7,9 +7,12 @@ import {
   IsArray,
   Max,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
 
 export class CreateStudentDto {
   @ApiProperty({ example: 'Ali' })
@@ -69,6 +72,18 @@ export class CreateStudentDto {
   @IsOptional()
   @IsString()
   discountReason?: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Optional month-based discount periods. If provided, they will override discountPercent for matching months.',
+    type: [CreateStudentDiscountPeriodDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateStudentDiscountPeriodDto)
+  discountPeriods?: CreateStudentDiscountPeriodDto[];
 
   @ApiProperty({ example: StudentStatus.NEW, required: false })
   @IsOptional()

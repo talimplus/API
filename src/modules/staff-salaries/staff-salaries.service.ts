@@ -68,29 +68,54 @@ export class StaffSalariesService {
     if (!eligible.length) return;
 
     const userIds = eligible.map((u) => u.id);
-    const existing = await this.staffSalaryRepo.find({
-      where: { forMonth: month as any, userId: userIds as any },
-    });
-    const existingSet = new Set(existing.map((r) => r.userId));
+    const existing = await this.staffSalaryRepo
+      .createQueryBuilder('salary')
+      .leftJoinAndSelect('salary.user', 'user')
+      .where('salary.forMonth = :forMonth', { forMonth: month })
+      .andWhere('salary.userId IN (:...userIds)', { userIds })
+      .getMany();
+    const existingByUserId = new Map(existing.map((r) => [r.userId, r]));
 
-    const ym = month.slice(0, 7);
+    const payYm = month.slice(0, 7);
+    const earningYmForTeachers = dayjs(month)
+      .subtract(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM');
 
     const toCreate: StaffSalary[] = [];
     for (const u of eligible) {
-      if (existingSet.has(u.id)) continue;
-
       let baseSalary = Number(u.salary ?? 0);
       if (u.role === UserRole.TEACHER) {
-        const earning = await this.teacherEarningsService.calculateTeacherEarningsForMonth(
-          organizationId,
-          u.id,
-          ym,
-          { force: false },
-        );
+        const existingRow = existingByUserId.get(u.id);
+        const force =
+          !!existingRow && existingRow.status !== StaffSalaryStatus.PAID;
+
+        const earning =
+          await this.teacherEarningsService.calculateTeacherEarningsForMonth(
+            organizationId,
+            u.id,
+            payYm,
+            { force },
+          );
         baseSalary = Number((earning as any).totalEarning ?? 0);
       }
 
       if (baseSalary <= 0) continue;
+
+      const existingRow = existingByUserId.get(u.id);
+      if (existingRow) {
+        // If not paid yet, keep baseSalary in sync with latest earnings (commission updates, etc.)
+        if (existingRow.status !== StaffSalaryStatus.PAID) {
+          const currentBase = Number((existingRow as any).baseSalary ?? 0);
+          if (currentBase !== baseSalary) {
+            await this.staffSalaryRepo.update(
+              { id: existingRow.id },
+              { baseSalary: baseSalary as any },
+            );
+          }
+        }
+        continue;
+      }
 
       toCreate.push(
         this.staffSalaryRepo.create({
@@ -124,14 +149,60 @@ export class StaffSalariesService {
       .orderBy('user.createdAt', 'DESC')
       .getMany();
 
-    return rows.map((r: any) => ({
-      ...r,
-      forMonth: r.forMonth ? dayjs(r.forMonth).format('YYYY-MM-DD') : null,
-      createdAt: r.createdAt?.toISOString?.() ?? String(r.createdAt),
-      paidAt: r.paidAt ? r.paidAt.toISOString?.() ?? String(r.paidAt) : null,
-      baseSalary: Number(r.baseSalary ?? 0),
-      paidAmount: Number(r.paidAmount ?? 0),
-    }));
+    const payYm = month.slice(0, 7);
+    const earningYmForTeachers = dayjs(month)
+      .subtract(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM');
+
+    const teacherEarningById = new Map<number, any>();
+    for (const r of rows) {
+      if (r.user?.role !== UserRole.TEACHER) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const earning =
+        await this.teacherEarningsService.calculateTeacherEarningsForMonth(
+          organizationId,
+          r.userId,
+          payYm,
+          { force: r.status !== StaffSalaryStatus.PAID },
+        );
+      teacherEarningById.set(r.userId, earning);
+    }
+
+    return rows.map((r: any) => {
+      const baseSalary = Number(r.baseSalary ?? 0);
+      const paidAmount = Number(r.paidAmount ?? 0);
+      const out: any = {
+        ...r,
+        forMonth: r.forMonth ? dayjs(r.forMonth).format('YYYY-MM-DD') : null,
+        createdAt: r.createdAt?.toISOString?.() ?? String(r.createdAt),
+        paidAt: r.paidAt
+          ? (r.paidAt.toISOString?.() ?? String(r.paidAt))
+          : null,
+        baseSalary,
+        paidAmount,
+      };
+
+      // Enrich teacher rows with commission breakdown (so frontend can show it)
+      if (r.user?.role === UserRole.TEACHER) {
+        out.earningForMonth = `${earningYmForTeachers}-01`;
+        const earning = teacherEarningById.get(r.userId);
+        if (earning) {
+          out.earningBaseSalarySnapshot = Number(
+            (earning as any).baseSalarySnapshot ?? 0,
+          );
+          out.earningCommissionAmount = Number(
+            (earning as any).commissionAmount ?? 0,
+          );
+          out.earningCarryOverCommission = Number(
+            (earning as any).carryOverCommission ?? 0,
+          );
+          out.earningTotalEarning = Number((earning as any).totalEarning ?? 0);
+        }
+      }
+
+      return out;
+    });
   }
 
   async pay(id: number, dto: PayStaffSalaryDto) {
@@ -165,12 +236,15 @@ export class StaffSalariesService {
     const saved = await this.staffSalaryRepo.save(salary);
     return {
       ...saved,
-      forMonth: saved.forMonth ? dayjs(saved.forMonth).format('YYYY-MM-DD') : null,
+      forMonth: saved.forMonth
+        ? dayjs(saved.forMonth).format('YYYY-MM-DD')
+        : null,
       createdAt: saved.createdAt?.toISOString?.() ?? String(saved.createdAt),
-      paidAt: saved.paidAt ? saved.paidAt.toISOString?.() ?? String(saved.paidAt) : null,
+      paidAt: saved.paidAt
+        ? (saved.paidAt.toISOString?.() ?? String(saved.paidAt))
+        : null,
       baseSalary: Number(saved.baseSalary ?? 0),
       paidAmount: Number(saved.paidAmount ?? 0),
     };
   }
 }
-

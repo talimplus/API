@@ -13,7 +13,6 @@ import { LessonsModule } from '@/modules/lessons/lessons.module';
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { StaffSalariesModule } from '@/modules/staff-salaries/staff-salaries.module';
-import { TeacherEarningsModule } from '@/modules/teacher-earnings/teacher-earnings.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { AccessGuard } from '@/guards/access.guard';
@@ -33,7 +32,6 @@ import { Module } from '@nestjs/common';
     AuthModule,
     UsersModule,
     StaffSalariesModule,
-    TeacherEarningsModule,
     CentersModule,
     StudentsModule,
     SubjectsModule,
