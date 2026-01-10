@@ -5,6 +5,7 @@ import {
   ManyToOne,
   OneToMany,
   CreateDateColumn,
+  JoinColumn,
 } from 'typeorm';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -17,10 +18,17 @@ export class Center {
   @Column()
   name: string;
 
+  @Column({ default: false })
+  isDefault: boolean;
+
   @ManyToOne(() => Organization, (organization) => organization.centers, {
     onDelete: 'CASCADE',
   })
+  @JoinColumn({ name: 'organizationId' })
   organization: Organization;
+
+  @Column({ nullable: true })
+  organizationId: number | null;
 
   @OneToMany(() => User, (user) => user.center)
   users: User[];

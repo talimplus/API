@@ -50,14 +50,14 @@ export class StudentsController {
     @Query('perPage') perPage?: number,
   ) {
     return this.studentService.findAll(req.user.organizationId, {
-      centerId: centerId ? +centerId : req.user.centerId,
+      centerId: centerId ? +centerId : undefined,
       name,
       phone,
       status: status ?? StudentStatus.ACTIVE,
       groupId,
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 10,
-    });
+    }, req.user);
   }
 
   @Get('/all')
@@ -101,10 +101,11 @@ export class StudentsController {
   @ApiOperation({ summary: 'Update student' })
   @ApiResponse({ type: StudentResponseDto })
   async update(
+    @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
   ) {
-    return this.studentService.update(id, dto);
+    return this.studentService.update(req.user.organizationId, id, dto);
   }
 
   @Put('change-status/:id')

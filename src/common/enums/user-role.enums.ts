@@ -3,6 +3,7 @@ export enum UserRole {
   ADMIN = 'admin',
   TEACHER = 'teacher',
   MANAGER = 'manager',
+  RECEPTION = 'reception',
   OTHER = 'other',
   STUDENT = 'student',
 }

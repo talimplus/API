@@ -11,11 +11,21 @@ import { GroupsModule } from '@/modules/groups/groups.module';
 import { ReferralsModule } from '@/modules/referrals/referrals.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
+import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
+import { Payment } from '@/modules/payments/entities/payment.entity';
+import { Center } from '@/modules/centers/entities/centers.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Student, Group, StudentDiscountPeriod]),
+    TypeOrmModule.forFeature([
+      Student,
+      Group,
+      StudentDiscountPeriod,
+      Referral,
+      Payment,
+      Center,
+    ]),
     CentersModule,
     UsersModule,
     OrganizationsModule,

@@ -61,12 +61,21 @@ export class GroupsController {
     @Query('days') days?: WeekDay[],
     @Query('perPage') perPage?: number,
   ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
     const teacherID =
-      req.user.role === UserRole.TEACHER ? req.user.id : teacherId;
+      req.user.role === UserRole.TEACHER ? req.user.userId : teacherId;
     return this.groupsService.findAll(
       req.user.role,
       req.user.organizationId,
-      centerId,
+      effectiveCenterId,
       name,
       teacherID,
       roomId,
@@ -79,10 +88,24 @@ export class GroupsController {
   @Get('/all')
   @ApiOperation({ summary: 'Get all groups (no pagination)' })
   @ApiResponse({ type: [GroupResponseDto] })
-  async getAllGroups(@Req() req: any) {
+  @ApiQuery({ name: 'centerId', required: false })
+  async getAllGroups(@Req() req: any, @Query('centerId') centerId?: number) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    if (!effectiveCenterId) {
+      return this.groupsService.getAllByOrganization(req.user.organizationId);
+    }
+
     return this.groupsService.getAllByOrganizationAndCenter(
       req.user.organizationId,
-      req.user.centerId,
+      effectiveCenterId,
     );
   }
 

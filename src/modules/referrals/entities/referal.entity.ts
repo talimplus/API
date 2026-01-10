@@ -17,9 +17,15 @@ export class Referral {
   @JoinColumn({ name: 'referredStudentId' })
   referredStudent: Student;
 
+  @Column()
+  referredStudentId: number;
+
   @ManyToOne(() => Student, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'referrerStudentId' })
   referrerStudent: Student;
+
+  @Column()
+  referrerStudentId: number;
 
   @Column({ default: false })
   isDiscountApplied: boolean;

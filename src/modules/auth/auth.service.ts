@@ -9,6 +9,7 @@ import { RegisterAuthDto } from './dto/register-auth.dto';
 import { OrganizationsService } from '@/modules/organizations/organizations.service';
 import { UsersService } from '@/modules/users/users.service';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { BlacklistService } from '@/modules/blacklist/blacklist.service';
 
 @Injectable()
 export class AuthService {
@@ -16,6 +17,7 @@ export class AuthService {
     private readonly organizationsService: OrganizationsService,
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly blacklistService: BlacklistService,
   ) {}
 
   async register(dto: RegisterAuthDto) {
@@ -77,6 +79,42 @@ export class AuthService {
         email: user.login,
         role: user.role,
         centerId: user.center?.id,
+      },
+    };
+  }
+
+  async logout(req: any) {
+    const auth = req?.headers?.authorization;
+    const token =
+      typeof auth === 'string' && auth.startsWith('Bearer ')
+        ? auth.slice('Bearer '.length).trim()
+        : null;
+
+    if (!token) {
+      // still return success (frontend can treat as logged out)
+      return { success: true };
+    }
+
+    const decoded: any = this.jwtService.decode(token);
+    const exp = typeof decoded?.exp === 'number' ? decoded.exp : null;
+    const expiresAt = exp ? new Date(exp * 1000) : new Date(Date.now() + 86400000);
+
+    await this.blacklistService.blacklistToken({
+      token,
+      userId: req?.user?.userId,
+      expiresAt,
+    });
+
+    return { success: true };
+  }
+
+  me(currentUser: any) {
+    return {
+      user: {
+        id: currentUser?.userId,
+        email: currentUser?.email,
+        role: currentUser?.role,
+        centerId: currentUser?.centerId ?? null,
       },
     };
   }

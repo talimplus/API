@@ -17,6 +17,7 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { CurrentUser } from '@/common/types/current.user';
 import { OrganizationsService } from '@/modules/organizations/organizations.service';
 import { instanceToPlain } from 'class-transformer';
+import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 
 @Injectable()
 export class UsersService {
@@ -48,12 +49,13 @@ export class UsersService {
       ![
         UserRole.TEACHER,
         UserRole.MANAGER,
+        UserRole.RECEPTION,
         UserRole.OTHER,
         UserRole.STUDENT,
       ].includes(dto.role)
     ) {
       throw new BadRequestException(
-        "Faqat teacher, manager yoki Boshqalar sifatida qo'shish mumkin",
+        "Faqat teacher, manager, reception yoki Boshqalar sifatida qo'shish mumkin",
       );
     }
 
@@ -164,6 +166,56 @@ export class UsersService {
     };
   }
 
+  async getMe(userId: number) {
+    const user = await this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.center', 'center')
+      .leftJoinAndSelect('user.organization', 'organization')
+      .where('user.id = :userId', { userId })
+      .getOne();
+
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+
+    const out: any = instanceToPlain(user);
+    out.centerId = (user as any).center?.id ?? null;
+    out.organizationId = (user as any).organization?.id ?? null;
+    return out;
+  }
+
+  async updateMe(userId: number, dto: UpdateMyProfileDto) {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['center', 'organization'],
+    });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+
+    if (dto.login && dto.login !== user.login) {
+      const exists = await this.userRepo.findOne({ where: { login: dto.login } });
+      if (exists && exists.id !== user.id) {
+        throw new BadRequestException('Bunday login allaqachon mavjud');
+      }
+      user.login = dto.login;
+    }
+
+    if (dto.phone && dto.phone !== user.phone) {
+      const exists = await this.userRepo.findOne({ where: { phone: dto.phone } });
+      if (exists && exists.id !== user.id) {
+        throw new BadRequestException('Bunday phone allaqachon mavjud');
+      }
+      user.phone = dto.phone;
+    }
+
+    if (dto.firstName !== undefined) user.firstName = dto.firstName;
+    if (dto.lastName !== undefined) user.lastName = dto.lastName;
+
+    if (dto.password) {
+      user.password = await bcrypt.hash(dto.password, 10);
+    }
+
+    await this.userRepo.save(user);
+    return this.getMe(user.id);
+  }
+
   /**
    * Ishchilar (studentsiz userlar): teacher/manager/other.
    * Frontend selectlar (teacher tanlash, xodimlar ro'yxati) uchun ishlatiladi.
@@ -192,7 +244,7 @@ export class UsersService {
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
       .andWhere('user.role IN (:...roles)', {
-        roles: [UserRole.TEACHER, UserRole.MANAGER, UserRole.OTHER],
+        roles: [UserRole.TEACHER, UserRole.MANAGER, UserRole.RECEPTION, UserRole.OTHER],
       });
 
     if (centerId) {

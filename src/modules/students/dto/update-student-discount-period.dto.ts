@@ -20,7 +20,8 @@ export class UpdateStudentDiscountPeriodDto {
     required: false,
     nullable: true,
     example: '2026-03',
-    description: 'End month (YYYY-MM), inclusive. Set null to make permanent.',
+    description:
+      'End month (YYYY-MM), EXCLUSIVE boundary. Example: from=2026-01, to=2026-02 means only January. Set null to make permanent.',
   })
   @IsOptional()
   @IsString()

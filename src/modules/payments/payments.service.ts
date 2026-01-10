@@ -20,6 +20,13 @@ import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
 import { TeacherEarningsService } from '@/modules/teacher-earnings/teacher-earnings.service';
 import { Inject, forwardRef } from '@nestjs/common';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
+import { Referral } from '@/modules/referrals/entities/referal.entity';
+import { CurrentUser } from '@/common/types/current.user';
+import { UserRole } from '@/common/enums/user-role.enums';
+import {
+  PaymentReceipt,
+  PaymentReceiptStatus,
+} from '@/modules/payments/entities/payment-receipt.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -27,40 +34,380 @@ export class PaymentsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
+    @InjectRepository(PaymentReceipt)
+    private readonly receiptRepo: Repository<PaymentReceipt>,
     @InjectRepository(Student)
     private readonly studentRepo: Repository<Student>,
     @InjectRepository(StudentDiscountPeriod)
     private readonly discountPeriodRepo: Repository<StudentDiscountPeriod>,
+    @InjectRepository(Referral)
+    private readonly referralRepo: Repository<Referral>,
     @Inject(forwardRef(() => TeacherEarningsService))
     private readonly teacherEarningsService: TeacherEarningsService,
   ) {}
+  private async applyConfirmedMoneyToPayment(args: {
+    payment: Payment;
+    addAmount: number;
+    confirmedById?: number;
+  }): Promise<Payment> {
+    const { payment, addAmount } = args;
 
-  private discountCache = new Map<string, number>();
+    const prevPaid = Number(payment.amountPaid ?? 0);
+    const amountDue = Number(payment.amountDue ?? 0);
+    const safeAdd = Math.max(0, Number(addAmount ?? 0));
+    const nextPaidRaw = this.round2(prevPaid + safeAdd);
+    const nextPaid = Math.min(nextPaidRaw, amountDue);
 
-  private async resolveDiscountPercentForMonth(args: {
+    payment.amountPaid = nextPaid as any;
+    if (payment.amountPaid >= amountDue) {
+      payment.status = PaymentStatus.PAID;
+    } else if (payment.amountPaid > 0) {
+      payment.status = PaymentStatus.PARTIAL;
+    } else {
+      payment.status = PaymentStatus.UNPAID;
+    }
+
+    const saved = await this.paymentRepo.save(payment);
+
+    // Referral discount: apply only when this student makes their first CONFIRMED payment (amountPaid 0 -> >0)
+    if (prevPaid === 0 && Number(saved.amountPaid ?? 0) > 0) {
+      void this.applyReferralDiscountOnFirstPayment(saved.studentId).catch(
+        (e) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            'referral discount apply failed:',
+            (e as any)?.message ?? e,
+          );
+        },
+      );
+    }
+
+    // Recalculate teacher earnings on any CONFIRMED money received (partial payments included)
+    void this.triggerTeacherEarningsRecalcForPayment(saved.id).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
+    });
+
+    return saved;
+  }
+
+  async submitReceipt(
+    paymentId: number,
+    amount: number,
+    currentUser: CurrentUser,
+    comment?: string,
+  ) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    const amt = Number(amount);
+    if (!amt || amt <= 0) {
+      throw new BadRequestException('To‘lov miqdori noto‘g‘ri');
+    }
+
+    // If admin/super_admin submits, auto-confirm (boss took money)
+    const isAdmin =
+      currentUser.role === UserRole.ADMIN ||
+      currentUser.role === UserRole.SUPER_ADMIN;
+
+    const receipt = this.receiptRepo.create({
+      paymentId: payment.id,
+      amount: this.round2(amt) as any,
+      receivedById: currentUser.userId,
+      receivedAt: new Date(),
+      status: isAdmin
+        ? PaymentReceiptStatus.CONFIRMED
+        : PaymentReceiptStatus.PENDING,
+      confirmedById: isAdmin ? currentUser.userId : null,
+      confirmedAt: isAdmin ? new Date() : null,
+      comment: comment ?? null,
+    });
+
+    const savedReceipt = await this.receiptRepo.save(receipt);
+
+    if (isAdmin) {
+      const updated = await this.applyConfirmedMoneyToPayment({
+        payment,
+        addAmount: amt,
+        confirmedById: currentUser.userId,
+      });
+      return { receipt: savedReceipt, payment: updated, pending: false };
+    }
+
+    return { receipt: savedReceipt, pending: true };
+  }
+
+  async submitFullReceipt(
+    paymentId: number,
+    currentUser: CurrentUser,
+    comment?: string,
+  ) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    const remaining = this.round2(
+      Number(payment.amountDue ?? 0) - Number(payment.amountPaid ?? 0),
+    );
+    if (remaining <= 0) {
+      throw new BadRequestException('Payment is already fully paid');
+    }
+    return this.submitReceipt(paymentId, remaining, currentUser, comment);
+  }
+
+  async confirmReceipt(receiptId: number, currentUser: CurrentUser) {
+    const isAdmin =
+      currentUser.role === UserRole.ADMIN ||
+      currentUser.role === UserRole.SUPER_ADMIN;
+    if (!isAdmin) {
+      throw new BadRequestException('Only admin can confirm receipts');
+    }
+
+    const receipt = await this.receiptRepo.findOne({
+      where: { id: receiptId },
+    });
+    if (!receipt) throw new NotFoundException('Receipt not found');
+    if (receipt.status === PaymentReceiptStatus.CONFIRMED) {
+      const payment = await this.paymentRepo.findOne({
+        where: { id: receipt.paymentId },
+      });
+      return { receipt, payment, alreadyConfirmed: true };
+    }
+    if (receipt.status === PaymentReceiptStatus.REJECTED) {
+      throw new BadRequestException('Receipt is rejected');
+    }
+
+    const payment = await this.paymentRepo.findOne({
+      where: { id: receipt.paymentId },
+    });
+    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+
+    const updatedPayment = await this.applyConfirmedMoneyToPayment({
+      payment,
+      addAmount: Number(receipt.amount ?? 0),
+      confirmedById: currentUser.userId,
+    });
+
+    receipt.status = PaymentReceiptStatus.CONFIRMED;
+    receipt.confirmedById = currentUser.userId;
+    receipt.confirmedAt = new Date();
+    const savedReceipt = await this.receiptRepo.save(receipt);
+
+    return { receipt: savedReceipt, payment: updatedPayment };
+  }
+
+  async listPendingReceipts(
+    organizationId: number,
+    args: { centerId?: number; page?: number; perPage?: number },
+  ) {
+    const page = Math.max(1, Number(args.page ?? 1));
+    const perPage = Math.max(1, Math.min(100, Number(args.perPage ?? 20)));
+    const skip = (page - 1) * perPage;
+
+    const qb = this.receiptRepo
+      .createQueryBuilder('r')
+      .leftJoinAndSelect('r.payment', 'p')
+      .leftJoinAndSelect('p.student', 'student')
+      .leftJoinAndSelect('p.group', 'group')
+      .leftJoin('student.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
+      .orderBy('r.createdAt', 'DESC')
+      .skip(skip)
+      .take(perPage);
+
+    if (args.centerId) {
+      qb.andWhere('center.id = :centerId', { centerId: args.centerId });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        perPage,
+        totalPages: Math.ceil(total / perPage),
+      },
+    };
+  }
+
+  private readonly REFERRAL_DISCOUNT_PERCENT = 10;
+  // Month length using exclusive end boundary. 1 => [fromMonth, fromMonth+1)
+  private readonly REFERRAL_DISCOUNT_MONTHS = 1;
+
+  private discountCache = new Map<
+    string,
+    { percent: number; breakdown: Array<{ percent: number; reason: string }> }
+  >();
+
+  private async applyMonthlyDiscountIncrement(args: {
+    studentId: number;
+    monthStart: string; // YYYY-MM-01
+    incrementPercent: number; // 0..100
+    reason: string;
+  }) {
+    const { studentId, monthStart, incrementPercent, reason } = args;
+    const mStart = dayjs(monthStart).startOf('month').format('YYYY-MM-01');
+    const mEnd = dayjs(mStart)
+      .add(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM-01'); // exclusive
+
+    // Stacking: we add a separate period record for this month and let calculation sum them.
+    // Enforce 100% cap for this month.
+    await this.discountPeriodRepo.manager.transaction(async (manager) => {
+      const studentRepo = manager.getRepository(Student);
+      const paymentRepo = manager.getRepository(Payment);
+      const periodRepo = manager.getRepository(StudentDiscountPeriod);
+
+      const student = await studentRepo.findOne({ where: { id: studentId } });
+      if (!student) return;
+
+      // Do not allow changing historical paid/partial months
+      const paid = await paymentRepo.findOne({
+        where: { studentId: studentId as any, forMonth: mStart as any } as any,
+      });
+      if (paid && Number((paid as any).amountPaid ?? 0) > 0) {
+        throw new BadRequestException(
+          `Cannot apply discount for ${dayjs(mStart).format('YYYY-MM')}: payment already has money received (paid/partial).`,
+        );
+      }
+
+      // Sum existing period percents for this month (exclusive end)
+      const raw = await periodRepo
+        .createQueryBuilder('d')
+        .select('COALESCE(SUM(d.percent), 0)', 'sum')
+        .where('d.studentId = :studentId', { studentId })
+        .andWhere('d.fromMonth <= :mStart', { mStart })
+        .andWhere('(d.toMonth IS NULL OR d.toMonth > :mStart)', { mStart })
+        .getRawOne<{ sum: string }>();
+
+      const base = Number((student as any).discountPercent ?? 0);
+      const existingSum = Number(raw?.sum ?? 0);
+      const nextTotal = base + existingSum + Number(incrementPercent);
+      if (nextTotal > 100) {
+        throw new BadRequestException(
+          `Total discountPercent exceeds 100% for studentId=${studentId} month=${mStart} (got ${nextTotal}%)`,
+        );
+      }
+
+      await periodRepo.save(
+        periodRepo.create({
+          studentId,
+          percent: Number(incrementPercent) as any,
+          fromMonth: mStart as any,
+          toMonth: mEnd as any,
+          reason,
+        }),
+      );
+    });
+
+    // clear cache so new discount is visible immediately
+    this.discountCache.delete(`${studentId}:${mStart}`);
+  }
+
+  private async applyReferralDiscountOnFirstPayment(studentId: number) {
+    const referral = await this.referralRepo.findOne({
+      where: { referredStudentId: studentId as any },
+    });
+    if (!referral) return;
+    if ((referral as any).isDiscountApplied) return;
+
+    const referrerStudentId = (referral as any).referrerStudentId;
+    if (!referrerStudentId) return;
+
+    // Rule:
+    // - If referrer has NOT paid anything for current month yet -> apply discount for current month
+    // - If referrer already paid (partial or full) for current month -> apply discount starting next month
+    const currentMonth = dayjs().startOf('month').format('YYYY-MM-01');
+    const hasPaidThisMonth = await this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.studentId = :studentId', { studentId: referrerStudentId })
+      .andWhere('p.forMonth = :forMonth', { forMonth: currentMonth })
+      .andWhere('p.status IN (:...statuses)', {
+        statuses: [PaymentStatus.PAID, PaymentStatus.PARTIAL],
+      })
+      .andWhere('p.amountPaid > 0')
+      .getExists();
+
+    const fromMonth = hasPaidThisMonth
+      ? dayjs(currentMonth)
+          .add(1, 'month')
+          .startOf('month')
+          .format('YYYY-MM-01')
+      : currentMonth;
+    const increment = this.REFERRAL_DISCOUNT_PERCENT;
+    await this.applyMonthlyDiscountIncrement({
+      studentId: referrerStudentId,
+      monthStart: fromMonth,
+      incrementPercent: increment,
+      reason: `Referral +${increment}% (referred student ${studentId})`,
+    });
+
+    referral.isDiscountApplied = true;
+    await this.referralRepo.save(referral);
+
+    await this.recalculateOpenPaymentsForStudent(referrerStudentId, {
+      maxMonthsBack: 3,
+    });
+  }
+
+  private async resolveDiscountForMonth(args: {
     student: Student;
     forMonth: string; // YYYY-MM-01
-  }): Promise<number> {
+  }): Promise<{
+    percent: number;
+    breakdown: Array<{ percent: number; reason: string }>;
+  }> {
     const { student, forMonth } = args;
     const key = `${student.id}:${forMonth}`;
     const cached = this.discountCache.get(key);
     if (cached !== undefined) return cached;
 
-    const row = await this.discountPeriodRepo
+    const rows = await this.discountPeriodRepo
       .createQueryBuilder('d')
       .where('d.studentId = :studentId', { studentId: student.id })
       .andWhere('d.fromMonth <= :forMonth', { forMonth })
-      .andWhere('(d.toMonth IS NULL OR d.toMonth >= :forMonth)', { forMonth })
+      .andWhere('(d.toMonth IS NULL OR d.toMonth > :forMonth)', { forMonth })
       .orderBy('d.fromMonth', 'DESC')
       .addOrderBy('d.createdAt', 'DESC')
-      .getOne();
+      .getMany();
 
-    const pct = Math.max(
-      0,
-      Math.min(100, Number(row?.percent ?? student.discountPercent ?? 0)),
-    );
-    this.discountCache.set(key, pct);
-    return pct;
+    const breakdown: Array<{ percent: number; reason: string }> = [];
+
+    // base student.discountPercent (fallback, still supported for referrals/legacy)
+    const base = Number(student.discountPercent ?? 0);
+    if (base > 0) {
+      breakdown.push({
+        percent: base,
+        reason: student.discountReason
+          ? `Base: ${student.discountReason}`
+          : 'Base discount',
+      });
+    }
+
+    for (const r of rows as any[]) {
+      const p = Number(r.percent ?? 0);
+      if (!p) continue;
+      breakdown.push({
+        percent: p,
+        reason: r.reason ?? 'Discount period',
+      });
+    }
+
+    const total = breakdown.reduce((sum, b) => sum + b.percent, 0);
+    if (total > 100) {
+      throw new BadRequestException(
+        `Total discountPercent exceeds 100% for studentId=${student.id} month=${forMonth} (got ${total}%)`,
+      );
+    }
+
+    const result = { percent: Math.max(0, total), breakdown };
+    this.discountCache.set(key, result);
+    return result;
   }
 
   private async triggerTeacherEarningsRecalcForPayment(paymentId: number) {
@@ -276,7 +623,7 @@ export class PaymentsService {
         },
       );
 
-      const discountPercent = await this.resolveDiscountPercentForMonth({
+      const { percent: discountPercent } = await this.resolveDiscountForMonth({
         student: p.student,
         forMonth,
       });
@@ -341,7 +688,12 @@ export class PaymentsService {
   }): number {
     const { student, group, lessonsPlanned, lessonsBillable, discountPercent } =
       args;
-    const baseMonthlyFee = Number(student.monthlyFee ?? group.monthlyFee ?? 0);
+    // Fee priority:
+    // - if student.monthlyFee is set (> 0) -> use it
+    // - otherwise fallback to group.monthlyFee
+    const studentFee = Number(student.monthlyFee ?? 0);
+    const groupFee = Number(group.monthlyFee ?? 0);
+    const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
     if (!lessonsPlanned) return 0;
 
     // Apply discount AFTER lesson-based prorating
@@ -360,7 +712,7 @@ export class PaymentsService {
    */
   private async recalculateOpenPaymentsForOrganization(
     organizationId: number,
-    opts?: { maxMonthsBack?: number },
+    opts?: { maxMonthsBack?: number; centerId?: number },
   ) {
     this.discountCache.clear();
     const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
@@ -378,6 +730,9 @@ export class PaymentsService {
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
+      .andWhere(opts?.centerId ? 'center.id = :centerId' : '1=1', {
+        centerId: opts?.centerId,
+      })
       .andWhere('payments.status != :paid', { paid: PaymentStatus.PAID })
       .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
         windowStart,
@@ -420,15 +775,16 @@ export class PaymentsService {
         continue;
       }
 
+      const { percent: discountPercent } = await this.resolveDiscountForMonth({
+        student: p.student,
+        forMonth,
+      });
       const amountDue = this.computeAmountDue({
         student: p.student,
         group: p.group,
         lessonsPlanned,
         lessonsBillable,
-        discountPercent: await this.resolveDiscountPercentForMonth({
-          student: p.student,
-          forMonth,
-        }),
+        discountPercent,
       });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
@@ -470,7 +826,7 @@ export class PaymentsService {
    */
   async ensurePaymentsForOrganization(
     organizationId: number,
-    opts?: { maxMonthsBack?: number },
+    opts?: { maxMonthsBack?: number; centerId?: number },
   ) {
     // Load active students within org + their groups + schedules (billing is schedule-based)
     const students = await this.studentRepo
@@ -480,6 +836,9 @@ export class PaymentsService {
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
+      .andWhere(opts?.centerId ? 'center.id = :centerId' : '1=1', {
+        centerId: opts?.centerId,
+      })
       .andWhere('student.status = :status', { status: StudentStatus.ACTIVE })
       .getMany();
 
@@ -510,6 +869,111 @@ export class PaymentsService {
       relations: ['groups', 'groups.schedules', 'center'],
     });
     await this.ensurePaymentsForStudents(students, opts);
+  }
+
+  /**
+   * Recalculate open payments for a specific student (used when discount periods change).
+   * PAID payments are never modified.
+   */
+  async recalculateOpenPaymentsForStudent(
+    studentId: number,
+    opts?: { maxMonthsBack?: number },
+  ) {
+    this.discountCache.clear();
+
+    const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
+    const windowStart = dayjs()
+      .startOf('month')
+      .subtract(maxMonthsBack - 1, 'month')
+      .format('YYYY-MM-01');
+    const windowEnd = dayjs().startOf('month').format('YYYY-MM-01');
+
+    const payments = await this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .where('payments.studentId = :studentId', { studentId })
+      .andWhere('payments.status != :paid', { paid: PaymentStatus.PAID })
+      .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
+        windowStart,
+        windowEnd,
+      })
+      .getMany();
+
+    if (!payments.length) return;
+
+    const toSave: Payment[] = [];
+    const toDeleteIds: number[] = [];
+
+    for (const p of payments as any[]) {
+      if (!p.group || !p.student) continue;
+      if (!p.group.schedules?.length) continue;
+
+      const timezone = p.group.timezone || 'Asia/Tashkent';
+      const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
+
+      const studentActiveStart = this.computeStudentActiveStartForMonth({
+        student: p.student,
+        group: p.group,
+        forMonth,
+      });
+      const studentActiveEndExclusive =
+        this.computeStudentActiveEndExclusiveForMonth({
+          student: p.student,
+          group: p.group,
+          forMonth,
+        });
+
+      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
+        {
+          group: p.group,
+          forMonth,
+          studentActiveStart,
+          studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
+        },
+      );
+
+      const amountPaid = Number(p.amountPaid ?? 0);
+      if (!lessonsPlanned || !lessonsBillable) {
+        if (amountPaid === 0) toDeleteIds.push(p.id);
+        continue;
+      }
+
+      const { percent: discountPercent } = await this.resolveDiscountForMonth({
+        student: p.student,
+        forMonth,
+      });
+      const amountDue = this.computeAmountDue({
+        student: p.student,
+        group: p.group,
+        lessonsPlanned,
+        lessonsBillable,
+        discountPercent,
+      });
+
+      const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
+
+      let newAmountPaid = amountPaid;
+      let newStatus = p.status;
+      if (newAmountPaid > amountDue) newAmountPaid = amountDue;
+      if (newAmountPaid === amountDue) newStatus = PaymentStatus.PAID;
+      else if (newAmountPaid > 0) newStatus = PaymentStatus.PARTIAL;
+      else newStatus = PaymentStatus.UNPAID;
+
+      p.lessonsPlanned = lessonsPlanned;
+      p.lessonsBillable = lessonsBillable;
+      p.amountDue = amountDue as any;
+      p.amountPaid = newAmountPaid as any;
+      p.status = newStatus;
+      p.dueDate = dueDate as any;
+      p.hardDueDate = hardDueDate as any;
+
+      toSave.push(p);
+    }
+
+    if (toDeleteIds.length) await this.paymentRepo.delete(toDeleteIds);
+    if (toSave.length) await this.paymentRepo.save(toSave);
   }
 
   private async ensurePaymentsForStudents(
@@ -612,10 +1076,8 @@ export class PaymentsService {
             continue;
           }
 
-          const discountPercent = await this.resolveDiscountPercentForMonth({
-            student,
-            forMonth,
-          });
+          const { percent: discountPercent } =
+            await this.resolveDiscountForMonth({ student, forMonth });
           const amountDue = this.computeAmountDue({
             student,
             group,
@@ -676,16 +1138,7 @@ export class PaymentsService {
 
     payment.amountPaid = payment.amountDue;
     payment.status = PaymentStatus.PAID;
-
-    const saved = await this.paymentRepo.save(payment);
-
-    // Recalculate teacher earnings snapshot for that payment month (late payments included)
-    void this.triggerTeacherEarningsRecalcForPayment(paymentId).catch((e) => {
-      // eslint-disable-next-line no-console
-      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
-    });
-
-    return saved;
+    return this.paymentRepo.save(payment);
   }
 
   // Qisman to‘lov qilish
@@ -698,7 +1151,6 @@ export class PaymentsService {
 
     const amountDue = Number(payment.amountDue ?? 0);
     const amountPaid = Number(payment.amountPaid ?? 0);
-
     payment.amountPaid = Math.min(amountPaid + amount, amountDue);
 
     if (payment.amountPaid === amountDue) {
@@ -707,20 +1159,13 @@ export class PaymentsService {
       payment.status = PaymentStatus.PARTIAL;
     }
 
-    const saved = await this.paymentRepo.save(payment);
-
-    // Recalculate teacher earnings on any money received (partial payments included)
-    void this.triggerTeacherEarningsRecalcForPayment(paymentId).catch((e) => {
-      // eslint-disable-next-line no-console
-      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
-    });
-
-    return saved;
+    return this.paymentRepo.save(payment);
   }
 
   async findAll(
     organizationId: number,
     {
+      centerId,
       page,
       perPage,
       status,
@@ -730,6 +1175,7 @@ export class PaymentsService {
       groupId,
       search,
     }: {
+      centerId?: number;
       page: number;
       perPage: number;
       status?: PaymentStatus;
@@ -739,15 +1185,25 @@ export class PaymentsService {
       groupId?: number;
       search?: string;
     },
+    currentUser: CurrentUser,
   ) {
+    const isAdmin =
+      currentUser.role === UserRole.ADMIN ||
+      currentUser.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId =
+      centerId ?? (!isAdmin ? currentUser.centerId : undefined);
+
     // Ensure missing monthly payments are present when listing payments
     try {
       await this.ensurePaymentsForOrganization(organizationId, {
         maxMonthsBack: 3,
+        centerId: effectiveCenterId,
       });
       // Also recalculate open payments in the same bounded window (pricing/discount updates)
       await this.recalculateOpenPaymentsForOrganization(organizationId, {
         maxMonthsBack: 3,
+        centerId: effectiveCenterId,
       });
     } catch (e) {
       // Helpful error when DB schema is outdated (migrations not applied)
@@ -771,6 +1227,13 @@ export class PaymentsService {
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
+
+    if (effectiveCenterId) {
+      query.andWhere('center.id = :centerId', { centerId: effectiveCenterId });
+    } else if (!isAdmin) {
+      // safety: non-admin must always be scoped to a center
+      throw new BadRequestException('centerId is required');
+    }
 
     if (status) {
       query.andWhere('payments.status = :status', { status });
@@ -815,35 +1278,91 @@ export class PaymentsService {
       .take(perPage)
       .getManyAndCount();
 
-    // enrich response with computed fields (overdue, remaining)
-    const enriched = data.map((p: any) => {
-      const timezone = p.group?.timezone || 'Asia/Tashkent';
-      const today = dayjs().tz(timezone).format('YYYY-MM-DD');
-      const hardDue = p.hardDueDate
-        ? dayjs(p.hardDueDate).format('YYYY-MM-DD')
-        : null;
-      const isOverdue =
-        !!hardDue && today > hardDue && p.status !== PaymentStatus.PAID;
+    // Pending receipts aggregation (so UI can show "awaiting approval")
+    const paymentIds = data.map((p: any) => Number(p.id)).filter(Boolean);
+    const pendingByPaymentId = new Map<
+      number,
+      { pendingAmount: number; pendingReceiptsCount: number }
+    >();
+    if (paymentIds.length) {
+      const raw = await this.receiptRepo
+        .createQueryBuilder('r')
+        .select([
+          'r.paymentId as "paymentId"',
+          'COALESCE(SUM(r.amount), 0) as "pendingAmount"',
+          'COUNT(r.id) as "pendingReceiptsCount"',
+        ])
+        .where('r.paymentId IN (:...paymentIds)', { paymentIds })
+        .andWhere('r.status = :status', {
+          status: PaymentReceiptStatus.PENDING,
+        })
+        .groupBy('r.paymentId')
+        .getRawMany<{
+          paymentId: number;
+          pendingAmount: string;
+          pendingReceiptsCount: string;
+        }>();
 
-      const amountDue = Number(p.amountDue ?? 0);
-      const amountPaid = Number(p.amountPaid ?? 0);
-      const remainingAmount = this.round2(amountDue - amountPaid);
+      for (const r of raw) {
+        pendingByPaymentId.set(Number(r.paymentId), {
+          pendingAmount: Number(r.pendingAmount ?? 0),
+          pendingReceiptsCount: Number(r.pendingReceiptsCount ?? 0),
+        });
+      }
+    }
 
-      return {
-        ...instanceToPlain(p),
-        forMonth: p.forMonth ? dayjs(p.forMonth).format('YYYY-MM-DD') : null,
-        createdAt: p.createdAt?.toISOString?.() ?? String(p.createdAt),
-        dueDate: p.dueDate ? dayjs(p.dueDate).format('YYYY-MM-DD') : null,
-        hardDueDate: p.hardDueDate
+    // enrich response with computed fields (overdue, remaining, discount breakdown)
+    const enriched = await Promise.all(
+      data.map(async (p: any) => {
+        const timezone = p.group?.timezone || 'Asia/Tashkent';
+        const today = dayjs().tz(timezone).format('YYYY-MM-DD');
+        const hardDue = p.hardDueDate
           ? dayjs(p.hardDueDate).format('YYYY-MM-DD')
-          : null,
-        isOverdue,
-        remainingAmount,
-        refundedAmount: Number((p as any).refundedAmount ?? 0),
-        lessonsPlanned: p.lessonsPlanned ?? 0,
-        lessonsBillable: p.lessonsBillable ?? 0,
-      };
-    });
+          : null;
+        const isOverdue =
+          !!hardDue && today > hardDue && p.status !== PaymentStatus.PAID;
+
+        const amountDue = Number(p.amountDue ?? 0);
+        const amountPaid = Number(p.amountPaid ?? 0);
+        const remainingAmount = this.round2(amountDue - amountPaid);
+
+        const pending = pendingByPaymentId.get(Number(p.id)) ?? {
+          pendingAmount: 0,
+          pendingReceiptsCount: 0,
+        };
+
+        const paymentForMonth = p.forMonth
+          ? dayjs(p.forMonth).startOf('month').format('YYYY-MM-01')
+          : null;
+        const discount =
+          p.student && paymentForMonth
+            ? await this.resolveDiscountForMonth({
+                student: p.student,
+                forMonth: paymentForMonth,
+              })
+            : { percent: 0, breakdown: [] };
+
+        return {
+          ...instanceToPlain(p),
+          forMonth: p.forMonth ? dayjs(p.forMonth).format('YYYY-MM-DD') : null,
+          createdAt: p.createdAt?.toISOString?.() ?? String(p.createdAt),
+          dueDate: p.dueDate ? dayjs(p.dueDate).format('YYYY-MM-DD') : null,
+          hardDueDate: p.hardDueDate
+            ? dayjs(p.hardDueDate).format('YYYY-MM-DD')
+            : null,
+          isOverdue,
+          remainingAmount,
+          refundedAmount: Number((p as any).refundedAmount ?? 0),
+          pendingAmount: pending.pendingAmount,
+          hasPendingReceipt: pending.pendingReceiptsCount > 0,
+          pendingReceiptsCount: pending.pendingReceiptsCount,
+          discountPercentApplied: discount.percent,
+          discountBreakdown: discount.breakdown,
+          lessonsPlanned: p.lessonsPlanned ?? 0,
+          lessonsBillable: p.lessonsBillable ?? 0,
+        };
+      }),
+    );
 
     return {
       data: enriched,
@@ -875,6 +1394,32 @@ export class PaymentsService {
     const amountPaid = Number((payment as any).amountPaid ?? 0);
     const remainingAmount = this.round2(amountDue - amountPaid);
 
+    const pendingRaw = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select([
+        'COALESCE(SUM(r.amount), 0) as "pendingAmount"',
+        'COUNT(r.id) as "pendingReceiptsCount"',
+      ])
+      .where('r.paymentId = :paymentId', { paymentId: id })
+      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
+      .getRawOne<{ pendingAmount: string; pendingReceiptsCount: string }>();
+
+    const pendingAmount = Number(pendingRaw?.pendingAmount ?? 0);
+    const pendingReceiptsCount = Number(pendingRaw?.pendingReceiptsCount ?? 0);
+
+    const forMonth = (payment as any).forMonth
+      ? dayjs((payment as any).forMonth)
+          .startOf('month')
+          .format('YYYY-MM-01')
+      : null;
+    const discount =
+      (payment as any).student && forMonth
+        ? await this.resolveDiscountForMonth({
+            student: (payment as any).student,
+            forMonth,
+          })
+        : { percent: 0, breakdown: [] };
+
     return {
       ...instanceToPlain(payment),
       forMonth: (payment as any).forMonth
@@ -892,6 +1437,11 @@ export class PaymentsService {
       isOverdue,
       remainingAmount,
       refundedAmount: Number((payment as any).refundedAmount ?? 0),
+      pendingAmount,
+      hasPendingReceipt: pendingReceiptsCount > 0,
+      pendingReceiptsCount,
+      discountPercentApplied: discount.percent,
+      discountBreakdown: discount.breakdown,
       lessonsPlanned: (payment as any).lessonsPlanned ?? 0,
       lessonsBillable: (payment as any).lessonsBillable ?? 0,
     };

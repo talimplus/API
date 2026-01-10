@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Center } from './entities/centers.entity';
@@ -21,12 +21,34 @@ export class CentersService {
       throw new NotFoundException('Organization topilmadi');
     }
 
-    const center = this.centerRepo.create({
-      ...dto,
-      organization,
-    });
+    return this.centerRepo.manager.transaction(async (manager) => {
+      const centerRepo = manager.getRepository(Center);
 
-    return this.centerRepo.save(center);
+      // If org has no centers yet, first one becomes default unless explicitly false.
+      const existingCount = await centerRepo.count({
+        where: { organization: { id: organizationId } as any },
+      });
+      const shouldBeDefault =
+        dto.isDefault === true || (existingCount === 0 && dto.isDefault !== false);
+
+      if (shouldBeDefault) {
+        await centerRepo
+          .createQueryBuilder()
+          .update(Center)
+          .set({ isDefault: false })
+          .where('"organizationId" = :organizationId', { organizationId })
+          .execute();
+      }
+
+      const center = centerRepo.create({
+        name: dto.name,
+        isDefault: shouldBeDefault,
+        organization,
+        organizationId: organizationId as any,
+      });
+
+      return centerRepo.save(center);
+    });
   }
 
   async findAll(
@@ -53,7 +75,8 @@ export class CentersService {
     }
 
     const [data, total] = await query
-      .orderBy('center.createdAt', 'DESC')
+      .orderBy('center.isDefault', 'DESC')
+      .addOrderBy('center.createdAt', 'DESC')
       .skip(skip)
       .take(perPage)
       .getManyAndCount();
@@ -75,6 +98,7 @@ export class CentersService {
         organization: { id: organizationId },
       },
       order: {
+        isDefault: 'DESC',
         createdAt: 'DESC',
       },
     });
@@ -93,9 +117,47 @@ export class CentersService {
   }
 
   async update(id: number, dto: UpdateCenterDto) {
-    const center = await this.findOne(id);
-    Object.assign(center, dto);
-    return this.centerRepo.save(center);
+    return this.centerRepo.manager.transaction(async (manager) => {
+      const centerRepo = manager.getRepository(Center);
+
+      const center = await centerRepo.findOne({ where: { id } });
+      if (!center) throw new NotFoundException('Filial topilmadi');
+      const organizationId = (center as any).organizationId as number | null;
+      if (!organizationId) {
+        throw new BadRequestException('Center organizationId is missing');
+      }
+
+      if (dto.isDefault === true) {
+        await centerRepo
+          .createQueryBuilder()
+          .update(Center)
+          .set({ isDefault: false })
+          .where('"organizationId" = :organizationId', { organizationId })
+          .execute();
+        center.isDefault = true;
+      }
+
+      if (dto.isDefault === false && center.isDefault) {
+        // Do not allow leaving org without any default center
+        const otherDefault = await centerRepo.findOne({
+          where: {
+            organizationId: organizationId as any,
+            isDefault: true,
+          } as any,
+        });
+        // otherDefault will be 'center' itself right now; we only allow disabling if another center is already default
+        if (!otherDefault || otherDefault.id === center.id) {
+          throw new BadRequestException(
+            'Organization must have a default center',
+          );
+        }
+        center.isDefault = false;
+      }
+
+      if (dto.name !== undefined) center.name = dto.name;
+
+      return centerRepo.save(center);
+    });
   }
 
   async remove(id: number) {

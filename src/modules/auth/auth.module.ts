@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '@/guards/auth.guard';
 import { SubscriptionsModule } from '@/modules/subscriptions/subscriptions.module';
 import { CentersModule } from '@/modules/centers/centers.module';
 import { OrganizationsModule } from '@/modules/organizations/organizations.module';
+import { BlacklistModule } from '@/modules/blacklist/blacklist.module';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -20,6 +21,7 @@ dotenv.config();
     ConfigModule,
     UsersModule,
     CentersModule,
+    BlacklistModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET,
       signOptions: { expiresIn: '24h' },

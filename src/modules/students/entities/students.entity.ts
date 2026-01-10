@@ -8,6 +8,7 @@ import {
   OneToMany,
   ManyToMany,
   JoinTable,
+  JoinColumn,
 } from 'typeorm';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { Payment } from '@/modules/payments/entities/payment.entity';
@@ -67,7 +68,11 @@ export class Student {
   stoppedAt?: Date | null;
 
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'centerId' })
   center: Center;
+
+  @Column()
+  centerId: number;
 
   @OneToMany(() => Attendance, (a) => a.student)
   attendance: Attendance[];

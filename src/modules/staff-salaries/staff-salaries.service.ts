@@ -44,13 +44,22 @@ export class StaffSalariesService {
     return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
-  async ensureSalariesForMonth(organizationId: number, forMonth: string) {
+  async ensureSalariesForMonth(
+    organizationId: number,
+    forMonth: string,
+    centerId?: number,
+  ) {
     const month = this.normalizeForMonth(forMonth);
+    const monthEndExclusive = dayjs(month)
+      .add(1, 'month')
+      .startOf('month')
+      .toDate();
 
     const employees = await this.userRepo.find({
       where: [
         { role: UserRole.TEACHER },
         { role: UserRole.MANAGER },
+        { role: UserRole.RECEPTION },
         { role: UserRole.OTHER },
       ],
       relations: ['organization', 'center'],
@@ -58,6 +67,12 @@ export class StaffSalariesService {
 
     const eligible = employees.filter((u) => {
       if (u.organization?.id !== organizationId) return false;
+      if (centerId && (u as any).center?.id !== centerId) return false;
+      // Do not create salaries for months before the employee existed in the system.
+      // Example: user created in 2026-01 must not get a salary row for 2025-05.
+      if (u.createdAt && !dayjs(u.createdAt).isBefore(monthEndExclusive)) {
+        return false;
+      }
       if (u.role === UserRole.TEACHER) {
         return (
           Number(u.salary ?? 0) > 0 || Number(u.commissionPercentage ?? 0) > 0
@@ -134,18 +149,25 @@ export class StaffSalariesService {
     await this.staffSalaryRepo.save(toCreate);
   }
 
-  async findAll(organizationId: number, forMonth?: string) {
+  async findAll(organizationId: number, forMonth?: string, centerId?: number) {
     const month = this.normalizeForMonth(forMonth);
+    const monthEndExclusive = dayjs(month)
+      .add(1, 'month')
+      .startOf('month')
+      .toDate();
 
     // Ensure the month is populated so UI never sees an empty table.
-    await this.ensureSalariesForMonth(organizationId, month.slice(0, 7));
+    await this.ensureSalariesForMonth(organizationId, month.slice(0, 7), centerId);
 
     const rows = await this.staffSalaryRepo
       .createQueryBuilder('salary')
       .leftJoinAndSelect('salary.user', 'user')
       .leftJoin('user.organization', 'organization')
+      .leftJoin('user.center', 'center')
       .where('organization.id = :organizationId', { organizationId })
       .andWhere('salary.forMonth = :forMonth', { forMonth: month })
+      .andWhere(centerId ? 'center.id = :centerId' : '1=1', { centerId })
+      .andWhere('user.createdAt < :monthEndExclusive', { monthEndExclusive })
       .orderBy('user.createdAt', 'DESC')
       .getMany();
 

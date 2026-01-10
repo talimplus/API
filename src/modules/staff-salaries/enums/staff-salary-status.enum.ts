@@ -3,4 +3,3 @@ export enum StaffSalaryStatus {
   UNPAID = 'unpaid',
   PARTIAL = 'partial',
 }
-

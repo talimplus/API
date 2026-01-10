@@ -18,6 +18,7 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { ApiOperation, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
 import { PaginatedUserResponseDto } from '@/modules/users/dto/paginate-user-reponse.dto';
 import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
+import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 
 @ApiTags('Users')
 @Controller('users')
@@ -106,6 +107,21 @@ export class UsersController {
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 10,
     });
+  }
+
+  @Get('me')
+  @ApiOperation({ summary: 'Get my profile' })
+  @ApiResponse({ type: UserResponseDto })
+  async me(@Req() req: any) {
+    return this.usersService.getMe(req.user.userId);
+  }
+
+  @Put('me')
+  @ApiOperation({ summary: 'Update my profile' })
+  @ApiBody({ type: UpdateMyProfileDto })
+  @ApiResponse({ type: UserResponseDto })
+  async updateMe(@Req() req: any, @Body() dto: UpdateMyProfileDto) {
+    return this.usersService.updateMe(req.user.userId, dto);
   }
 
   /**

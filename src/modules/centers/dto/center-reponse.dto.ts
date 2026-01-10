@@ -15,4 +15,10 @@ export class CenterResponseDto {
   })
   @IsNotEmpty()
   name: string;
+
+  @ApiProperty({
+    example: true,
+    description: 'Whether this center is the default center for its organization',
+  })
+  isDefault: boolean;
 }

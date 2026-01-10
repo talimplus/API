@@ -26,6 +26,41 @@ export class PaymentResponseDto {
   refundedAmount: number;
 
   @ApiProperty({
+    example: 120000,
+    description:
+      'How much money was received by reception but is still awaiting admin confirmation (sum of pending receipts).',
+  })
+  pendingAmount: number;
+
+  @ApiProperty({
+    example: true,
+    description: 'True if there is at least one pending receipt for this payment.',
+  })
+  hasPendingReceipt: boolean;
+
+  @ApiProperty({
+    example: 2,
+    description: 'How many pending receipts exist for this payment.',
+  })
+  pendingReceiptsCount: number;
+
+  @ApiProperty({
+    example: 30,
+    description:
+      'Total discount percent applied for this payment month (base discount + all matching discount periods).',
+  })
+  discountPercentApplied: number;
+
+  @ApiProperty({
+    example: [
+      { percent: 10, reason: 'Base: Referral' },
+      { percent: 20, reason: 'Yaxshi o‘qigani uchun' },
+    ],
+    description: 'Breakdown of all discounts contributing to discountPercentApplied.',
+  })
+  discountBreakdown: Array<{ percent: number; reason: string }>;
+
+  @ApiProperty({
     example: 100000.0,
     description: 'amountDue - amountPaid',
   })

@@ -41,9 +41,32 @@ export class StaffSalariesController {
     example: '2026-01',
     description: 'Month in YYYY-MM. Defaults to current month.',
   })
+  @ApiQuery({
+    name: 'centerId',
+    required: false,
+    description:
+      'Center filter. Admin/SuperAdmin: optional (if omitted, returns all centers).',
+  })
   @ApiResponse({ type: StaffSalaryResponseDto, isArray: true })
-  async findAll(@Req() req: any, @Query('forMonth') forMonth?: string) {
-    return this.staffSalariesService.findAll(req.user.organizationId, forMonth);
+  async findAll(
+    @Req() req: any,
+    @Query('forMonth') forMonth?: string,
+    @Query('centerId') centerId?: number,
+  ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    return this.staffSalariesService.findAll(
+      req.user.organizationId,
+      forMonth,
+      effectiveCenterId,
+    );
   }
 
   @Put('pay/:id')

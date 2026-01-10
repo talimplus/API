@@ -193,8 +193,11 @@ export class GroupsService {
       query.andWhere('teacher.id = :teacherId', { teacherId });
     }
 
-    if (role !== UserRole.ADMIN && centerId) {
+    const isAdmin = role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN;
+    if (centerId) {
       query.andWhere('center.id = :centerId', { centerId });
+    } else if (!isAdmin) {
+      throw new BadRequestException('centerId is required');
     }
 
     if (name) {
@@ -243,10 +246,25 @@ export class GroupsService {
           },
         },
       },
+      relations: ['center', 'teacher', 'subject', 'room', 'schedules'],
       order: {
         createdAt: 'DESC',
       },
     });
+  }
+
+  async getAllByOrganization(organizationId: number): Promise<Group[]> {
+    return this.groupRepo
+      .createQueryBuilder('group')
+      .leftJoinAndSelect('group.center', 'center')
+      .leftJoinAndSelect('group.subject', 'subject')
+      .leftJoinAndSelect('group.teacher', 'teacher')
+      .leftJoinAndSelect('group.room', 'room')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .orderBy('group.createdAt', 'DESC')
+      .getMany();
   }
 
   async findOne(id: number) {
