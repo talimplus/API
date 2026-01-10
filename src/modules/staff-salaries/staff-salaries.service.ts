@@ -50,10 +50,9 @@ export class StaffSalariesService {
     centerId?: number,
   ) {
     const month = this.normalizeForMonth(forMonth);
-    const monthEndExclusive = dayjs(month)
-      .add(1, 'month')
-      .startOf('month')
-      .toDate();
+    // pay month start boundary (salary for this pay-month is for previous month work)
+    // If employee was created in the pay month, they should NOT get a salary row for this pay month.
+    const monthStart = dayjs(month).startOf('month').toDate();
 
     const employees = await this.userRepo.find({
       where: [
@@ -70,7 +69,8 @@ export class StaffSalariesService {
       if (centerId && (u as any).center?.id !== centerId) return false;
       // Do not create salaries for months before the employee existed in the system.
       // Example: user created in 2026-01 must not get a salary row for 2025-05.
-      if (u.createdAt && !dayjs(u.createdAt).isBefore(monthEndExclusive)) {
+      // Also: if user was created within the pay month, they will appear starting next month.
+      if (u.createdAt && !dayjs(u.createdAt).isBefore(monthStart)) {
         return false;
       }
       if (u.role === UserRole.TEACHER) {
@@ -151,10 +151,7 @@ export class StaffSalariesService {
 
   async findAll(organizationId: number, forMonth?: string, centerId?: number) {
     const month = this.normalizeForMonth(forMonth);
-    const monthEndExclusive = dayjs(month)
-      .add(1, 'month')
-      .startOf('month')
-      .toDate();
+    const monthStart = dayjs(month).startOf('month').toDate();
 
     // Ensure the month is populated so UI never sees an empty table.
     await this.ensureSalariesForMonth(organizationId, month.slice(0, 7), centerId);
@@ -167,7 +164,7 @@ export class StaffSalariesService {
       .where('organization.id = :organizationId', { organizationId })
       .andWhere('salary.forMonth = :forMonth', { forMonth: month })
       .andWhere(centerId ? 'center.id = :centerId' : '1=1', { centerId })
-      .andWhere('user.createdAt < :monthEndExclusive', { monthEndExclusive })
+      .andWhere('user.createdAt < :monthStart', { monthStart })
       .orderBy('user.createdAt', 'DESC')
       .getMany();
 
