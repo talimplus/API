@@ -85,7 +85,10 @@ export class AttendanceLessonExistenceSeparation1760000000001
           WHERE table_schema='public' AND table_name='attendance' AND column_name='isPresent'
         ) THEN
           UPDATE "attendance"
-          SET "status" = CASE WHEN "isPresent" = true THEN 'present' ELSE 'absent' END;
+          SET "status" = CASE
+            WHEN "isPresent" = true THEN 'present'::"public"."attendance_status_enum"
+            ELSE 'absent'::"public"."attendance_status_enum"
+          END;
           ALTER TABLE "attendance" DROP COLUMN "isPresent";
         END IF;
       END $$;
