@@ -2,11 +2,13 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from '@/app.module';
 import { CustomValidationPipe } from './common/pipes/custom-validation.pipe';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { TypeOrmExceptionFilter } from '@/common/filters/typeorm-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.useGlobalPipes(new CustomValidationPipe());
+  app.useGlobalFilters(new TypeOrmExceptionFilter());
   app.enableCors();
 
   const config = new DocumentBuilder()

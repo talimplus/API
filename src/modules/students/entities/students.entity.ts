@@ -17,6 +17,8 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 
 @Entity('students')
 export class Student {
@@ -32,8 +34,32 @@ export class Student {
   @Column()
   phone: string;
 
+  @Column({ nullable: true })
+  secondPhone?: string | null;
+
   @Column({ type: 'date' })
   birthDate: Date;
+
+  @Column({ type: 'text', nullable: true })
+  comment?: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  heardAboutUs?: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  preferredTime?: StudentPreferredTime | null;
+
+  @Column({ type: 'text', array: true, nullable: true })
+  preferredDays?: WeekDay[] | null;
+
+  @Column({ nullable: true })
+  passportSeries?: string | null;
+
+  @Column({ nullable: true })
+  passportNumber?: string | null;
+
+  @Column({ nullable: true })
+  jshshir?: string | null;
 
   @OneToMany(() => Payment, (payment) => payment.student)
   payments: Payment[];

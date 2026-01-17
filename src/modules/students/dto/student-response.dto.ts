@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student-discount-period-response.dto';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 
 export class StudentResponseDto {
   @ApiProperty({ example: 1 })
@@ -15,8 +17,69 @@ export class StudentResponseDto {
   @ApiProperty({ example: '998001234567' })
   phone: string;
 
+  @ApiProperty({ example: '998901234567', required: false, nullable: true })
+  secondPhone?: string | null;
+
   @ApiProperty({ example: '2006-05-12' })
   birthDate: string;
+
+  @ApiProperty({
+    example: "O'quvchi haqida izoh",
+    required: false,
+    nullable: true,
+  })
+  comment?: string | null;
+
+  @ApiProperty({
+    example: 'Instagram',
+    required: false,
+    nullable: true,
+    description: "O'quv markazi haqida qayerdan eshitgani",
+  })
+  heardAboutUs?: string | null;
+
+  @ApiProperty({
+    enum: StudentPreferredTime,
+    required: false,
+    nullable: true,
+    description: "Qaysi vaqtda o'qimoqchi (ertalab/kechqurun)",
+  })
+  preferredTime?: StudentPreferredTime | null;
+
+  @ApiProperty({
+    enum: WeekDay,
+    isArray: true,
+    required: false,
+    nullable: true,
+    description: "Qaysi kunlari o'qimoqchi (hafta kunlari)",
+  })
+  preferredDays?: WeekDay[] | null;
+
+  @ApiProperty({
+    example: 'AA',
+    required: false,
+    nullable: true,
+    description:
+      'Passport series (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
+  })
+  passportSeries?: string | null;
+
+  @ApiProperty({
+    example: '1234567',
+    required: false,
+    nullable: true,
+    description:
+      'Passport number (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
+  })
+  passportNumber?: string | null;
+
+  @ApiProperty({
+    example: '12345678901234',
+    required: false,
+    nullable: true,
+    description: 'JSHSHIR (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
+  })
+  jshshir?: string | null;
 
   @ApiProperty({ example: 400000 })
   monthlyFee: number;

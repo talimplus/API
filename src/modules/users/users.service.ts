@@ -18,6 +18,7 @@ import { CurrentUser } from '@/common/types/current.user';
 import { OrganizationsService } from '@/modules/organizations/organizations.service';
 import { instanceToPlain } from 'class-transformer';
 import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
+import { ValidationException } from '@/common/exceptions/validation.exception';
 
 @Injectable()
 export class UsersService {
@@ -64,7 +65,16 @@ export class UsersService {
     });
 
     if (existingUser) {
-      throw new BadRequestException('Bunday foydalanuvchi mavjud');
+      throw new ValidationException({ login: 'Bunday login allaqachon mavjud' });
+    }
+
+    // `users.phone` is globally unique (db constraint). Catch early to return a clear 400 error
+    // instead of an unhandled QueryFailedError.
+    const existingByPhone = await this.userRepo.findOne({
+      where: { phone: dto.phone },
+    });
+    if (existingByPhone) {
+      throw new ValidationException({ phone: 'Bunday phone allaqachon mavjud' });
     }
 
     const organization =
@@ -114,12 +124,14 @@ export class UsersService {
     organizationId: number,
     {
       centerId,
+      role,
       name,
       phone,
       page = 1,
       perPage = 10,
     }: {
       centerId?: number;
+      role?: UserRole;
       name?: string;
       phone?: string;
       page?: number;
@@ -136,6 +148,13 @@ export class UsersService {
 
     if (centerId) {
       query.andWhere('center.id = :centerId', { centerId });
+    }
+
+    if (role !== undefined) {
+      if (!Object.values(UserRole).includes(role)) {
+        throw new BadRequestException('role is invalid');
+      }
+      query.andWhere('user.role = :role', { role });
     }
 
     if (name) {
@@ -192,7 +211,7 @@ export class UsersService {
     if (dto.login && dto.login !== user.login) {
       const exists = await this.userRepo.findOne({ where: { login: dto.login } });
       if (exists && exists.id !== user.id) {
-        throw new BadRequestException('Bunday login allaqachon mavjud');
+        throw new ValidationException({ login: 'Bunday login allaqachon mavjud' });
       }
       user.login = dto.login;
     }
@@ -200,7 +219,7 @@ export class UsersService {
     if (dto.phone && dto.phone !== user.phone) {
       const exists = await this.userRepo.findOne({ where: { phone: dto.phone } });
       if (exists && exists.id !== user.id) {
-        throw new BadRequestException('Bunday phone allaqachon mavjud');
+        throw new ValidationException({ phone: 'Bunday phone allaqachon mavjud' });
       }
       user.phone = dto.phone;
     }

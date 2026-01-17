@@ -24,7 +24,10 @@ import {
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { Referral } from '@/modules/referrals/entities/referal.entity';
-import { Payment, PaymentStatus } from '@/modules/payments/entities/payment.entity';
+import {
+  Payment,
+  PaymentStatus,
+} from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { CurrentUser } from '@/common/types/current.user';
 
@@ -85,7 +88,10 @@ export class StudentsService {
     const resolvedCenterId = centerId
       ? await this.resolveCenterIdOrThrow(organizationId, centerId)
       : !isAdmin
-        ? await this.resolveCenterIdOrThrow(organizationId, currentUser.centerId)
+        ? await this.resolveCenterIdOrThrow(
+            organizationId,
+            currentUser.centerId,
+          )
         : undefined;
 
     const query = this.studentRepo
@@ -94,7 +100,9 @@ export class StudentsService {
       .loadRelationIdAndMap('student._groupIds', 'student.groups');
 
     if (resolvedCenterId) {
-      query.where('student.centerId = :centerId', { centerId: resolvedCenterId });
+      query.where('student.centerId = :centerId', {
+        centerId: resolvedCenterId,
+      });
     } else {
       // admin/super_admin + no centerId => all centers in org
       query
@@ -157,7 +165,9 @@ export class StudentsService {
         const list = discountPeriodsByStudent.get(p.studentId) ?? [];
         list.push({
           ...instanceToPlain(p),
-          fromMonth: p.fromMonth ? dayjs(p.fromMonth).format('YYYY-MM-DD') : null,
+          fromMonth: p.fromMonth
+            ? dayjs(p.fromMonth).format('YYYY-MM-DD')
+            : null,
           toMonth: p.toMonth ? dayjs(p.toMonth).format('YYYY-MM-DD') : null,
           createdAt: p.createdAt?.toISOString?.() ?? String(p.createdAt),
           percent: Number(p.percent ?? 0),
@@ -166,15 +176,26 @@ export class StudentsService {
       }
     }
 
-    const enriched = data.map((s: any) => ({
-      ...instanceToPlain(s),
-      centerId: s.centerId ?? s.center?.id ?? null,
-      groupIds: Array.isArray(s._groupIds)
-        ? s._groupIds.map((x: any) => Number(x))
-        : [],
-      referrerId: referrerByReferred.get(s.id) ?? null,
-      discountPeriods: discountPeriodsByStudent.get(s.id) ?? [],
-    }));
+    const enriched = data.map((s: any) => {
+      const row: any = {
+        ...instanceToPlain(s),
+        centerId: s.centerId ?? s.center?.id ?? null,
+        groupIds: Array.isArray(s._groupIds)
+          ? s._groupIds.map((x: any) => Number(x))
+          : [],
+        referrerId: referrerByReferred.get(s.id) ?? null,
+        discountPeriods: discountPeriodsByStudent.get(s.id) ?? [],
+      };
+
+      // Sensitive fields: only ADMIN/SUPER_ADMIN should see in list responses
+      if (!isAdmin) {
+        delete row.passportSeries;
+        delete row.passportNumber;
+        delete row.jshshir;
+      }
+
+      return row;
+    });
     return {
       data: enriched,
       meta: {
@@ -190,10 +211,14 @@ export class StudentsService {
     organizationId: number,
     centerId: number,
   ): Promise<Student[]> {
+    const resolvedCenterId = await this.resolveCenterIdOrThrow(
+      organizationId,
+      centerId,
+    );
     return this.studentRepo.find({
       where: {
         center: {
-          id: centerId,
+          id: resolvedCenterId,
           organization: {
             id: organizationId,
           },
@@ -204,6 +229,16 @@ export class StudentsService {
         createdAt: 'DESC',
       },
     });
+  }
+
+  async getAllByOrganization(organizationId: number): Promise<Student[]> {
+    return this.studentRepo
+      .createQueryBuilder('student')
+      .leftJoinAndSelect('student.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .orderBy('student.createdAt', 'DESC')
+      .getMany();
   }
 
   async getReferredStudents(organizationId: number, centerId?: number) {
@@ -218,7 +253,9 @@ export class StudentsService {
         organizationId,
         centerId,
       );
-      query.andWhere('student.centerId = :centerId', { centerId: resolvedCenterId });
+      query.andWhere('student.centerId = :centerId', {
+        centerId: resolvedCenterId,
+      });
     } else {
       query
         .leftJoin('student.center', 'center')
@@ -228,7 +265,14 @@ export class StudentsService {
 
     const students = await query.orderBy('student.createdAt', 'DESC').getMany();
 
-    return instanceToPlain(students);
+    const plain: any[] = (instanceToPlain(students) as any[]) ?? [];
+    // Referral list is used for selection; never expose sensitive passport/jshshir fields here.
+    for (const r of plain) {
+      delete r.passportSeries;
+      delete r.passportNumber;
+      delete r.jshshir;
+    }
+    return plain;
   }
 
   async findById(id: number) {
@@ -314,7 +358,9 @@ export class StudentsService {
       .getOne();
 
     if (!center) {
-      throw new BadRequestException('centerId is invalid for this organization');
+      throw new BadRequestException(
+        'centerId is invalid for this organization',
+      );
     }
 
     return centerId;
@@ -332,7 +378,10 @@ export class StudentsService {
       const from = this.normalizeMonth(p.fromMonth);
       const to = p.toMonth ? this.normalizeMonth(p.toMonth) : null;
       // Exclusive end: toMonth must be > fromMonth
-      if (to && (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))) {
+      if (
+        to &&
+        (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))
+      ) {
         throw new BadRequestException('toMonth must be > fromMonth');
       }
       const percent = Math.max(0, Math.min(100, Number(p.percent)));
@@ -430,7 +479,6 @@ export class StudentsService {
     }
   }
 
-
   async listDiscountPeriods(organizationId: number, studentId: number) {
     await this.assertStudentInOrganization(organizationId, studentId);
     const rows = await this.discountPeriodRepo.find({
@@ -451,13 +499,21 @@ export class StudentsService {
   async createDiscountPeriod(
     organizationId: number,
     studentId: number,
-    dto: { percent: number; fromMonth: string; toMonth?: string | null; reason?: string },
+    dto: {
+      percent: number;
+      fromMonth: string;
+      toMonth?: string | null;
+      reason?: string;
+    },
   ) {
     await this.assertStudentInOrganization(organizationId, studentId);
 
     const from = this.normalizeMonth(dto.fromMonth);
     const to = dto.toMonth ? this.normalizeMonth(dto.toMonth) : null;
-    if (to && (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))) {
+    if (
+      to &&
+      (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))
+    ) {
       throw new BadRequestException('toMonth must be > fromMonth');
     }
 
@@ -470,7 +526,12 @@ export class StudentsService {
     });
 
     await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [
-      { percent: Number(dto.percent), fromMonth: from, toMonth: to, reason: dto.reason ?? null },
+      {
+        percent: Number(dto.percent),
+        fromMonth: from,
+        toMonth: to,
+        reason: dto.reason ?? null,
+      },
     ]);
 
     const saved = await this.discountPeriodRepo.save(row);
@@ -487,7 +548,12 @@ export class StudentsService {
     organizationId: number,
     studentId: number,
     periodId: number,
-    dto: { percent?: number; fromMonth?: string; toMonth?: string | null; reason?: string },
+    dto: {
+      percent?: number;
+      fromMonth?: string;
+      toMonth?: string | null;
+      reason?: string;
+    },
   ) {
     await this.assertStudentInOrganization(organizationId, studentId);
 
@@ -496,7 +562,9 @@ export class StudentsService {
     });
     if (!existing) throw new NotFoundException('Discount period not found');
 
-    const from = dto.fromMonth ? this.normalizeMonth(dto.fromMonth) : dayjs(existing.fromMonth).format('YYYY-MM-01');
+    const from = dto.fromMonth
+      ? this.normalizeMonth(dto.fromMonth)
+      : dayjs(existing.fromMonth).format('YYYY-MM-01');
     const to =
       dto.toMonth !== undefined
         ? dto.toMonth
@@ -506,11 +574,15 @@ export class StudentsService {
           ? dayjs(existing.toMonth).format('YYYY-MM-01')
           : null;
 
-    if (to && (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))) {
+    if (
+      to &&
+      (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))
+    ) {
       throw new BadRequestException('toMonth must be > fromMonth');
     }
 
-    if (dto.percent !== undefined) existing.percent = Number(dto.percent) as any;
+    if (dto.percent !== undefined)
+      existing.percent = Number(dto.percent) as any;
     existing.fromMonth = from as any;
     existing.toMonth = (to as any) ?? null;
     if (dto.reason !== undefined) existing.reason = dto.reason ?? null;
@@ -586,8 +658,11 @@ export class StudentsService {
     }
 
     const groupIds = dto.groupIds;
-
-    const groups = await this.groupRepo.findBy({ id: In(groupIds) });
+    const safeGroupIds = Array.isArray(groupIds) ? groupIds : [];
+    const groups =
+      safeGroupIds.length > 0
+        ? await this.groupRepo.findBy({ id: In(safeGroupIds) })
+        : [];
     const birth = dto.birthDate ? new Date(dto.birthDate) : new Date();
     const formattedBirth = `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
     const autoLogin = `${dto.firstName.toLowerCase()}.${dto.lastName.toLowerCase()}.${Date.now().toString().slice(-4)}`;
@@ -614,10 +689,18 @@ export class StudentsService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       phone: dto.phone,
+      secondPhone: (dto as any).secondPhone ?? null,
       monthlyFee: dto.monthlyFee,
       discountPercent: dto.discountPercent ?? 0,
       discountReason: dto.discountReason ?? null,
       birthDate: dto.birthDate,
+      comment: (dto as any).comment ?? null,
+      heardAboutUs: (dto as any).heardAboutUs ?? null,
+      preferredTime: (dto as any).preferredTime ?? null,
+      preferredDays: (dto as any).preferredDays ?? null,
+      passportSeries: (dto as any).passportSeries ?? null,
+      passportNumber: (dto as any).passportNumber ?? null,
+      jshshir: (dto as any).jshshir ?? null,
       status: StudentStatus.NEW,
       center,
       user,
@@ -627,7 +710,10 @@ export class StudentsService {
     const savedStudent = await this.studentRepo.save(student);
 
     if (Array.isArray(discountPeriods)) {
-      await this.replaceDiscountPeriodsForStudent(savedStudent.id, discountPeriods);
+      await this.replaceDiscountPeriodsForStudent(
+        savedStudent.id,
+        discountPeriods,
+      );
     }
 
     if (dto.referrerId) {
@@ -756,8 +842,22 @@ export class StudentsService {
   }
 
   async changeStatus(id: number, status: StudentStatus) {
-    const student = await this.studentRepo.findOne({ where: { id } });
+    const student = await this.studentRepo.findOne({
+      where: { id },
+      relations: ['groups'],
+    });
     if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+
+    if (
+      status === StudentStatus.ACTIVE &&
+      student.status === StudentStatus.NEW &&
+      (!Array.isArray((student as any).groups) ||
+        (student as any).groups.length === 0)
+    ) {
+      throw new BadRequestException(
+        'Guruh tanlanishi kerak (student groupga biriktirilmagan)',
+      );
+    }
 
     // When student becomes ACTIVE, they start paying from that moment.
     // Always set activatedAt on transition into ACTIVE (so proration is based on the real activation moment).

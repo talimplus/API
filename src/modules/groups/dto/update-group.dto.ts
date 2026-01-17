@@ -10,6 +10,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { IsInt, Min } from 'class-validator';
 
 export class UpdateGroupDto {
   @ApiProperty({
@@ -48,13 +49,25 @@ export class UpdateGroupDto {
   endDate?: string;
 
   @ApiProperty({
-    example: GroupStatus.ACTIVE,
+    example: GroupStatus.NEW,
     enum: GroupStatus,
     required: false,
-    description: 'Gurux statusi',
+    description:
+      "Gurux statusi. Tavsiya: statusni o'zgartirish uchun alohida API ishlating.",
   })
   @IsOptional()
   status?: GroupStatus;
+
+  @ApiProperty({
+    example: 5,
+    required: false,
+    description: "Gurux davomiyligi (oylarda). Masalan 5 bo'lsa 5 oy.",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  durationMonths?: number;
 
   @IsOptional()
   @ApiProperty({

@@ -1,6 +1,5 @@
 export enum GroupStatus {
-  ACTIVE = 'active',
-  INACTIVE = 'inactive',
-  COMPLETED = 'completed',
+  NEW = 'new',
+  STARTED = 'started',
+  FINISHED = 'finished',
 }
-

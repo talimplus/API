@@ -1,7 +1,9 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { GroupsController } from './groups.controller';
+import { GroupAliasController } from './group-alias.controller';
 import { GroupsService } from './groups.service';
+import { GroupsLifecycleService } from './groups-lifecycle.service';
 import { Group } from './entities/groups.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
@@ -26,8 +28,8 @@ import { Room } from '@/modules/rooms/entities/rooms.entity';
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
   ],
-  controllers: [GroupsController],
-  providers: [GroupsService],
+  controllers: [GroupsController, GroupAliasController],
+  providers: [GroupsService, GroupsLifecycleService],
   exports: [GroupsService],
 })
 export class GroupsModule {}

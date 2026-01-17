@@ -23,6 +23,7 @@ import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-st
 import { UpdateStudentDiscountPeriodDto } from '@/modules/students/dto/update-student-discount-period.dto';
 import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student-discount-period-response.dto';
 import { ApiBody } from '@nestjs/swagger';
+import { instanceToPlain } from 'class-transformer';
 
 @ApiTags('Students')
 @Controller('students')
@@ -49,25 +50,52 @@ export class StudentsController {
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
-    return this.studentService.findAll(req.user.organizationId, {
-      centerId: centerId ? +centerId : undefined,
-      name,
-      phone,
-      status: status ?? StudentStatus.ACTIVE,
-      groupId,
-      page: page ? +page : 1,
-      perPage: perPage ? +perPage : 10,
-    }, req.user);
+    return this.studentService.findAll(
+      req.user.organizationId,
+      {
+        centerId: centerId ? +centerId : undefined,
+        name,
+        phone,
+        status: status ?? StudentStatus.ACTIVE,
+        groupId,
+        page: page ? +page : 1,
+        perPage: perPage ? +perPage : 10,
+      },
+      req.user,
+    );
   }
 
   @Get('/all')
   @ApiOperation({ summary: 'Get all students without pagination' })
   @ApiResponse({ type: [StudentResponseDto] })
-  async getAllStudents(@Req() req: any) {
-    return this.studentService.getAllByOrganizationAndCenter(
-      req.user.organizationId,
-      req.user.centerId,
-    );
+  @ApiQuery({ name: 'centerId', required: false })
+  async getAllStudents(@Req() req: any, @Query('centerId') centerId?: number) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    const rows = effectiveCenterId
+      ? await this.studentService.getAllByOrganizationAndCenter(
+          req.user.organizationId,
+          effectiveCenterId,
+        )
+      : await this.studentService.getAllByOrganization(req.user.organizationId);
+    const plain: any[] = (instanceToPlain(rows) as any[]) ?? [];
+
+    if (!isAdmin) {
+      for (const r of plain) {
+        delete r.passportSeries;
+        delete r.passportNumber;
+        delete r.jshshir;
+      }
+    }
+    return plain;
   }
 
   @Get('/referrals')
@@ -122,7 +150,10 @@ export class StudentsController {
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   @ApiOperation({ summary: 'List student discount periods' })
   @ApiResponse({ type: [StudentDiscountPeriodResponseDto] })
-  async listDiscountPeriods(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+  async listDiscountPeriods(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
     return this.studentService.listDiscountPeriods(req.user.organizationId, id);
   }
 
@@ -136,7 +167,11 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CreateStudentDiscountPeriodDto,
   ) {
-    return this.studentService.createDiscountPeriod(req.user.organizationId, id, dto);
+    return this.studentService.createDiscountPeriod(
+      req.user.organizationId,
+      id,
+      dto,
+    );
   }
 
   @Put(':id/discount-periods/:periodId')
@@ -167,6 +202,10 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @Param('periodId', ParseIntPipe) periodId: number,
   ) {
-    return this.studentService.deleteDiscountPeriod(req.user.organizationId, id, periodId);
+    return this.studentService.deleteDiscountPeriod(
+      req.user.organizationId,
+      id,
+      periodId,
+    );
   }
 }

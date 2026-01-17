@@ -19,6 +19,7 @@ import { ApiOperation, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
 import { PaginatedUserResponseDto } from '@/modules/users/dto/paginate-user-reponse.dto';
 import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
 import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
+import { ApiQuery } from '@nestjs/swagger';
 
 @ApiTags('Users')
 @Controller('users')
@@ -68,9 +69,11 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Get all users' })
   @ApiResponse({ type: PaginatedUserResponseDto })
+  @ApiQuery({ name: 'role', required: false, enum: UserRole })
   async findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
+    @Query('role') role?: UserRole,
     @Query('name') name?: string,
     @Query('phone') phone?: string,
     @Query('page') page?: number,
@@ -78,6 +81,7 @@ export class UsersController {
   ) {
     return this.usersService.findAll(req.user.organizationId, {
       centerId: centerId ? +centerId : undefined,
+      role,
       name,
       phone,
       page: page ? +page : 1,

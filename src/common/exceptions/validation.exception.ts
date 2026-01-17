@@ -1,7 +1,7 @@
-import { BadRequestException } from '@nestjs/common';
+import { UnprocessableEntityException } from '@nestjs/common';
 
-export class ValidationException extends BadRequestException {
-  constructor(public validationErrors: Record<string, string[]>) {
+export class ValidationException extends UnprocessableEntityException {
+  constructor(public validationErrors: Record<string, string>) {
     super({
       statusCode: 422,
       message: 'Validation Failed',

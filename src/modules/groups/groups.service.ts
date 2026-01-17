@@ -15,6 +15,8 @@ import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { ValidationException } from '@/common/exceptions/validation.exception';
 
 @Injectable()
 export class GroupsService {
@@ -32,6 +34,34 @@ export class GroupsService {
     @InjectRepository(GroupSchedule)
     private readonly scheduleRepo: Repository<GroupSchedule>,
   ) {}
+
+  private async finishExpiredGroups(organizationId: number, centerId?: number) {
+    // Update in DB directly (fast, idempotent).
+    // Only affects groups within the organization (and optional center).
+    const params: any[] = [organizationId];
+    let centerFilterSql = '';
+    if (centerId) {
+      params.push(centerId);
+      centerFilterSql = ` AND g."centerId" = $2`;
+    }
+
+    await this.groupRepo.query(
+      `
+      UPDATE "groups" g
+      SET "status" = $${params.length + 1}
+      WHERE g."status" = $${params.length + 2}
+        AND g."durationMonths" IS NOT NULL
+        AND g."startedAt" IS NOT NULL
+        AND (g."startedAt" + (g."durationMonths" || ' months')::interval) <= NOW()
+        AND g."centerId" IN (
+          SELECT c."id" FROM "centers" c
+          WHERE c."organizationId" = $1
+        )
+        ${centerFilterSql}
+    `,
+      [...params, GroupStatus.FINISHED, GroupStatus.STARTED],
+    );
+  }
 
   async create(dto: CreateGroupDto, centerId: number, role: UserRole) {
     if (role === UserRole.ADMIN && !dto.centerId) {
@@ -89,7 +119,9 @@ export class GroupsService {
       timezone: dto.timezone,
       startDate: dto.startDate ? new Date(dto.startDate) : undefined,
       endDate: dto.endDate ? new Date(dto.endDate) : undefined,
-      status: dto.status,
+      status: GroupStatus.NEW,
+      durationMonths: dto.durationMonths ?? null,
+      startedAt: null,
     });
 
     const savedGroup = await this.groupRepo.save(group);
@@ -119,7 +151,11 @@ export class GroupsService {
     if (dto.endDate !== undefined) {
       group.endDate = dto.endDate ? new Date(dto.endDate) : null;
     }
-    if (dto.status) group.status = dto.status;
+    // Status should be changed via changeStatus API to enforce transition rules.
+    if (dto.durationMonths !== undefined) {
+      group.durationMonths =
+        dto.durationMonths === null ? null : (dto.durationMonths as any);
+    }
     if (dto.monthlyFee !== undefined) group.monthlyFee = dto.monthlyFee;
     if (dto.subjectId) {
       group.subject = await this.subjectRepo.findOneBy({
@@ -164,6 +200,63 @@ export class GroupsService {
     return savedGroup;
   }
 
+  async changeStatus(
+    organizationId: number,
+    id: number,
+    nextStatus: GroupStatus,
+    centerId?: number,
+  ) {
+    if (!nextStatus) {
+      throw new ValidationException({ status: 'status is required' });
+    }
+    if (!Object.values(GroupStatus).includes(nextStatus)) {
+      throw new ValidationException({ status: 'status is invalid' });
+    }
+
+    // Ensure expired groups are closed first (keeps state consistent)
+    await this.finishExpiredGroups(organizationId, centerId);
+
+    const group = await this.groupRepo.findOne({
+      where: { id },
+      relations: ['center'],
+    });
+    if (!group) throw new NotFoundException('Group not found');
+    if ((group as any)?.center?.organizationId !== organizationId) {
+      throw new NotFoundException('Group not found');
+    }
+
+    const current = group.status;
+
+    if (current === nextStatus) return group;
+
+    // Disallow NEW -> FINISHED directly
+    if (current === GroupStatus.NEW && nextStatus === GroupStatus.FINISHED) {
+      throw new BadRequestException(
+        "Guruxni new holatdan to'g'ridan-to'g'ri finished qilib bo'lmaydi",
+      );
+    }
+
+    // Disallow changing finished groups (keep simple & safe)
+    if (current === GroupStatus.FINISHED) {
+      throw new BadRequestException('Finished gurux statusini o‘zgartirib bo‘lmaydi');
+    }
+
+    if (nextStatus === GroupStatus.STARTED) {
+      group.startedAt = new Date();
+    }
+
+    if (nextStatus === GroupStatus.NEW) {
+      // allow rollback to NEW only if it was STARTED (optional)
+      if (current !== GroupStatus.STARTED) {
+        throw new BadRequestException('Invalid status transition');
+      }
+      group.startedAt = null;
+    }
+
+    group.status = nextStatus;
+    return this.groupRepo.save(group);
+  }
+
   async findAll(
     role: UserRole,
     organizationId: number,
@@ -175,6 +268,8 @@ export class GroupsService {
     page?: number,
     perPage?: number,
   ) {
+    await this.finishExpiredGroups(organizationId, centerId);
+
     const currentPage = Number(page) || 1;
     const itemsPerPage = Number(perPage) || 10;
     const skip = (currentPage - 1) * itemsPerPage;
@@ -237,6 +332,7 @@ export class GroupsService {
     organizationId: number,
     centerId: number,
   ): Promise<Group[]> {
+    await this.finishExpiredGroups(organizationId, centerId);
     return this.groupRepo.find({
       where: {
         center: {
@@ -254,6 +350,7 @@ export class GroupsService {
   }
 
   async getAllByOrganization(organizationId: number): Promise<Group[]> {
+    await this.finishExpiredGroups(organizationId);
     return this.groupRepo
       .createQueryBuilder('group')
       .leftJoinAndSelect('group.center', 'center')
@@ -268,6 +365,19 @@ export class GroupsService {
   }
 
   async findOne(id: number) {
+    // Best-effort: finish expired groups (no org scope here, so run global update)
+    // This keeps single-fetch consistent without requiring the cron job to have run.
+    await this.groupRepo.query(
+      `
+      UPDATE "groups" g
+      SET "status" = $1
+      WHERE g."status" = $2
+        AND g."durationMonths" IS NOT NULL
+        AND g."startedAt" IS NOT NULL
+        AND (g."startedAt" + (g."durationMonths" || ' months')::interval) <= NOW()
+    `,
+      [GroupStatus.FINISHED, GroupStatus.STARTED],
+    );
     return this.groupRepo.findOne({
       where: { id },
       relations: ['center', 'teacher', 'subject', 'students', 'room', 'schedules'],

@@ -9,12 +9,22 @@ export class CustomValidationPipe extends ValidationPipe {
       whitelist: true,
       forbidNonWhitelisted: true,
       exceptionFactory: (errors) => {
-        const formattedErrors: Record<string, string[]> = {};
+        const formattedErrors: Record<string, string> = {};
 
-        for (const error of errors) {
-          const field = error.property;
-          formattedErrors[field] = Object.values(error.constraints || {});
-        }
+        const collect = (errs: any[], parentPath = '') => {
+          for (const error of errs) {
+            const field = parentPath ? `${parentPath}.${error.property}` : error.property;
+            const constraints = error?.constraints ? Object.values(error.constraints) : [];
+            if (constraints.length > 0) {
+              formattedErrors[field] = String(constraints[0]);
+            }
+            if (Array.isArray(error?.children) && error.children.length > 0) {
+              collect(error.children, field);
+            }
+          }
+        };
+
+        collect(errors as any[]);
 
         return new ValidationException(formattedErrors);
       },

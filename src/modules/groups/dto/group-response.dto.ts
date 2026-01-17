@@ -22,8 +22,24 @@ export class GroupResponseDto {
   @ApiProperty({ example: '2026-06-01', required: false, nullable: true })
   endDate?: string | null;
 
-  @ApiProperty({ enum: GroupStatus, example: GroupStatus.ACTIVE })
+  @ApiProperty({ enum: GroupStatus, example: GroupStatus.NEW })
   status: GroupStatus;
+
+  @ApiProperty({
+    example: 5,
+    required: false,
+    nullable: true,
+    description: 'Group duration in months (nullable).',
+  })
+  durationMonths?: number | null;
+
+  @ApiProperty({
+    example: '2026-01-15T10:00:00.000Z',
+    required: false,
+    nullable: true,
+    description: 'When group was marked as STARTED (nullable).',
+  })
+  startedAt?: string | null;
 
   @ApiProperty({ example: 400000 })
   monthlyFee: number;

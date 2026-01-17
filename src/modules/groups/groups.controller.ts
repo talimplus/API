@@ -18,8 +18,10 @@ import { PaginatedGroupResponseDto } from '@/modules/groups/dto/paginated-group-
 import { GroupResponseDto } from '@/modules/groups/dto/group-response.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { UserRole } from '@/common/enums/user-role.enums';
-// import { Roles } from '@/decorators/roles.decorator';
-// import { UserRole } from '@/common/enums/user-role.enums';
+import { Roles } from '@/decorators/roles.decorator';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { ChangeGroupStatusDto } from '@/modules/groups/dto/change-group-status.dto';
+import { ApiBody } from '@nestjs/swagger';
 
 @ApiTags('Groups')
 @Controller('groups')
@@ -40,6 +42,27 @@ export class GroupsController {
   @ApiResponse({ type: GroupResponseDto })
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateGroupDto) {
     return this.groupsService.update(id, dto);
+  }
+
+  @Put('change-status/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Change group status' })
+  @ApiResponse({ type: GroupResponseDto })
+  @ApiQuery({ name: 'status', required: false, enum: GroupStatus })
+  @ApiBody({ type: ChangeGroupStatusDto, required: false })
+  async changeStatus(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('status') status?: GroupStatus,
+    @Body() body?: Partial<ChangeGroupStatusDto>,
+  ) {
+    const effectiveStatus = (body?.status ?? status) as GroupStatus | undefined;
+    return this.groupsService.changeStatus(
+      req.user.organizationId,
+      id,
+      effectiveStatus as any,
+      req.user.centerId,
+    );
   }
 
   @Get()

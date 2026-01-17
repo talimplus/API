@@ -44,8 +44,21 @@ export class Group {
   @Column({ type: 'date', nullable: true })
   endDate?: Date | null;
 
-  @Column({ type: 'enum', enum: GroupStatus, default: GroupStatus.ACTIVE })
+  @Column({ type: 'enum', enum: GroupStatus, default: GroupStatus.NEW })
   status: GroupStatus;
+
+  /**
+   * Group duration in months, used for auto-finishing (optional).
+   * Example: 5 => 5 months.
+   */
+  @Column({ type: 'int', nullable: true })
+  durationMonths?: number | null;
+
+  /**
+   * Timestamp when group was marked as STARTED.
+   */
+  @Column({ type: 'timestamp', nullable: true })
+  startedAt?: Date | null;
 
   @ManyToOne(() => Subject, { onDelete: 'CASCADE' })
   subject: Subject;
