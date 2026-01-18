@@ -3,6 +3,7 @@ import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
+  IsDateString,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -32,8 +33,8 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
 
   @ApiProperty({ example: '2006-05-12', required: false })
   @IsOptional()
-  @IsString()
-  birthDate?: number;
+  @IsDateString()
+  birthDate?: string;
 
   @ApiProperty({ example: 'Ali12345', required: false })
   @IsOptional()

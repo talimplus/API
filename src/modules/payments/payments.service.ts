@@ -434,6 +434,15 @@ export class PaymentsService {
 
     // Month offset: payments.forMonth = earning month, salary is paid in next month
     const payYm = dayjs(info.forMonth).add(1, 'month').format('YYYY-MM');
+
+    // Do not attempt to calculate earnings for future pay months.
+    // This can happen when we adjust current-month payments (e.g. student STOPPED refund),
+    // because pay month would be next month, which is not allowed by payroll modules.
+    const currentYm = dayjs().startOf('month').format('YYYY-MM');
+    if (dayjs(`${payYm}-01`).isAfter(dayjs(`${currentYm}-01`))) {
+      return;
+    }
+
     await this.teacherEarningsService.calculateTeacherEarningsForMonth(
       info.organizationId,
       info.teacherId,
@@ -673,8 +682,8 @@ export class PaymentsService {
       await this.paymentRepo.save(toSave as any);
       // Trigger teacher earnings recalculation for affected payments
       for (const p of toSave) {
-        // eslint-disable-next-line no-await-in-loop
-        await this.triggerTeacherEarningsRecalcForPayment(p.id);
+        // Do not block STOPPED flow on payroll calculations
+        void this.triggerTeacherEarningsRecalcForPayment(p.id).catch(() => {});
       }
     }
   }

@@ -24,6 +24,8 @@ import { UpdateStudentDiscountPeriodDto } from '@/modules/students/dto/update-st
 import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student-discount-period-response.dto';
 import { ApiBody } from '@nestjs/swagger';
 import { instanceToPlain } from 'class-transformer';
+import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
+import { ChangeStudentStatusDto } from '@/modules/students/dto/change-student-status.dto';
 
 @ApiTags('Students')
 @Controller('students')
@@ -38,6 +40,11 @@ export class StudentsController {
   @ApiQuery({ name: 'phone', required: false })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'groupId', required: false })
+  @ApiQuery({
+    name: 'returnLikelihood',
+    required: false,
+    enum: StudentReturnLikelihood,
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
   async findAll(
@@ -47,6 +54,7 @@ export class StudentsController {
     @Query('phone') phone?: string,
     @Query('status') status?: StudentStatus,
     @Query('groupId') groupId?: number,
+    @Query('returnLikelihood') returnLikelihood?: StudentReturnLikelihood,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
@@ -58,6 +66,7 @@ export class StudentsController {
         phone,
         status: status ?? StudentStatus.ACTIVE,
         groupId,
+        returnLikelihood,
         page: page ? +page : 1,
         perPage: perPage ? +perPage : 10,
       },
@@ -139,11 +148,14 @@ export class StudentsController {
   @Put('change-status/:id')
   @ApiOperation({ summary: 'Change student status' })
   @ApiResponse({ type: StudentResponseDto })
+  @ApiBody({ type: ChangeStudentStatusDto, required: false })
   async changeStatus(
     @Param('id', ParseIntPipe) id: number,
     @Query('status') status: StudentStatus,
+    @Body() body?: Partial<ChangeStudentStatusDto>,
   ) {
-    return this.studentService.changeStatus(id, status);
+    const effectiveStatus = (body?.status ?? status) as StudentStatus;
+    return this.studentService.changeStatus(id, effectiveStatus, body);
   }
 
   @Get(':id/discount-periods')

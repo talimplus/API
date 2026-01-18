@@ -153,8 +153,7 @@ export class GroupsService {
     }
     // Status should be changed via changeStatus API to enforce transition rules.
     if (dto.durationMonths !== undefined) {
-      group.durationMonths =
-        dto.durationMonths === null ? null : (dto.durationMonths as any);
+      group.durationMonths = dto.durationMonths;
     }
     if (dto.monthlyFee !== undefined) group.monthlyFee = dto.monthlyFee;
     if (dto.subjectId) {

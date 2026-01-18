@@ -15,6 +15,7 @@ import { Type } from 'class-transformer';
 import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
+import { IsDateString } from 'class-validator';
 
 export class CreateStudentDto {
   @ApiProperty({ example: 'Ali' })
@@ -41,9 +42,10 @@ export class CreateStudentDto {
   @IsString()
   secondPhone?: string;
 
-  @ApiProperty({ example: '2006-05-12' })
-  @IsString()
-  birthDate: number;
+  @ApiProperty({ example: '2006-05-12', required: false })
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
 
   @ApiProperty({
     example: "O'quvchi haqida izoh",

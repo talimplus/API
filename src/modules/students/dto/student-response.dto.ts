@@ -3,6 +3,7 @@ import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student-discount-period-response.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
+import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 
 export class StudentResponseDto {
   @ApiProperty({ example: 1 })
@@ -20,8 +21,8 @@ export class StudentResponseDto {
   @ApiProperty({ example: '998901234567', required: false, nullable: true })
   secondPhone?: string | null;
 
-  @ApiProperty({ example: '2006-05-12' })
-  birthDate: string;
+  @ApiProperty({ example: '2006-05-12', required: false, nullable: true })
+  birthDate?: string | null;
 
   @ApiProperty({
     example: "O'quvchi haqida izoh",
@@ -116,6 +117,15 @@ export class StudentResponseDto {
 
   @ApiProperty({ enum: StudentStatus, example: StudentStatus.NEW })
   status: StudentStatus;
+
+  @ApiProperty({
+    enum: StudentReturnLikelihood,
+    required: false,
+    nullable: true,
+    description:
+      'Return likelihood (set when status becomes stopped/ignored). Values: never/maybe/sure.',
+  })
+  returnLikelihood?: StudentReturnLikelihood | null;
 
   @ApiProperty({
     example: '2026-01-01T10:00:00.000Z',

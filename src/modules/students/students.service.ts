@@ -30,6 +30,8 @@ import {
 } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { CurrentUser } from '@/common/types/current.user';
+import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
+import { ValidationException } from '@/common/exceptions/validation.exception';
 
 @Injectable()
 export class StudentsService {
@@ -64,6 +66,7 @@ export class StudentsService {
       page = 1,
       perPage = 10,
       groupId,
+      returnLikelihood,
     }: {
       centerId?: number;
       name?: string;
@@ -72,6 +75,7 @@ export class StudentsService {
       status: StudentStatus;
       perPage?: number;
       groupId?: number;
+      returnLikelihood?: StudentReturnLikelihood;
     },
     currentUser: CurrentUser,
   ) {
@@ -119,6 +123,12 @@ export class StudentsService {
 
     if (status) {
       query.andWhere('student.status = :status', { status });
+    }
+
+    if (returnLikelihood) {
+      query.andWhere('student.returnLikelihood = :returnLikelihood', {
+        returnLikelihood,
+      });
     }
 
     if (phone)
@@ -288,9 +298,16 @@ export class StudentsService {
     // Faqat parol o‘zgartirilmagan bo‘lsa, `tempPassword` ni qaytaramiz
     result.login = student.user.login;
 
-    // Parolni qayta generatsiya qilish
-    const birth = student.birthDate ? new Date(student.birthDate) : new Date();
-    const formattedBirth = `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+    // Parolni qayta generatsiya qilish (birthDate optional).
+    // If birthDate missing, fallback to last 4 digits of phone to keep it deterministic.
+    const phoneDigits = String(student.phone ?? '').replace(/\D/g, '');
+    const phoneLast4 = phoneDigits.slice(-4) || '0000';
+    const formattedBirth = student.birthDate
+      ? (() => {
+          const birth = new Date(student.birthDate as any);
+          return `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+        })()
+      : phoneLast4;
     result.tempPassword = `${student.firstName.toLowerCase()}${student.lastName.toLowerCase()}${formattedBirth}`;
 
     const referral = await this.referralRepo.findOne({
@@ -663,8 +680,14 @@ export class StudentsService {
       safeGroupIds.length > 0
         ? await this.groupRepo.findBy({ id: In(safeGroupIds) })
         : [];
-    const birth = dto.birthDate ? new Date(dto.birthDate) : new Date();
-    const formattedBirth = `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+    const phoneDigits = String(dto.phone ?? '').replace(/\D/g, '');
+    const phoneLast4 = phoneDigits.slice(-4) || '0000';
+    const formattedBirth = dto.birthDate
+      ? (() => {
+          const birth = new Date(dto.birthDate as any);
+          return `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
+        })()
+      : phoneLast4;
     const autoLogin = `${dto.firstName.toLowerCase()}.${dto.lastName.toLowerCase()}.${Date.now().toString().slice(-4)}`;
     const rawPassword = `${dto.firstName.toLowerCase()}${dto.lastName.toLowerCase()}${formattedBirth}`;
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
@@ -693,7 +716,7 @@ export class StudentsService {
       monthlyFee: dto.monthlyFee,
       discountPercent: dto.discountPercent ?? 0,
       discountReason: dto.discountReason ?? null,
-      birthDate: dto.birthDate,
+      birthDate: dto.birthDate ? (dto.birthDate as any) : null,
       comment: (dto as any).comment ?? null,
       heardAboutUs: (dto as any).heardAboutUs ?? null,
       preferredTime: (dto as any).preferredTime ?? null,
@@ -841,12 +864,41 @@ export class StudentsService {
     return this.findById(saved.id);
   }
 
-  async changeStatus(id: number, status: StudentStatus) {
+  async changeStatus(
+    id: number,
+    status: StudentStatus,
+    body?: { returnLikelihood?: StudentReturnLikelihood; comment?: string },
+  ) {
     const student = await this.studentRepo.findOne({
       where: { id },
       relations: ['groups'],
     });
     if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+
+    if (body?.comment !== undefined) {
+      const incoming = String(body.comment ?? '').trim();
+      if (incoming) {
+        // Append to existing comment to avoid losing history
+        (student as any).comment = (student as any).comment
+          ? `${(student as any).comment}\n${incoming}`
+          : incoming;
+      }
+    }
+
+    if (status === StudentStatus.STOPPED || status === StudentStatus.IGNORED) {
+      const rl = body?.returnLikelihood;
+      if (!rl) {
+        throw new ValidationException({
+          returnLikelihood: 'returnLikelihood is required for stopped/ignored',
+        });
+      }
+      if (!Object.values(StudentReturnLikelihood).includes(rl)) {
+        throw new ValidationException({
+          returnLikelihood: 'returnLikelihood is invalid',
+        });
+      }
+      (student as any).returnLikelihood = rl as any;
+    }
 
     if (
       status === StudentStatus.ACTIVE &&

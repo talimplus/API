@@ -4,6 +4,7 @@ import { Student } from '@/modules/students/entities/students.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { StudentsService } from '@/modules/students/students.service';
 import { StudentsController } from './students.controller';
+import { StudentAliasController } from './student-alias.controller';
 import { CentersModule } from '@/modules/centers/centers.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { OrganizationsModule } from '@/modules/organizations/organizations.module';
@@ -34,7 +35,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
     forwardRef(() => AttendanceModule),
     forwardRef(() => PaymentsModule),
   ],
-  controllers: [StudentsController],
+  controllers: [StudentsController, StudentAliasController],
   providers: [StudentsService],
   exports: [StudentsService],
 })

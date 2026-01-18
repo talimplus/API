@@ -19,6 +19,7 @@ import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
+import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 
 @Entity('students')
 export class Student {
@@ -37,8 +38,8 @@ export class Student {
   @Column({ nullable: true })
   secondPhone?: string | null;
 
-  @Column({ type: 'date' })
-  birthDate: Date;
+  @Column({ type: 'date', nullable: true })
+  birthDate?: Date | null;
 
   @Column({ type: 'text', nullable: true })
   comment?: string | null;
@@ -79,6 +80,9 @@ export class Student {
 
   @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.NEW })
   status: StudentStatus;
+
+  @Column({ type: 'enum', enum: StudentReturnLikelihood, nullable: true })
+  returnLikelihood?: StudentReturnLikelihood | null;
 
   /**
    * Timestamp when student first became ACTIVE.
