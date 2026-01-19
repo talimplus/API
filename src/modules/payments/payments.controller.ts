@@ -16,6 +16,7 @@ import {
   Body,
 } from '@nestjs/common';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
+import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -153,6 +154,43 @@ export class PaymentsController {
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 20,
     });
+  }
+
+  @Put('calculate/:id')
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  @ApiOperation({
+    summary: 'Calculate payment amount for partial month study (preview only)',
+    description:
+      'Calculate how much student should pay if they study until a specific date. Does NOT update the payment, only returns calculation result. Useful for reception to show student before actual payment.',
+  })
+  @ApiBody({ type: CalculatePaymentDto })
+  @ApiResponse({
+    schema: {
+      example: {
+        paymentId: 123,
+        studentId: 45,
+        studentName: 'Ali Valiyev',
+        forMonth: '2026-01-01',
+        plannedStudyUntilDate: '2026-01-20',
+        lessonsPlanned: 12,
+        lessonsBillable: 8,
+        discountPercent: 10,
+        amountDue: 150000,
+        currentAmountDue: 200000,
+        difference: -50000,
+      },
+    },
+  })
+  async calculatePayment(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CalculatePaymentDto,
+  ) {
+    return this.paymentsService.calculatePayment(id, dto);
   }
 
   @Get(':id')

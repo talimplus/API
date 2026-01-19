@@ -28,6 +28,7 @@ import {
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
+import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
 
 @Injectable()
@@ -550,10 +551,18 @@ export class PaymentsService {
      */
 
     // Planned lessons for the full month (ignore group boundaries)
+    // Use group.startDate and group.endDate for group boundaries, but calculate lessons for full month
+    const groupStartDate = group.startDate
+      ? dayjs(group.startDate).tz(timezone).format('YYYY-MM-DD')
+      : monthStart.format('YYYY-MM-DD');
+    const groupEndDate = group.endDate
+      ? dayjs(group.endDate).tz(timezone).format('YYYY-MM-DD')
+      : null;
+
     const plannedDates = computeLessonDates({
       timezone,
-      groupStartDate: monthStart.format('YYYY-MM-DD'),
-      groupEndDate: monthEnd.format('YYYY-MM-DD'),
+      groupStartDate,
+      groupEndDate,
       schedules: group.schedules ?? [],
       window: {
         mode: 'range',
@@ -1431,6 +1440,102 @@ export class PaymentsService {
         perPage,
         totalPages: Math.ceil(total / perPage),
       },
+    };
+  }
+
+  async calculatePayment(id: number, dto: CalculatePaymentDto) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id },
+      relations: ['student', 'group', 'group.schedules'],
+    });
+    if (!payment) throw new NotFoundException("To'lov topilmadi");
+
+    if (!payment.group || !payment.student) {
+      throw new BadRequestException(
+        "Payment student yoki group ma'lumotlari topilmadi",
+      );
+    }
+
+    if (!payment.group.schedules || payment.group.schedules.length === 0) {
+      throw new BadRequestException("Group'da schedule ma'lumotlari topilmadi");
+    }
+
+    const forMonth = dayjs(payment.forMonth)
+      .startOf('month')
+      .format('YYYY-MM-01');
+
+    const studentActiveStart = this.computeStudentActiveStartForMonth({
+      student: payment.student,
+      group: payment.group,
+      forMonth,
+    });
+
+    // Parse plannedStudyUntilDate (can be ISO string or YYYY-MM-DD)
+    const plannedEndDate = dayjs(dto.plannedStudyUntilDate)
+      .startOf('day')
+      .format('YYYY-MM-DD');
+    const plannedEndExclusive = dayjs(plannedEndDate)
+      .add(1, 'day')
+      .format('YYYY-MM-DD');
+
+    const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts({
+      group: payment.group,
+      forMonth,
+      studentActiveStart,
+      studentActiveEndExclusive: plannedEndExclusive,
+    });
+
+    if (lessonsPlanned === 0) {
+      throw new BadRequestException('Bu oy uchun darslar rejalashtirilmagan');
+    }
+
+    const { percent: discountPercent } = await this.resolveDiscountForMonth({
+      student: payment.student,
+      forMonth,
+    });
+
+    const amountDue = this.computeAmountDue({
+      student: payment.student,
+      group: payment.group,
+      lessonsPlanned,
+      lessonsBillable,
+      discountPercent,
+    });
+
+    // Get pending receipts amount
+    const pendingRaw = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select([
+        'COALESCE(SUM(r.amount), 0) as "pendingAmount"',
+        'COUNT(r.id) as "pendingReceiptsCount"',
+      ])
+      .where('r.paymentId = :paymentId', { paymentId: id })
+      .andWhere('r.status = :status', {
+        status: PaymentReceiptStatus.PENDING,
+      })
+      .getRawOne<{ pendingAmount: string; pendingReceiptsCount: string }>();
+
+    const pendingAmount = Number(pendingRaw?.pendingAmount ?? 0);
+    const currentAmountPaid = Number(payment.amountPaid ?? 0);
+    const totalPaid = currentAmountPaid + pendingAmount;
+    const remainingAmount = this.round2(Math.max(0, amountDue - totalPaid));
+
+    return {
+      paymentId: payment.id,
+      studentId: payment.studentId,
+      studentName: `${payment.student.firstName} ${payment.student.lastName}`,
+      forMonth: dayjs(payment.forMonth).format('YYYY-MM-DD'),
+      plannedStudyUntilDate: plannedEndDate,
+      lessonsPlanned,
+      lessonsBillable,
+      discountPercent,
+      amountDue,
+      currentAmountDue: Number(payment.amountDue ?? 0),
+      currentAmountPaid,
+      pendingAmount,
+      totalPaid,
+      remainingAmount,
+      difference: this.round2(amountDue - Number(payment.amountDue ?? 0)),
     };
   }
 
