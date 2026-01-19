@@ -88,6 +88,15 @@ export class PaymentResponseDto {
   })
   lessonsBillable: number;
 
+  @ApiProperty({
+    example: '2026-01-20',
+    required: false,
+    nullable: true,
+    description:
+      'Planned study end date for this month (YYYY-MM-DD). If set, student plans to study only until this date (inclusive). Used to calculate prorated payment amount.',
+  })
+  plannedStudyUntilDate?: string | null;
+
   @ApiProperty({ enum: PaymentStatus, example: PaymentStatus.PARTIAL })
   status: PaymentStatus;
 

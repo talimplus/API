@@ -1,7 +1,7 @@
 import { PaginatedPaymentResponseDto } from '@/modules/payments/dto/paginated-payment-response.dto';
 import { PaymentResponseDto } from '@/modules/payments/dto/payment-reponse.dto';
 import { PaymentStatus } from '@/modules/payments/entities/payment.entity';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { Roles } from '@/decorators/roles.decorator';
@@ -13,7 +13,9 @@ import {
   Put,
   Query,
   Req,
+  Body,
 } from '@nestjs/common';
+import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -158,5 +160,21 @@ export class PaymentsController {
   @ApiResponse({ type: PaymentResponseDto })
   async getOne(@Param('id', ParseIntPipe) id: number) {
     return this.paymentsService.findOne(id);
+  }
+
+  @Put(':id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({
+    summary: 'Update payment (e.g., set planned study end date)',
+    description:
+      'Update payment details like plannedStudyUntilDate. Recalculates amountDue based on prorated lessons.',
+  })
+  @ApiBody({ type: UpdatePaymentDto })
+  @ApiResponse({ type: PaymentResponseDto })
+  async updatePayment(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePaymentDto,
+  ) {
+    return this.paymentsService.updatePayment(id, dto);
   }
 }

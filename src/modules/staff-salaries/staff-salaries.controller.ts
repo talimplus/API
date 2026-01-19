@@ -81,8 +81,9 @@ export class StaffSalariesController {
   async pay(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: PayStaffSalaryDto,
+    @Req() req: any,
   ) {
-    return this.staffSalariesService.pay(id, dto);
+    return this.staffSalariesService.pay(id, dto, req.user);
   }
 }
 

@@ -32,6 +32,19 @@ export class PaymentReceipt {
   @Column({ type: 'numeric', precision: 14, scale: 2 })
   amount: number;
 
+  /**
+   * Snapshot of receiver commission percent at confirmation time.
+   * Applied only for MANAGER/RECEPTION if they have commissionPercentage.
+   */
+  @Column({ type: 'numeric', precision: 5, scale: 2, nullable: true })
+  receiverCommissionPercentSnapshot?: number | null;
+
+  /**
+   * Snapshot of receiver commission amount (amount * percent / 100) at confirmation time.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  receiverCommissionAmountSnapshot?: number | null;
+
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'receivedById' })
   receivedBy?: User | null;

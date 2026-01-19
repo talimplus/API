@@ -78,6 +78,15 @@ export class Payment {
   @Column({ type: 'int', nullable: true })
   lessonsBillable: number | null;
 
+  /**
+   * Planned study end date for this month (YYYY-MM-DD).
+   * If set, student plans to study only until this date (inclusive).
+   * Used to calculate prorated payment amount.
+   * Example: If student says "I'll study until 20th", set this to "2026-01-20".
+   */
+  @Column({ type: 'date', nullable: true })
+  plannedStudyUntilDate?: Date | null;
+
   @Column({
     type: 'enum',
     enum: PaymentStatus,

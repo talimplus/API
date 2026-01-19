@@ -27,6 +27,8 @@ import {
   PaymentReceipt,
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
+import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
+import { User } from '@/modules/users/entities/user.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -36,6 +38,8 @@ export class PaymentsService {
     private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(PaymentReceipt)
     private readonly receiptRepo: Repository<PaymentReceipt>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     @InjectRepository(Student)
     private readonly studentRepo: Repository<Student>,
     @InjectRepository(StudentDiscountPeriod)
@@ -45,6 +49,31 @@ export class PaymentsService {
     @Inject(forwardRef(() => TeacherEarningsService))
     private readonly teacherEarningsService: TeacherEarningsService,
   ) {}
+
+  private async computeReceiverCommissionSnapshot(args: {
+    receivedById?: number | null;
+    amount: number;
+  }): Promise<{ percent: number; amount: number }> {
+    const receivedById = args.receivedById ?? null;
+    if (!receivedById) return { percent: 0, amount: 0 };
+
+    const user = await this.userRepo.findOne({ where: { id: receivedById } });
+    if (!user) return { percent: 0, amount: 0 };
+
+    if (![UserRole.MANAGER, UserRole.RECEPTION].includes(user.role)) {
+      return { percent: 0, amount: 0 };
+    }
+    const percent = Math.max(
+      0,
+      Math.min(100, Number(user.commissionPercentage ?? 0)),
+    );
+    if (percent <= 0) return { percent: 0, amount: 0 };
+
+    const commissionAmount = this.round2(
+      Number(args.amount ?? 0) * (percent / 100),
+    );
+    return { percent, amount: commissionAmount };
+  }
   private async applyConfirmedMoneyToPayment(args: {
     payment: Payment;
     addAmount: number;
@@ -124,6 +153,16 @@ export class PaymentsService {
       comment: comment ?? null,
     });
 
+    // If already confirmed (admin took money), store receiver commission snapshot
+    if (isAdmin) {
+      const snap = await this.computeReceiverCommissionSnapshot({
+        receivedById: currentUser.userId,
+        amount: amt,
+      });
+      receipt.receiverCommissionPercentSnapshot = snap.percent as any;
+      receipt.receiverCommissionAmountSnapshot = snap.amount as any;
+    }
+
     const savedReceipt = await this.receiptRepo.save(receipt);
 
     if (isAdmin) {
@@ -192,6 +231,13 @@ export class PaymentsService {
     receipt.status = PaymentReceiptStatus.CONFIRMED;
     receipt.confirmedById = currentUser.userId;
     receipt.confirmedAt = new Date();
+
+    const snap = await this.computeReceiverCommissionSnapshot({
+      receivedById: receipt.receivedById ?? null,
+      amount: Number(receipt.amount ?? 0),
+    });
+    receipt.receiverCommissionPercentSnapshot = snap.percent as any;
+    receipt.receiverCommissionAmountSnapshot = snap.amount as any;
     const savedReceipt = await this.receiptRepo.save(receipt);
 
     return { receipt: savedReceipt, payment: updatedPayment };
@@ -766,11 +812,15 @@ export class PaymentsService {
         group: p.group,
         forMonth,
       });
+      const plannedEndExclusive = p.plannedStudyUntilDate
+        ? dayjs(p.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
+        : undefined;
       const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
         {
           group: p.group,
           forMonth,
           studentActiveStart,
+          studentActiveEndExclusive: plannedEndExclusive,
         },
       );
 
@@ -1384,6 +1434,90 @@ export class PaymentsService {
     };
   }
 
+  async updatePayment(id: number, dto: UpdatePaymentDto) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id },
+      relations: ['student', 'group'],
+    });
+    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+
+    // If payment is already paid, don't allow changes
+    if (payment.status === PaymentStatus.PAID && payment.amountPaid > 0) {
+      throw new BadRequestException(
+        'To‘lov allaqachon to‘langan, o‘zgartirib bo‘lmaydi',
+      );
+    }
+
+    // Update plannedStudyUntilDate
+    if (dto.plannedStudyUntilDate !== undefined) {
+      payment.plannedStudyUntilDate = dto.plannedStudyUntilDate
+        ? (dayjs(dto.plannedStudyUntilDate).startOf('day').toDate() as any)
+        : null;
+    }
+
+    // Recalculate amountDue based on new plannedStudyUntilDate
+    const forMonth = dayjs(payment.forMonth)
+      .startOf('month')
+      .format('YYYY-MM-01');
+
+    const studentActiveStart = this.computeStudentActiveStartForMonth({
+      student: payment.student!,
+      group: payment.group!,
+      forMonth,
+    });
+
+    const plannedEndExclusive = payment.plannedStudyUntilDate
+      ? dayjs(payment.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
+      : undefined;
+
+    const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts({
+      group: payment.group!,
+      forMonth,
+      studentActiveStart,
+      studentActiveEndExclusive: plannedEndExclusive,
+    });
+
+    const { percent: discountPercent } = await this.resolveDiscountForMonth({
+      student: payment.student!,
+      forMonth,
+    });
+
+    const amountDue = this.computeAmountDue({
+      student: payment.student!,
+      group: payment.group!,
+      lessonsPlanned,
+      lessonsBillable,
+      discountPercent,
+    });
+
+    // Update payment fields
+    payment.lessonsPlanned = lessonsPlanned;
+    payment.lessonsBillable = lessonsBillable;
+    payment.amountDue = amountDue as any;
+
+    // Adjust amountPaid if it exceeds new amountDue
+    const currentPaid = Number(payment.amountPaid ?? 0);
+    if (currentPaid > amountDue) {
+      payment.amountPaid = amountDue as any;
+    }
+
+    // Update status
+    if (payment.amountPaid >= amountDue) {
+      payment.status = PaymentStatus.PAID;
+    } else if (payment.amountPaid > 0) {
+      payment.status = PaymentStatus.PARTIAL;
+    } else {
+      payment.status = PaymentStatus.UNPAID;
+    }
+
+    const saved = await this.paymentRepo.save(payment);
+
+    // Trigger teacher earnings recalculation
+    void this.triggerTeacherEarningsRecalcForPayment(saved.id).catch(() => {});
+
+    return this.findOne(saved.id);
+  }
+
   async findOne(id: number) {
     const payment = await this.paymentRepo.findOne({
       where: { id },
@@ -1391,8 +1525,7 @@ export class PaymentsService {
     });
     if (!payment) throw new NotFoundException('To‘lov topilmadi');
 
-    const timezone = (payment as any).group?.timezone || 'Asia/Tashkent';
-    const today = dayjs().tz(timezone).format('YYYY-MM-DD');
+    const today = dayjs().format('YYYY-MM-DD');
     const hardDue = (payment as any).hardDueDate
       ? dayjs((payment as any).hardDueDate).format('YYYY-MM-DD')
       : null;
@@ -1453,6 +1586,9 @@ export class PaymentsService {
       discountBreakdown: discount.breakdown,
       lessonsPlanned: (payment as any).lessonsPlanned ?? 0,
       lessonsBillable: (payment as any).lessonsBillable ?? 0,
+      plannedStudyUntilDate: (payment as any).plannedStudyUntilDate
+        ? dayjs((payment as any).plannedStudyUntilDate).format('YYYY-MM-DD')
+        : null,
     };
   }
 }

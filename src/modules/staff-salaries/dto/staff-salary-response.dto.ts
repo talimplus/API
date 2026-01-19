@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
+import { StaffSalaryPaymentHistoryDto } from '@/modules/staff-salaries/dto/staff-salary-payment-history.dto';
 
 export class StaffSalaryResponseDto {
   @ApiProperty({ example: 1 })
@@ -26,6 +27,12 @@ export class StaffSalaryResponseDto {
 
   @ApiProperty({ example: 'Paid cash', required: false, nullable: true })
   comment?: string | null;
+
+  @ApiProperty({
+    type: [StaffSalaryPaymentHistoryDto],
+    description: 'History of all payments made for this salary',
+  })
+  paymentHistory: StaffSalaryPaymentHistoryDto[];
 
   @ApiProperty({ example: '2026-01-01T09:00:00.000Z' })
   createdAt: string;
