@@ -21,10 +21,14 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterAuthDto) {
-    const { login, password, organizationName, firstName, lastName, phone } =
+    const { login, email, password, organizationName, firstName, lastName, phone } =
       dto;
+    const effectiveLogin = email || login;
+    if (!effectiveLogin) {
+      throw new ConflictException('login yoki email bo\'lishi kerak');
+    }
 
-    const existing = await this.usersService.findByLogin(login);
+    const existing = await this.usersService.findByLogin(effectiveLogin);
     if (existing) throw new ConflictException('Email allaqachon mavjud');
 
     const organization = await this.organizationsService.create({
@@ -36,7 +40,7 @@ export class AuthService {
       {
         firstName,
         lastName,
-        login,
+        login: effectiveLogin,
         phone,
         password,
         role: UserRole.ADMIN,
