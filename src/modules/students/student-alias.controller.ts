@@ -4,6 +4,8 @@ import { StudentsService } from '@/modules/students/students.service';
 import { PaginatedStudentResponseDto } from '@/modules/students/dto/paginate-student-response.dto';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
+import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
 
 @ApiTags('Students')
 @Controller('student')
@@ -23,6 +25,18 @@ export class StudentAliasController {
     required: false,
     enum: StudentReturnLikelihood,
   })
+  @ApiQuery({
+    name: 'preferredTime',
+    required: false,
+    enum: StudentPreferredTime,
+  })
+  @ApiQuery({
+    name: 'preferredDays',
+    required: false,
+    type: [String],
+    description:
+      'Array of preferred days (e.g., preferredDays=monday&preferredDays=tuesday)',
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
   async findAll(
@@ -33,9 +47,18 @@ export class StudentAliasController {
     @Query('status') status?: StudentStatus,
     @Query('groupId') groupId?: number,
     @Query('returnLikelihood') returnLikelihood?: StudentReturnLikelihood,
+    @Query('preferredTime') preferredTime?: StudentPreferredTime,
+    @Query('preferredDays') preferredDays?: string | string[],
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
+    // Handle preferredDays as array (can be single value or array)
+    const preferredDaysArray = preferredDays
+      ? Array.isArray(preferredDays)
+        ? preferredDays
+        : [preferredDays]
+      : undefined;
+
     return this.studentsService.findAll(
       req.user.organizationId,
       {
@@ -45,6 +68,8 @@ export class StudentAliasController {
         status: status ?? StudentStatus.ACTIVE,
         groupId,
         returnLikelihood,
+        preferredTime,
+        preferredDays: preferredDaysArray as WeekDay[] | undefined,
         page: page ? +page : 1,
         perPage: perPage ? +perPage : 10,
       },

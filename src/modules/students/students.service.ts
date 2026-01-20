@@ -32,6 +32,8 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { CurrentUser } from '@/common/types/current.user';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 import { ValidationException } from '@/common/exceptions/validation.exception';
+import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
 
 @Injectable()
 export class StudentsService {
@@ -67,6 +69,8 @@ export class StudentsService {
       perPage = 10,
       groupId,
       returnLikelihood,
+      preferredTime,
+      preferredDays,
     }: {
       centerId?: number;
       name?: string;
@@ -76,6 +80,8 @@ export class StudentsService {
       perPage?: number;
       groupId?: number;
       returnLikelihood?: StudentReturnLikelihood;
+      preferredTime?: StudentPreferredTime;
+      preferredDays?: WeekDay[];
     },
     currentUser: CurrentUser,
   ) {
@@ -143,6 +149,19 @@ export class StudentsService {
         )`,
         { groupId },
       );
+    }
+
+    if (preferredTime) {
+      query.andWhere('student.preferredTime = :preferredTime', {
+        preferredTime,
+      });
+    }
+
+    if (preferredDays && preferredDays.length > 0) {
+      // PostgreSQL array contains operator: check if student.preferredDays contains any of the provided days
+      query.andWhere('student.preferredDays && ARRAY[:...preferredDays]', {
+        preferredDays,
+      });
     }
 
     const [data, total] = await query
