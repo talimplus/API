@@ -16,6 +16,7 @@ import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
 import { Payment } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
+import { Subject } from '@/modules/subjects/entities/subjects.entity';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
       Referral,
       Payment,
       Center,
+      Subject,
     ]),
     CentersModule,
     UsersModule,

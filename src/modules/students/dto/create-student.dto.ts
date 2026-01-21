@@ -192,4 +192,13 @@ export class CreateStudentDto {
     type: [Number],
   })
   groupIds?: number[];
+
+  @ApiProperty({
+    example: 1,
+    description: "O'quvchi fan IDsi (optional)",
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  subjectId?: number;
 }

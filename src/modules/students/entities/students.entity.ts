@@ -20,6 +20,7 @@ import { StudentDiscountPeriod } from '@/modules/students/entities/student-disco
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
+import { Subject } from '@/modules/subjects/entities/subjects.entity';
 
 @Entity('students')
 export class Student {
@@ -119,6 +120,13 @@ export class Student {
     onDelete: 'CASCADE',
   })
   user: User;
+
+  @ManyToOne(() => Subject, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'subjectId' })
+  subject?: Subject | null;
+
+  @Column({ nullable: true })
+  subjectId?: number | null;
 
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;

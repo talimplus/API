@@ -59,6 +59,11 @@ export class StudentsController {
     description:
       'Array of preferred days (e.g., preferredDays=monday&preferredDays=tuesday)',
   })
+  @ApiQuery({
+    name: 'subjectId',
+    required: false,
+    description: 'Filter by subject ID',
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
   async findAll(
@@ -71,6 +76,7 @@ export class StudentsController {
     @Query('returnLikelihood') returnLikelihood?: StudentReturnLikelihood,
     @Query('preferredTime') preferredTime?: StudentPreferredTime,
     @Query('preferredDays') preferredDays?: string | string[],
+    @Query('subjectId') subjectId?: number,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
@@ -92,6 +98,7 @@ export class StudentsController {
         returnLikelihood,
         preferredTime,
         preferredDays: preferredDaysArray as WeekDay[] | undefined,
+        subjectId: subjectId ? +subjectId : undefined,
         page: page ? +page : 1,
         perPage: perPage ? +perPage : 10,
       },

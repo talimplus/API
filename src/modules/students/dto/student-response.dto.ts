@@ -4,6 +4,7 @@ import { StudentDiscountPeriodResponseDto } from '@/modules/students/dto/student
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
+import { SubjectResponseDto } from '@/modules/subjects/dto/subject-response.dto';
 
 export class StudentResponseDto {
   @ApiProperty({ example: 1 })
@@ -142,4 +143,12 @@ export class StudentResponseDto {
       'Optional month-based discount periods (if any). If present, overrides discountPercent for matching months.',
   })
   discountPeriods?: StudentDiscountPeriodResponseDto[];
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    type: () => SubjectResponseDto,
+    description: "O'quvchi fan ma'lumotlari (optional)",
+  })
+  subject?: SubjectResponseDto | null;
 }

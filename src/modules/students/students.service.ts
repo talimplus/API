@@ -34,6 +34,7 @@ import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihoo
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { Subject } from '@/modules/subjects/entities/subjects.entity';
 
 @Injectable()
 export class StudentsService {
@@ -50,6 +51,8 @@ export class StudentsService {
     private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(Center)
     private readonly centerRepo: Repository<Center>,
+    @InjectRepository(Subject)
+    private readonly subjectRepo: Repository<Subject>,
     private readonly centerService: CentersService,
     private readonly userService: UsersService,
     private readonly organizationsService: OrganizationsService,
@@ -71,6 +74,7 @@ export class StudentsService {
       returnLikelihood,
       preferredTime,
       preferredDays,
+      subjectId,
     }: {
       centerId?: number;
       name?: string;
@@ -82,6 +86,7 @@ export class StudentsService {
       returnLikelihood?: StudentReturnLikelihood;
       preferredTime?: StudentPreferredTime;
       preferredDays?: WeekDay[];
+      subjectId?: number;
     },
     currentUser: CurrentUser,
   ) {
@@ -107,7 +112,9 @@ export class StudentsService {
     const query = this.studentRepo
       .createQueryBuilder('student')
       // load group ids without joining (keeps pagination stable)
-      .loadRelationIdAndMap('student._groupIds', 'student.groups');
+      .loadRelationIdAndMap('student._groupIds', 'student.groups')
+      // load subject relation
+      .leftJoinAndSelect('student.subject', 'subject');
 
     if (resolvedCenterId) {
       query.where('student.centerId = :centerId', {
@@ -164,6 +171,10 @@ export class StudentsService {
       });
     }
 
+    if (subjectId) {
+      query.andWhere('student.subjectId = :subjectId', { subjectId });
+    }
+
     const [data, total] = await query
       .orderBy('student.createdAt', 'DESC')
       .skip(skip)
@@ -214,6 +225,12 @@ export class StudentsService {
           : [],
         referrerId: referrerByReferred.get(s.id) ?? null,
         discountPeriods: discountPeriodsByStudent.get(s.id) ?? [],
+        subject: s.subject
+          ? {
+              id: s.subject.id,
+              name: s.subject.name,
+            }
+          : null,
       };
 
       // Sensitive fields: only ADMIN/SUPER_ADMIN should see in list responses
@@ -307,7 +324,7 @@ export class StudentsService {
   async findById(id: number) {
     const student = await this.studentRepo.findOne({
       where: { id },
-      relations: ['user', 'center', 'groups', 'discountPeriods'],
+      relations: ['user', 'center', 'groups', 'discountPeriods', 'subject'],
     });
 
     if (!student) throw new NotFoundException('O‘quvchi topilmadi');
@@ -334,6 +351,12 @@ export class StudentsService {
     });
 
     result.centerId = (student as any).centerId ?? student.center?.id ?? null;
+    result.subject = student.subject
+      ? {
+          id: student.subject.id,
+          name: student.subject.name,
+        }
+      : null;
     result.groupIds = (student as any).groups?.map((g: any) => g.id) ?? [];
     result.referrerId = referral?.referrerStudentId ?? null;
     result.discountPeriods = ((student as any).discountPeriods ?? []).map(
@@ -693,6 +716,19 @@ export class StudentsService {
       throw new BadRequestException('Bunday organizatsiya mavjud emas');
     }
 
+    // Validate and load subject if provided
+    let subject: Subject | null = null;
+    if (dto.subjectId) {
+      subject = await this.subjectRepo.findOne({
+        where: { id: dto.subjectId, center: { id: effectiveCenterId } },
+      });
+      if (!subject) {
+        throw new BadRequestException(
+          "Bunday fan topilmadi yoki bu center'ga tegishli emas",
+        );
+      }
+    }
+
     const groupIds = dto.groupIds;
     const safeGroupIds = Array.isArray(groupIds) ? groupIds : [];
     const groups =
@@ -747,6 +783,8 @@ export class StudentsService {
       center,
       user,
       groups: groups,
+      subject: subject ?? null,
+      subjectId: subject?.id ?? null,
     });
 
     const savedStudent = await this.studentRepo.save(student);
@@ -860,6 +898,27 @@ export class StudentsService {
       if (!center) throw new NotFoundException('Bunday center mavjud emas');
       (student as any).center = center as any;
       (student as any).centerId = center.id;
+    }
+
+    // Handle subjectId update
+    if (dto.subjectId !== undefined) {
+      const effectiveCenterId = student.centerId;
+      if (dto.subjectId === null) {
+        student.subject = null;
+        student.subjectId = null;
+      } else {
+        const subject = await this.subjectRepo.findOne({
+          where: { id: dto.subjectId, center: { id: effectiveCenterId } },
+        });
+        if (!subject) {
+          throw new BadRequestException(
+            "Bunday fan topilmadi yoki bu center'ga tegishli emas",
+          );
+        }
+        student.subject = subject;
+        student.subjectId = subject.id;
+      }
+      delete (dto as any).subjectId; // Remove from dto to avoid Object.assign issues
     }
 
     Object.assign(student, dto);
