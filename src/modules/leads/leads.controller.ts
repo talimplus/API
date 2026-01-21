@@ -43,6 +43,11 @@ export class LeadsController {
   @ApiQuery({ name: 'phone', required: false })
   @ApiQuery({ name: 'status', required: false, enum: LeadStatus })
   @ApiQuery({ name: 'groupId', required: false })
+  @ApiQuery({
+    name: 'followUpDate',
+    required: false,
+    description: "Filter by follow-up date. Use 'today' for today's date or YYYY-MM-DD format for specific date",
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
   @ApiResponse({ type: PaginatedLeadResponseDto })
@@ -53,6 +58,7 @@ export class LeadsController {
     @Query('phone') phone?: string,
     @Query('status') status?: LeadStatus,
     @Query('groupId') groupId?: number,
+    @Query('followUpDate') followUpDate?: string,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
@@ -64,6 +70,7 @@ export class LeadsController {
         phone,
         status,
         groupId: groupId ? +groupId : undefined,
+        followUpDate,
         page: page ? +page : 1,
         perPage: perPage ? +perPage : 10,
       },

@@ -13,6 +13,7 @@ import {
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { LeadStatus } from '@/modules/leads/enums/lead-status.enum';
+import { IsDateString } from 'class-validator';
 
 export class CreateLeadDto {
   @ApiProperty({ example: '998901234567', description: 'Lead phone (required)' })
@@ -120,5 +121,14 @@ export class CreateLeadDto {
   @IsOptional()
   @IsNumber()
   centerId?: number;
+
+  @ApiProperty({
+    example: '2026-01-20',
+    required: false,
+    description: 'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
+  })
+  @IsOptional()
+  @IsDateString()
+  followUpDate?: string;
 }
 

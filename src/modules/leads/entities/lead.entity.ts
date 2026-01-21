@@ -77,6 +77,12 @@ export class Lead {
   @Column({ nullable: true })
   studentId?: number | null;
 
+  /**
+   * Follow-up date: when to contact the lead again (for follow-up calls).
+   */
+  @Column({ type: 'date', nullable: true })
+  followUpDate?: Date | null;
+
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'centerId' })
   center: Center;

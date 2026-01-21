@@ -65,6 +65,14 @@ export class LeadResponseDto {
   })
   studentId?: number | null;
 
+  @ApiProperty({
+    example: '2026-01-20',
+    required: false,
+    nullable: true,
+    description: 'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
+  })
+  followUpDate?: string | null;
+
   @ApiProperty({ example: '2026-01-17T10:00:00.000Z' })
   createdAt: string;
 

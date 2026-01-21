@@ -62,6 +62,7 @@ export class LeadsService {
       page = 1,
       perPage = 10,
       groupId,
+      followUpDate,
     }: {
       centerId?: number;
       name?: string;
@@ -70,6 +71,7 @@ export class LeadsService {
       page?: number;
       perPage?: number;
       groupId?: number;
+      followUpDate?: string; // Filter by followUpDate (e.g., '2026-01-20' or 'today' for today's date)
     },
     currentUser: CurrentUser,
   ) {
@@ -122,6 +124,21 @@ export class LeadsService {
       );
     }
 
+    if (followUpDate) {
+      if (followUpDate === 'today') {
+        // Filter leads with followUpDate equal to today
+        const today = dayjs().format('YYYY-MM-DD');
+        query.andWhere('lead.followUpDate = :followUpDate', {
+          followUpDate: today,
+        });
+      } else {
+        // Filter by specific date
+        query.andWhere('lead.followUpDate = :followUpDate', {
+          followUpDate,
+        });
+      }
+    }
+
     const [data, total] = await query
       .orderBy('lead.createdAt', 'DESC')
       .skip(skip)
@@ -138,6 +155,7 @@ export class LeadsService {
         createdAt: l.createdAt?.toISOString?.() ?? String(l.createdAt),
         updatedAt: l.updatedAt?.toISOString?.() ?? String(l.updatedAt),
         birthDate: l.birthDate ? dayjs(l.birthDate).format('YYYY-MM-DD') : null,
+        followUpDate: l.followUpDate ? dayjs(l.followUpDate).format('YYYY-MM-DD') : null,
       };
 
       if (!isAdmin) {
@@ -204,6 +222,7 @@ export class LeadsService {
       passportNumber: dto.passportNumber ?? null,
       jshshir: dto.jshshir ?? null,
       status: dto.status ?? LeadStatus.NEW,
+      followUpDate: dto.followUpDate ? new Date(dto.followUpDate) : null,
       studentId: null,
       centerId,
       center: { id: centerId } as any,
@@ -267,6 +286,9 @@ export class LeadsService {
     if (dto.passportNumber !== undefined) lead.passportNumber = dto.passportNumber ?? null;
     if (dto.jshshir !== undefined) lead.jshshir = dto.jshshir ?? null;
     if (dto.status !== undefined) lead.status = dto.status ?? LeadStatus.NEW;
+    if (dto.followUpDate !== undefined) {
+      lead.followUpDate = dto.followUpDate ? new Date(dto.followUpDate) : null;
+    }
 
     if (dto.groupIds !== undefined) {
       lead.groups =
