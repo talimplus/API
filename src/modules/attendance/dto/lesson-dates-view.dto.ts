@@ -34,9 +34,37 @@ export class LessonDatesViewDto {
   @ApiProperty({
     example: ['2026-01-01', '2026-01-03', '2026-01-06'],
     description:
-      'Computed lesson dates (schedule-driven only). This does NOT mean attendance exists.',
+      'Computed lesson dates (schedule-driven, plus rescheduled extra lessons). This does NOT mean attendance exists.',
   })
   lessonDates: string[];
+
+  @ApiProperty({
+    example: {
+      '2026-01-06': {
+        type: 'cancelled',
+        movedTo: '2026-01-08',
+        reason: 'Teacher is sick',
+      },
+      '2026-01-08': {
+        type: 'extra',
+        movedFrom: '2026-01-06',
+        reason: 'Teacher is sick',
+      },
+    },
+    description:
+      'Optional overrides for lesson dates (rescheduled lessons). Keyed by date.',
+    required: false,
+  })
+  overridesByDate?: Record<
+    string,
+    {
+      type: 'cancelled' | 'extra';
+      movedFrom?: string;
+      movedTo?: string;
+      reason?: string | null;
+      id?: number;
+    }
+  >;
 
   @ApiProperty({
     example: {

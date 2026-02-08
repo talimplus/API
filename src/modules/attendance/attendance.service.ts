@@ -1,7 +1,9 @@
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
+import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 import { AttendanceStatus } from '@/modules/attendance/enums/attendance-status.enum';
 import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-dates.query.dto';
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
+import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { dayjs } from '@/shared/utils/dayjs';
@@ -20,6 +22,9 @@ export class AttendanceService {
   constructor(
     @InjectRepository(Attendance)
     private readonly attendanceRepo: Repository<Attendance>,
+
+    @InjectRepository(AttendanceLessonOverride)
+    private readonly overrideRepo: Repository<AttendanceLessonOverride>,
 
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
@@ -63,6 +68,33 @@ export class AttendanceService {
 
   private getTodayInGroupTz(timezone: string): string {
     return dayjs().tz(timezone).format('YYYY-MM-DD');
+  }
+
+  private formatDateOnly(input: Date | string): string {
+    return dayjs(input).format('YYYY-MM-DD');
+  }
+
+  private async findOverrideForDate(groupId: number, lessonDate: string) {
+    return this.overrideRepo.findOne({
+      where: [
+        { groupId, fromDate: lessonDate as any },
+        { groupId, toDate: lessonDate as any },
+      ],
+    });
+  }
+
+  private async getOverridesForRange(
+    groupId: number,
+    from: string,
+    to: string,
+  ) {
+    return this.overrideRepo.find({
+      where: [
+        { groupId, fromDate: Between(from as any, to as any) },
+        { groupId, toDate: Between(from as any, to as any) },
+      ],
+      order: { fromDate: 'ASC' },
+    });
   }
 
   private computeLessonDatesForGroup(
@@ -120,20 +152,106 @@ export class AttendanceService {
 
     const lessonDates = this.computeLessonDatesForGroup(group, query);
     if (!lessonDates.length) {
-      return { timezone, today, lessonDates: [], attendanceByDate: {} };
+      if (query.mode === 'range' && (query.from || query.to)) {
+        const startDate = dayjs(group.startDate).format('YYYY-MM-DD');
+        const from = query.from ?? startDate;
+        const to = query.to ?? today;
+        const overrides = await this.getOverridesForRange(groupId, from, to);
+
+        const overridesByDate: Record<string, any> = {};
+        const extraDates: string[] = [];
+
+        for (const o of overrides) {
+          const fromDate = this.formatDateOnly(o.fromDate);
+          const toDate = this.formatDateOnly(o.toDate);
+          overridesByDate[fromDate] = {
+            id: o.id,
+            type: 'cancelled',
+            movedTo: toDate,
+            reason: o.reason ?? null,
+          };
+          overridesByDate[toDate] = {
+            id: o.id,
+            type: 'extra',
+            movedFrom: fromDate,
+            reason: o.reason ?? null,
+          };
+          if (!extraDates.includes(toDate)) extraDates.push(toDate);
+        }
+
+        const uniqueDates = Array.from(new Set(extraDates)).sort();
+        const attendanceByDate: Record<string, any> = {};
+        for (const d of uniqueDates) {
+          attendanceByDate[d] = { exists: false, rows: [] };
+        }
+
+        return {
+          timezone,
+          today,
+          lessonDates: uniqueDates,
+          overridesByDate,
+          attendanceByDate,
+        };
+      }
+
+      return {
+        timezone,
+        today,
+        lessonDates: [],
+        attendanceByDate: {},
+      };
     }
+
+    const rangeFrom =
+      query.mode === 'range' && (query.from || query.to)
+        ? query.from ?? dayjs(group.startDate).format('YYYY-MM-DD')
+        : lessonDates[0];
+    const rangeTo =
+      query.mode === 'range' && (query.from || query.to)
+        ? query.to ?? today
+        : lessonDates[lessonDates.length - 1];
+
+    const overrides =
+      rangeFrom && rangeTo
+        ? await this.getOverridesForRange(groupId, rangeFrom, rangeTo)
+        : [];
+
+    const overridesByDate: Record<string, any> = {};
+    const extraDates: string[] = [];
+
+    for (const o of overrides) {
+      const fromDate = this.formatDateOnly(o.fromDate);
+      const toDate = this.formatDateOnly(o.toDate);
+      overridesByDate[fromDate] = {
+        id: o.id,
+        type: 'cancelled',
+        movedTo: toDate,
+        reason: o.reason ?? null,
+      };
+      overridesByDate[toDate] = {
+        id: o.id,
+        type: 'extra',
+        movedFrom: fromDate,
+        reason: o.reason ?? null,
+      };
+      if (!extraDates.includes(toDate)) extraDates.push(toDate);
+    }
+
+    const combinedDates = Array.from(
+      new Set([...lessonDates, ...extraDates]),
+    ).sort();
 
     const rows = await this.attendanceRepo.find({
       where: {
         groupId,
-        lessonDate: In(lessonDates as any),
+        lessonDate: In(combinedDates as any),
       },
       relations: ['student'],
       order: { lessonDate: 'ASC', studentId: 'ASC' },
     });
 
     const byDate: Record<string, any> = {};
-    for (const d of lessonDates) {
+    for (const d of combinedDates) {
       byDate[d] = { exists: false, rows: [] };
     }
 
@@ -155,7 +273,13 @@ export class AttendanceService {
       });
     }
 
-    return { timezone, today, lessonDates, attendanceByDate: byDate };
+    return {
+      timezone,
+      today,
+      lessonDates: combinedDates,
+      overridesByDate,
+      attendanceByDate: byDate,
+    };
   }
 
   async submitAttendance(groupId: number, dto: SubmitAttendanceDto, user: any) {
@@ -184,22 +308,36 @@ export class AttendanceService {
       throw new ForbiddenException('Cannot submit for future dates');
     }
 
-    // Validate lessonDate is a real lesson date (schedule + boundaries only)
+    // Validate lessonDate is a real lesson date (schedule + overrides + boundaries)
+    const override = await this.findOverrideForDate(groupId, dto.lessonDate);
+    if (override) {
+      const fromDate = this.formatDateOnly(override.fromDate);
+      const toDate = this.formatDateOnly(override.toDate);
+      if (fromDate === dto.lessonDate) {
+        throw new BadRequestException(
+          `lessonDate was rescheduled to ${toDate}`,
+        );
+      }
+      // toDate is allowed for attendance submission
+    }
+
     const groupStartDate = dayjs(group.startDate).format('YYYY-MM-DD');
     const groupEndDate = group.endDate
       ? dayjs(group.endDate).format('YYYY-MM-DD')
       : null;
-    const valid = computeLessonDates({
-      timezone,
-      groupStartDate,
-      groupEndDate,
-      schedules: group.schedules,
-      window: { mode: 'range', from: dto.lessonDate, to: dto.lessonDate },
-    });
-    if (!valid.includes(dto.lessonDate)) {
-      throw new BadRequestException(
-        'lessonDate is not a scheduled lesson date',
-      );
+    if (!override || this.formatDateOnly(override.toDate) !== dto.lessonDate) {
+      const valid = computeLessonDates({
+        timezone,
+        groupStartDate,
+        groupEndDate,
+        schedules: group.schedules,
+        window: { mode: 'range', from: dto.lessonDate, to: dto.lessonDate },
+      });
+      if (!valid.includes(dto.lessonDate)) {
+        throw new BadRequestException(
+          'lessonDate is not a scheduled lesson date',
+        );
+      }
     }
 
     // Validate students belong to group (current membership model has no date ranges)
@@ -290,5 +428,108 @@ export class AttendanceService {
       updatedAt: r.updatedAt?.toISOString?.() ?? String(r.updatedAt),
       student: r.student,
     }));
+  }
+
+  async rescheduleLesson(groupId: number, dto: RescheduleLessonDto, user: any) {
+    const group = await this.getGroupOrThrow(groupId);
+    this.assertCanAccessGroup(user, group);
+
+    const timezone = group.timezone || 'Asia/Tashkent';
+    const today = this.getTodayInGroupTz(timezone);
+    const fromDate = today;
+
+    if (fromDate === dto.toDate) {
+      throw new BadRequestException('toDate must be different from today');
+    }
+
+    if (dayjs.tz(dto.toDate, timezone).isBefore(dayjs.tz(today, timezone))) {
+      throw new BadRequestException('toDate cannot be in the past');
+    }
+
+    const groupStartDate = dayjs(group.startDate).format('YYYY-MM-DD');
+    const groupEndDate = group.endDate
+      ? dayjs(group.endDate).format('YYYY-MM-DD')
+      : null;
+
+    const toDateTz = dayjs.tz(dto.toDate, timezone).startOf('day');
+    const startDateTz = dayjs.tz(groupStartDate, timezone).startOf('day');
+    const endDateTz = groupEndDate
+      ? dayjs.tz(groupEndDate, timezone).startOf('day')
+      : null;
+
+    if (toDateTz.isBefore(startDateTz)) {
+      throw new BadRequestException('toDate is before group start date');
+    }
+    if (endDateTz && toDateTz.isAfter(endDateTz)) {
+      throw new BadRequestException('toDate is after group end date');
+    }
+
+    const fromValid = computeLessonDates({
+      timezone,
+      groupStartDate,
+      groupEndDate,
+      schedules: group.schedules ?? [],
+      window: { mode: 'range', from: fromDate, to: fromDate },
+    });
+    if (!fromValid.includes(fromDate)) {
+      throw new BadRequestException('today is not a scheduled lesson date');
+    }
+
+    const toIsScheduled = computeLessonDates({
+      timezone,
+      groupStartDate,
+      groupEndDate,
+      schedules: group.schedules ?? [],
+      window: { mode: 'range', from: dto.toDate, to: dto.toDate },
+    });
+    if (toIsScheduled.includes(dto.toDate)) {
+      throw new BadRequestException('toDate is already a scheduled lesson date');
+    }
+
+    const existingFrom = await this.overrideRepo.findOne({
+      where: { groupId, fromDate: fromDate as any },
+    });
+    if (existingFrom) {
+      throw new BadRequestException('today is already rescheduled');
+    }
+
+    const existingTo = await this.overrideRepo.findOne({
+      where: { groupId, toDate: dto.toDate as any },
+    });
+    if (existingTo) {
+      throw new BadRequestException('toDate is already used by another reschedule');
+    }
+
+    const fromAttendanceCount = await this.attendanceRepo.count({
+      where: { groupId, lessonDate: fromDate as any },
+    });
+    if (fromAttendanceCount) {
+      throw new BadRequestException('Attendance already submitted for today');
+    }
+
+    const toAttendanceCount = await this.attendanceRepo.count({
+      where: { groupId, lessonDate: dto.toDate as any },
+    });
+    if (toAttendanceCount) {
+      throw new BadRequestException('Attendance already submitted for toDate');
+    }
+
+    const saved = await this.overrideRepo.save({
+      groupId,
+      fromDate: fromDate as any,
+      toDate: dto.toDate as any,
+      reason: dto.reason ?? null,
+      createdById: user.id,
+    });
+
+    return {
+      id: saved.id,
+      groupId,
+      fromDate: this.formatDateOnly(saved.fromDate),
+      toDate: this.formatDateOnly(saved.toDate),
+      reason: saved.reason ?? null,
+      createdById: saved.createdById ?? null,
+      createdAt: saved.createdAt?.toISOString?.() ?? String(saved.createdAt),
+    };
   }
 }

@@ -26,6 +26,7 @@ import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-date
 import { LessonDatesViewDto } from '@/modules/attendance/dto/lesson-dates-view.dto';
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
 import { AttendanceRowDto } from '@/modules/attendance/dto/attendance-row.dto';
+import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 
 @ApiTags('Group Attendance')
 @ApiBearerAuth('access-token')
@@ -98,6 +99,36 @@ export class GroupAttendanceController {
     @Req() req: any,
   ) {
     return this.attendanceService.submitAttendance(groupId, dto, req.user);
+  }
+
+  @Post('reschedule')
+  @Roles(
+    UserRole.TEACHER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+  )
+  @ApiOperation({
+    summary: 'Reschedule a lesson to a new date',
+    description:
+      'Marks today\'s scheduled lesson as cancelled and adds a new extra lesson (toDate). ' +
+      'toDate must not be a regular scheduled lesson date.',
+  })
+  @ApiParam({ name: 'groupId', type: Number })
+  @ApiOkResponse({
+    description: 'Reschedule mapping created.',
+  })
+  @ApiBadRequestResponse({
+    description: 'Invalid dates or conflicts with schedule/attendance.',
+  })
+  @ApiForbiddenResponse({ description: 'Not allowed.' })
+  @ApiNotFoundResponse({ description: 'Group not found.' })
+  rescheduleLesson(
+    @Param('groupId', ParseIntPipe) groupId: number,
+    @Body() dto: RescheduleLessonDto,
+    @Req() req: any,
+  ) {
+    return this.attendanceService.rescheduleLesson(groupId, dto, req.user);
   }
 
   @Get()
