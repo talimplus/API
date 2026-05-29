@@ -24,6 +24,7 @@ import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { CurrentUser } from '@/common/types/current.user';
 import { UserRole } from '@/common/enums/user-role.enums';
 import {
+  PaymentMethod,
   PaymentReceipt,
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
@@ -136,6 +137,7 @@ export class PaymentsService {
     amount: number,
     currentUser: CurrentUser,
     comment?: string,
+    paymentMethod?: PaymentMethod,
   ) {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
@@ -182,6 +184,7 @@ export class PaymentsService {
       confirmedById: isAdmin ? currentUser.userId : null,
       confirmedAt: isAdmin ? new Date() : null,
       comment: comment ?? null,
+      paymentMethod: paymentMethod ?? null,
     });
 
     // If already confirmed (admin took money), store receiver commission snapshot
@@ -212,6 +215,7 @@ export class PaymentsService {
     paymentId: number,
     currentUser: CurrentUser,
     comment?: string,
+    paymentMethod?: PaymentMethod,
   ) {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
@@ -223,7 +227,7 @@ export class PaymentsService {
     if (remaining <= 0) {
       throw new BadRequestException('Payment is already fully paid');
     }
-    return this.submitReceipt(paymentId, remaining, currentUser, comment);
+    return this.submitReceipt(paymentId, remaining, currentUser, comment, paymentMethod);
   }
 
   async confirmReceipt(receiptId: number, currentUser: CurrentUser) {

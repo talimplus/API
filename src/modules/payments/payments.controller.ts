@@ -1,6 +1,7 @@
 import { PaginatedPaymentResponseDto } from '@/modules/payments/dto/paginated-payment-response.dto';
 import { PaymentResponseDto } from '@/modules/payments/dto/payment-reponse.dto';
 import { PaymentStatus } from '@/modules/payments/entities/payment.entity';
+import { PaymentMethod } from '@/modules/payments/entities/payment-receipt.entity';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { UserRole } from '@/common/enums/user-role.enums';
@@ -95,19 +96,42 @@ export class PaymentsController {
 
   @Put('mark-as-paid/:id')
   @ApiOperation({ summary: 'Mark as paid' })
+  @ApiBody({
+    schema: {
+      properties: {
+        comment: { type: 'string', nullable: true },
+        paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+      },
+    },
+    required: false,
+  })
   @Roles(
     UserRole.RECEPTION,
     UserRole.MANAGER,
     UserRole.ADMIN,
     UserRole.SUPER_ADMIN,
   )
-  async markAsPaid(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
-    // Reception -> pending receipt; Admin/SuperAdmin -> auto-confirmed receipt + payment updated
-    return this.paymentsService.submitFullReceipt(id, req.user);
+  async markAsPaid(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body('comment') comment?: string,
+    @Body('paymentMethod') paymentMethod?: PaymentMethod,
+  ) {
+    return this.paymentsService.submitFullReceipt(id, req.user, comment, paymentMethod);
   }
 
   @Put('pay-partial/:id')
   @ApiOperation({ summary: 'Pay partial' })
+  @ApiBody({
+    schema: {
+      required: ['amount'],
+      properties: {
+        amount: { type: 'number' },
+        comment: { type: 'string', nullable: true },
+        paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+      },
+    },
+  })
   @Roles(
     UserRole.RECEPTION,
     UserRole.MANAGER,
@@ -117,9 +141,11 @@ export class PaymentsController {
   async payPartial(
     @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
-    @Query('amount') amount: number,
+    @Body('amount') amount: number,
+    @Body('comment') comment?: string,
+    @Body('paymentMethod') paymentMethod?: PaymentMethod,
   ) {
-    return this.paymentsService.submitReceipt(id, Number(amount), req.user);
+    return this.paymentsService.submitReceipt(id, Number(amount), req.user, comment, paymentMethod);
   }
 
   @Put('confirm-receipt/:id')

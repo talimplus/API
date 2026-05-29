@@ -17,9 +17,9 @@ Har biri bajarilgandan keyin `[x]` bilan belgilanadi.
   - `src/modules/payments/dto/calculate-payment.dto.ts`
   - `src/modules/payments/payments.service.ts`
   - `src/modules/statistics/statistics.service.ts`
-- [ ] Entity va migration tayyor
-- [ ] DTO va service yangilandi
-- [ ] Statistikada to'lov usuli bo'yicha guruhlash qo'shildi
+- [x] Entity va migration tayyor
+- [x] DTO va service yangilandi
+- [x] Statistikada to'lov usuli bo'yicha guruhlash qo'shildi
 
 ---
 
@@ -118,7 +118,7 @@ Har biri bajarilgandan keyin `[x]` bilan belgilanadi.
 
 | # | Funksiya | Status |
 |---|----------|--------|
-| 1 | To'lov usuli | Boshlanmadi |
+| 1 | To'lov usuli | ✅ Tayyor |
 | 2 | Jadval to'qnashuvi | Boshlanmadi |
 | 3 | PDF kvitansiya | Boshlanmadi |
 | 4 | Audit log | Boshlanmadi |

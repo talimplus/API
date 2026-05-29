@@ -16,6 +16,13 @@ export enum PaymentReceiptStatus {
   REJECTED = 'rejected',
 }
 
+export enum PaymentMethod {
+  CASH = 'cash',
+  CARD = 'card',
+  BANK_TRANSFER = 'bank_transfer',
+  ONLINE = 'online',
+}
+
 @Entity('payment_receipts')
 @Index(['paymentId', 'status'])
 export class PaymentReceipt {
@@ -67,6 +74,9 @@ export class PaymentReceipt {
 
   @Column({ type: 'enum', enum: PaymentReceiptStatus, default: PaymentReceiptStatus.PENDING })
   status: PaymentReceiptStatus;
+
+  @Column({ type: 'enum', enum: PaymentMethod, nullable: true })
+  paymentMethod?: PaymentMethod | null;
 
   @Column({ type: 'text', nullable: true })
   comment?: string | null;

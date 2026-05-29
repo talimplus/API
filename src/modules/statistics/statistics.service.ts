@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { dayjs } from '@/shared/utils/dayjs';
 import { Repository } from 'typeorm';
 import { Payment, PaymentStatus } from '@/modules/payments/entities/payment.entity';
+import { PaymentReceipt, PaymentReceiptStatus } from '@/modules/payments/entities/payment-receipt.entity';
 import { Expense } from '@/modules/expenses/entities/expenses.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
@@ -15,6 +16,8 @@ export class StatisticsService {
   constructor(
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
+    @InjectRepository(PaymentReceipt)
+    private readonly receiptRepo: Repository<PaymentReceipt>,
     @InjectRepository(Expense)
     private readonly expenseRepo: Repository<Expense>,
     @InjectRepository(Student)
@@ -192,11 +195,34 @@ export class StatisticsService {
 
     const netCashflow = n(payments.amountPaid - payments.refundedAmount - expenses.totalAmount - payroll.amountPaid);
 
+    const paymentsByMethodRaw = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select([
+        'COALESCE(r.paymentMethod, \'unknown\') as "method"',
+        'COALESCE(SUM(r.amount), 0) as "totalAmount"',
+        'COUNT(r.id) as "count"',
+      ])
+      .leftJoin('r.payment', 'p')
+      .leftJoin('p.student', 'rs')
+      .where('rs.centerId = :centerId', { centerId })
+      .andWhere('r.status = :confirmed', { confirmed: PaymentReceiptStatus.CONFIRMED })
+      .andWhere('p.forMonth >= :fromMonthStart', { fromMonthStart })
+      .andWhere('p.forMonth < :endExclusive', { endExclusive })
+      .groupBy('r.paymentMethod')
+      .getRawMany<{ method: string; totalAmount: string; count: string }>();
+
+    const paymentsByMethod = paymentsByMethodRaw.map((r) => ({
+      method: r.method,
+      totalAmount: n(r.totalAmount),
+      count: n(r.count),
+    }));
+
     return {
       centerId,
       fromMonth: fromYm,
       toMonth: toYm,
       payments,
+      paymentsByMethod,
       expenses,
       payroll,
       students,
