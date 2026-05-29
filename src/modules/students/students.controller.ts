@@ -35,6 +35,7 @@ export class StudentsController {
   constructor(private readonly studentService: StudentsService) {}
 
   @Get()
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
   @ApiOperation({ summary: 'Get all students' })
   @ApiResponse({ type: PaginatedStudentResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -107,6 +108,7 @@ export class StudentsController {
   }
 
   @Get('/all')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
   @ApiOperation({ summary: 'Get all students without pagination' })
   @ApiResponse({ type: [StudentResponseDto] })
   @ApiQuery({ name: 'centerId', required: false })
@@ -148,13 +150,15 @@ export class StudentsController {
   }
 
   @Get(':id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
   @ApiOperation({ summary: 'Get student by id' })
   @ApiResponse({ type: StudentResponseDto })
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.studentService.findById(id);
+  async findOne(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.studentService.findById(req.user.organizationId, id);
   }
 
   @Post()
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
   @ApiOperation({ summary: 'Create student' })
   @ApiResponse({ type: StudentResponseDto })
   async create(@Body() dto: CreateStudentDto, @Req() req: any) {
@@ -166,7 +170,28 @@ export class StudentsController {
     );
   }
 
+  @Put('change-status/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Change student status' })
+  @ApiResponse({ type: StudentResponseDto })
+  @ApiBody({ type: ChangeStudentStatusDto, required: false })
+  async changeStatus(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('status') status: StudentStatus,
+    @Body() body?: Partial<ChangeStudentStatusDto>,
+  ) {
+    const effectiveStatus = (body?.status ?? status) as StudentStatus;
+    return this.studentService.changeStatus(
+      req.user.organizationId,
+      id,
+      effectiveStatus,
+      body,
+    );
+  }
+
   @Put(':id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   @ApiOperation({ summary: 'Update student' })
   @ApiResponse({ type: StudentResponseDto })
   async update(
@@ -175,19 +200,6 @@ export class StudentsController {
     @Body() dto: UpdateStudentDto,
   ) {
     return this.studentService.update(req.user.organizationId, id, dto);
-  }
-
-  @Put('change-status/:id')
-  @ApiOperation({ summary: 'Change student status' })
-  @ApiResponse({ type: StudentResponseDto })
-  @ApiBody({ type: ChangeStudentStatusDto, required: false })
-  async changeStatus(
-    @Param('id', ParseIntPipe) id: number,
-    @Query('status') status: StudentStatus,
-    @Body() body?: Partial<ChangeStudentStatusDto>,
-  ) {
-    const effectiveStatus = (body?.status ?? status) as StudentStatus;
-    return this.studentService.changeStatus(id, effectiveStatus, body);
   }
 
   @Get(':id/discount-periods')

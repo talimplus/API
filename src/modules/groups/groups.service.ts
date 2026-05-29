@@ -16,7 +16,10 @@ import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.
 import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 import { ValidationException } from '@/common/exceptions/validation.exception';
+import { dayjs } from '@/shared/utils/dayjs';
+import { MoreThan } from 'typeorm';
 
 @Injectable()
 export class GroupsService {
@@ -33,6 +36,8 @@ export class GroupsService {
     private readonly roomRepo: Repository<Room>,
     @InjectRepository(GroupSchedule)
     private readonly scheduleRepo: Repository<GroupSchedule>,
+    @InjectRepository(AttendanceLessonOverride)
+    private readonly overrideRepo: Repository<AttendanceLessonOverride>,
   ) {}
 
   private async finishExpiredGroups(organizationId: number, centerId?: number) {
@@ -194,6 +199,12 @@ export class GroupsService {
         }),
       );
       await this.scheduleRepo.save(newSchedules);
+
+      const today = dayjs().format('YYYY-MM-DD');
+      await this.overrideRepo.delete({
+        groupId: id,
+        fromDate: MoreThan(today) as any,
+      });
     }
 
     return savedGroup;
@@ -363,22 +374,13 @@ export class GroupsService {
       .getMany();
   }
 
-  async findOne(id: number) {
-    // Best-effort: finish expired groups (no org scope here, so run global update)
-    // This keeps single-fetch consistent without requiring the cron job to have run.
-    await this.groupRepo.query(
-      `
-      UPDATE "groups" g
-      SET "status" = $1
-      WHERE g."status" = $2
-        AND g."durationMonths" IS NOT NULL
-        AND g."startedAt" IS NOT NULL
-        AND (g."startedAt" + (g."durationMonths" || ' months')::interval) <= NOW()
-    `,
-      [GroupStatus.FINISHED, GroupStatus.STARTED],
-    );
+  async findOne(id: number, organizationId: number) {
+    await this.finishExpiredGroups(organizationId);
     return this.groupRepo.findOne({
-      where: { id },
+      where: {
+        id,
+        center: { organization: { id: organizationId } },
+      },
       relations: ['center', 'teacher', 'subject', 'students', 'room', 'schedules'],
     });
   }

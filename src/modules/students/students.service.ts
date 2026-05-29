@@ -13,6 +13,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { In } from 'typeorm';
 import {
   BadRequestException,
@@ -321,30 +322,20 @@ export class StudentsService {
     return plain;
   }
 
-  async findById(id: number) {
+  async findById(organizationId: number, id: number) {
     const student = await this.studentRepo.findOne({
-      where: { id },
+      where: {
+        id,
+        center: { organization: { id: organizationId } },
+      },
       relations: ['user', 'center', 'groups', 'discountPeriods', 'subject'],
     });
 
-    if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
 
     const result: any = instanceToPlain(student);
 
-    // Faqat parol o‘zgartirilmagan bo‘lsa, `tempPassword` ni qaytaramiz
     result.login = student.user.login;
-
-    // Parolni qayta generatsiya qilish (birthDate optional).
-    // If birthDate missing, fallback to last 4 digits of phone to keep it deterministic.
-    const phoneDigits = String(student.phone ?? '').replace(/\D/g, '');
-    const phoneLast4 = phoneDigits.slice(-4) || '0000';
-    const formattedBirth = student.birthDate
-      ? (() => {
-          const birth = new Date(student.birthDate as any);
-          return `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
-        })()
-      : phoneLast4;
-    result.tempPassword = `${student.firstName.toLowerCase()}${student.lastName.toLowerCase()}${formattedBirth}`;
 
     const referral = await this.referralRepo.findOne({
       where: { referredStudentId: student.id as any },
@@ -377,7 +368,7 @@ export class StudentsService {
       where: { id },
       relations: ['user', 'center', 'groups', 'discountPeriods'],
     });
-    if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
     return student;
   }
 
@@ -400,7 +391,7 @@ export class StudentsService {
       .where('student.id = :studentId', { studentId })
       .andWhere('org.id = :organizationId', { organizationId })
       .getOne();
-    if (!exists) throw new NotFoundException('O‘quvchi topilmadi');
+    if (!exists) throw new NotFoundException(`O'quvchi topilmadi`);
   }
 
   private async resolveCenterIdOrThrow(
@@ -679,9 +670,12 @@ export class StudentsService {
     return { success: true };
   }
 
-  async findByActiveStatus(): Promise<Student[]> {
+  async findByActiveStatus(organizationId: number): Promise<Student[]> {
     return await this.studentRepo.find({
-      where: { status: StudentStatus.ACTIVE },
+      where: {
+        status: StudentStatus.ACTIVE,
+        center: { organization: { id: organizationId } },
+      },
       relations: ['groups', 'center'],
     });
   }
@@ -733,8 +727,18 @@ export class StudentsService {
     const safeGroupIds = Array.isArray(groupIds) ? groupIds : [];
     const groups =
       safeGroupIds.length > 0
-        ? await this.groupRepo.findBy({ id: In(safeGroupIds) })
+        ? await this.groupRepo.find({
+            where: {
+              id: In(safeGroupIds),
+              center: { id: effectiveCenterId },
+            },
+          })
         : [];
+    if (groups.length !== safeGroupIds.length && safeGroupIds.length > 0) {
+      throw new BadRequestException(
+        'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+      );
+    }
     const phoneDigits = String(dto.phone ?? '').replace(/\D/g, '');
     const phoneLast4 = phoneDigits.slice(-4) || '0000';
     const formattedBirth = dto.birthDate
@@ -743,8 +747,9 @@ export class StudentsService {
           return `${birth.getFullYear()}${String(birth.getMonth() + 1).padStart(2, '0')}${String(birth.getDate()).padStart(2, '0')}`;
         })()
       : phoneLast4;
+    const randomSuffix = crypto.randomBytes(3).toString('hex');
     const autoLogin = `${dto.firstName.toLowerCase()}.${dto.lastName.toLowerCase()}.${Date.now().toString().slice(-4)}`;
-    const rawPassword = `${dto.firstName.toLowerCase()}${dto.lastName.toLowerCase()}${formattedBirth}`;
+    const rawPassword = `${dto.firstName.toLowerCase()}${formattedBirth}${randomSuffix}`;
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
 
     const user = await this.userService.create(
@@ -797,9 +802,14 @@ export class StudentsService {
     }
 
     if (dto.referrerId) {
-      const referrer = await this.studentRepo.findOneBy({ id: dto.referrerId });
+      const referrer = await this.studentRepo.findOne({
+        where: {
+          id: dto.referrerId,
+          center: { organization: { id: organizationId } },
+        },
+      });
       if (!referrer) {
-        throw new BadRequestException('Taklif qilgan o‘quvchi topilmadi');
+        throw new BadRequestException(`Taklif qilgan o'quvchi topilmadi`);
       }
 
       await this.referralsService.create(referrer.id, savedStudent.id);
@@ -857,7 +867,18 @@ export class StudentsService {
     const shouldEnsureCurrentMonthPayments =
       Array.isArray(dto.groupIds) && dto.groupIds.length > 0;
     if (dto.groupIds) {
-      const groups = await this.groupRepo.findBy({ id: In(dto.groupIds) });
+      const effectiveCenterId = (student as any).centerId ?? student.center?.id;
+      const groups = await this.groupRepo.find({
+        where: {
+          id: In(dto.groupIds),
+          center: { id: effectiveCenterId },
+        },
+      });
+      if (groups.length !== dto.groupIds.length) {
+        throw new BadRequestException(
+          'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+        );
+      }
       student.groups = groups;
     }
 
@@ -921,6 +942,15 @@ export class StudentsService {
       delete (dto as any).subjectId; // Remove from dto to avoid Object.assign issues
     }
 
+    // Xavfsiz fieldlardan tashqarisini Object.assign qilmaslik uchun tozalash
+    delete (dto as any).status;
+    delete (dto as any).activatedAt;
+    delete (dto as any).stoppedAt;
+    delete (dto as any).groupIds;
+    delete (dto as any).centerId;
+    delete (dto as any).referrerId;
+    delete (dto as any).userId;
+    delete (dto as any).id;
     Object.assign(student, dto);
     const saved = await this.studentRepo.save(student);
 
@@ -939,19 +969,38 @@ export class StudentsService {
     }
 
     // Return the same enriched shape as findById so frontend always has ids
-    return this.findById(saved.id);
+    return this.findById(organizationId, saved.id);
   }
 
+  private static readonly ALLOWED_STATUS_TRANSITIONS: Record<StudentStatus, StudentStatus[]> = {
+    [StudentStatus.NEW]: [StudentStatus.ACTIVE, StudentStatus.IGNORED],
+    [StudentStatus.ACTIVE]: [StudentStatus.STOPPED, StudentStatus.FINISHED],
+    [StudentStatus.STOPPED]: [StudentStatus.ACTIVE, StudentStatus.FINISHED],
+    [StudentStatus.IGNORED]: [StudentStatus.NEW, StudentStatus.ACTIVE],
+    [StudentStatus.FINISHED]: [],
+  };
+
   async changeStatus(
+    organizationId: number,
     id: number,
     status: StudentStatus,
     body?: { returnLikelihood?: StudentReturnLikelihood; comment?: string },
   ) {
     const student = await this.studentRepo.findOne({
-      where: { id },
+      where: {
+        id,
+        center: { organization: { id: organizationId } },
+      },
       relations: ['groups'],
     });
-    if (!student) throw new NotFoundException('O‘quvchi topilmadi');
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+
+    const allowed = StudentsService.ALLOWED_STATUS_TRANSITIONS[student.status] ?? [];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException(
+        `${student.status} → ${status} o'tish mumkin emas`,
+      );
+    }
 
     if (body?.comment !== undefined) {
       const incoming = String(body.comment ?? '').trim();
@@ -996,6 +1045,7 @@ export class StudentsService {
       student.status !== StudentStatus.ACTIVE
     ) {
       student.activatedAt = new Date();
+      student.stoppedAt = null;
     }
 
     // When student becomes STOPPED, remember stop time (used for refunds/proration end boundary).

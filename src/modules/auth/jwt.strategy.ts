@@ -6,12 +6,17 @@ import { BlacklistService } from '@/modules/blacklist/blacklist.service';
 
 dotenv.config();
 
+const jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret) {
+  throw new Error('JWT_SECRET environment variable is not set');
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly blacklistService: BlacklistService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: process.env.JWT_SECRET,
+      secretOrKey: jwtSecret,
       passReqToCallback: true,
     });
   }

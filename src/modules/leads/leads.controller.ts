@@ -87,6 +87,19 @@ export class LeadsController {
     return this.leadsService.create(dto as any, req.user);
   }
 
+  @Put('change-status/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @ApiOperation({ summary: 'Change lead status (optionally append reason into comment)' })
+  @ApiBody({ type: ChangeLeadStatusDto })
+  @ApiResponse({ type: LeadResponseDto })
+  changeStatus(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ChangeLeadStatusDto,
+  ) {
+    return this.leadsService.changeStatus(req.user.organizationId, id, dto, req.user);
+  }
+
   @Put(':id')
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
   @ApiOperation({ summary: 'Update lead' })
@@ -105,7 +118,7 @@ export class LeadsController {
   @ApiOperation({ summary: 'Delete lead' })
   @ApiResponse({ schema: { example: { success: true } } })
   remove(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
-    return this.leadsService.remove(req.user.organizationId, id);
+    return this.leadsService.remove(req.user.organizationId, id, req.user);
   }
 
   @Post(':id/transfer-to-student')
@@ -123,19 +136,6 @@ export class LeadsController {
     @Body() dto: CreateStudentDto,
   ) {
     return this.leadsService.transferToStudent(req.user.organizationId, id, req.user, dto);
-  }
-
-  @Put('change-status/:id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
-  @ApiOperation({ summary: 'Change lead status (optionally append reason into comment)' })
-  @ApiBody({ type: ChangeLeadStatusDto })
-  @ApiResponse({ type: LeadResponseDto })
-  changeStatus(
-    @Req() req: any,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: ChangeLeadStatusDto,
-  ) {
-    return this.leadsService.changeStatus(req.user.organizationId, id, dto);
   }
 }
 

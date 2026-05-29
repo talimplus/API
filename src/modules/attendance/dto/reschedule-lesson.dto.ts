@@ -3,9 +3,18 @@ import { IsDateString, IsOptional, IsString } from 'class-validator';
 
 export class RescheduleLessonDto {
   @ApiProperty({
-    example: '2026-01-08',
+    required: false,
+    example: '2026-01-06',
     description:
-      'New lesson date (YYYY-MM-DD, group timezone). The missed lesson is assumed to be today in group timezone.',
+      'Original lesson date to reschedule (YYYY-MM-DD, group timezone). Defaults to today if omitted.',
+  })
+  @IsOptional()
+  @IsDateString()
+  fromDate?: string;
+
+  @ApiProperty({
+    example: '2026-01-08',
+    description: 'New lesson date (YYYY-MM-DD, group timezone).',
   })
   @IsDateString()
   toDate: string;

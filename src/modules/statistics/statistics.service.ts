@@ -28,8 +28,8 @@ export class StatisticsService {
   private normalizeMonth(ym?: string): string {
     if (!ym) return '';
     const v = ym.trim();
-    if (!/^\d{4}-\d{2}$/.test(v)) {
-      throw new BadRequestException('Month must be in YYYY-MM format');
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(v)) {
+      throw new BadRequestException('Month must be in YYYY-MM format (month 01-12)');
     }
     return v;
   }
@@ -94,6 +94,7 @@ export class StatisticsService {
         'COALESCE(SUM(p.amountDue), 0) as "amountDue"',
         'COALESCE(SUM(p.amountPaid), 0) as "amountPaid"',
         'COALESCE(SUM(p.amountDue - p.amountPaid), 0) as "remainingAmount"',
+        'COALESCE(SUM(p.refundedAmount), 0) as "refundedAmount"',
         'COUNT(p.id) as "totalCount"',
         `SUM(CASE WHEN p.status = '${PaymentStatus.PAID}' THEN 1 ELSE 0 END) as "paidCount"`,
         `SUM(CASE WHEN p.status = '${PaymentStatus.PARTIAL}' THEN 1 ELSE 0 END) as "partialCount"`,
@@ -158,6 +159,7 @@ export class StatisticsService {
       statusEnum: PaymentStatus,
       amountDue: n(paymentsRaw?.amountDue),
       amountPaid: n(paymentsRaw?.amountPaid),
+      refundedAmount: n(paymentsRaw?.refundedAmount),
       remainingAmount: n(paymentsRaw?.remainingAmount),
       totalCount: n(paymentsRaw?.totalCount),
       paidCount: n(paymentsRaw?.paidCount),
@@ -188,7 +190,7 @@ export class StatisticsService {
       stoppedCount: n(studentsRaw?.stoppedCount),
     };
 
-    const netCashflow = n(payments.amountPaid - expenses.totalAmount - payroll.amountPaid);
+    const netCashflow = n(payments.amountPaid - payments.refundedAmount - expenses.totalAmount - payroll.amountPaid);
 
     return {
       centerId,

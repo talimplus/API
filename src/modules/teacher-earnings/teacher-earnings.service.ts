@@ -177,9 +177,15 @@ export class TeacherEarningsService {
             teacherId,
             sourceForMonth: earningMonth as any,
             amount: diff as any,
-            appliedForMonth: payMonth as any,
-            appliedAt: new Date(),
+            appliedForMonth: null,
+            appliedAt: null,
           }),
+        );
+
+        await this.applyCarryoverToNextUnpaidEarningMonth(
+          organizationId,
+          teacherId,
+          earningMonth,
         );
       }
     }
@@ -215,9 +221,7 @@ export class TeacherEarningsService {
 
     const carryOverCommission = this.round2(alreadyAppliedSum + toApplySum);
 
-    // Total to pay for this pay month is base + full commission calculated from earningMonth.
-    // carryOverCommission is informational (how much was added after the pay month was first settled).
-    const totalEarning = this.round2(baseSalary + commissionAmount);
+    const totalEarning = this.round2(baseSalary + commissionAmount + carryOverCommission);
 
     const snapshot =
       existing ??
@@ -277,6 +281,15 @@ export class TeacherEarningsService {
         force: false,
       });
     }
+  }
+
+  async listEarningsByUserIds(teacherIds: number[], forMonth: string) {
+    if (!teacherIds.length) return [];
+    return this.earningRepo
+      .createQueryBuilder('e')
+      .where('e.teacherId IN (:...teacherIds)', { teacherIds })
+      .andWhere('e.forMonth = :forMonth', { forMonth })
+      .getMany();
   }
 
   async listEarnings(organizationId: number, forMonthYM: string) {

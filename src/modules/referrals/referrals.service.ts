@@ -13,15 +13,10 @@ export class ReferralsService {
     private readonly studentsService: StudentsService,
   ) {}
   async create(referrerId: number, referredId: number) {
-    const referrer = await this.studentsService.findById(referrerId);
-    const referred = await this.studentsService.findById(referredId);
-    if (!referrer || !referred) {
-      throw new Error('Bunday foydalanuvchilar mavjud emas');
-    }
     const newReferral = this.referralRepo.create({
-      referrerStudent: referrer,
-      referredStudent: referred,
-    });
+      referrerStudentId: referrerId,
+      referredStudentId: referredId,
+    } as any);
     return this.referralRepo.save(newReferral);
   }
 

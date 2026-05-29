@@ -6,6 +6,7 @@ import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.
 import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { dayjs } from '@/shared/utils/dayjs';
 import {
   BadRequestException,
@@ -71,11 +72,11 @@ export class AttendanceService {
   }
 
   private formatDateOnly(input: Date | string): string {
-    return dayjs(input).format('YYYY-MM-DD');
+    return dayjs.utc(input).format('YYYY-MM-DD');
   }
 
-  private async findOverrideForDate(groupId: number, lessonDate: string) {
-    return this.overrideRepo.findOne({
+  private async findOverridesForDate(groupId: number, lessonDate: string) {
+    return this.overrideRepo.find({
       where: [
         { groupId, fromDate: lessonDate as any },
         { groupId, toDate: lessonDate as any },
@@ -286,6 +287,10 @@ export class AttendanceService {
     const group = await this.getGroupOrThrow(groupId);
     this.assertCanAccessGroup(user, group);
 
+    if (group.status !== GroupStatus.STARTED) {
+      throw new BadRequestException('Faqat boshlangan guruhlar uchun davomat yozish mumkin');
+    }
+
     if (!group.schedules?.length) {
       throw new BadRequestException('Group schedule is not configured');
     }
@@ -309,23 +314,26 @@ export class AttendanceService {
     }
 
     // Validate lessonDate is a real lesson date (schedule + overrides + boundaries)
-    const override = await this.findOverrideForDate(groupId, dto.lessonDate);
-    if (override) {
-      const fromDate = this.formatDateOnly(override.fromDate);
-      const toDate = this.formatDateOnly(override.toDate);
+    const overrides = await this.findOverridesForDate(groupId, dto.lessonDate);
+    let isExtraLessonDate = false;
+    for (const o of overrides) {
+      const fromDate = this.formatDateOnly(o.fromDate);
+      const toDate = this.formatDateOnly(o.toDate);
       if (fromDate === dto.lessonDate) {
         throw new BadRequestException(
           `lessonDate was rescheduled to ${toDate}`,
         );
       }
-      // toDate is allowed for attendance submission
+      if (toDate === dto.lessonDate) {
+        isExtraLessonDate = true;
+      }
     }
 
     const groupStartDate = dayjs(group.startDate).format('YYYY-MM-DD');
     const groupEndDate = group.endDate
       ? dayjs(group.endDate).format('YYYY-MM-DD')
       : null;
-    if (!override || this.formatDateOnly(override.toDate) !== dto.lessonDate) {
+    if (!isExtraLessonDate) {
       const valid = computeLessonDates({
         timezone,
         groupStartDate,
@@ -434,16 +442,24 @@ export class AttendanceService {
     const group = await this.getGroupOrThrow(groupId);
     this.assertCanAccessGroup(user, group);
 
+    if (group.status !== GroupStatus.STARTED) {
+      throw new BadRequestException('Faqat boshlangan guruhlar uchun dars ko\'chirish mumkin');
+    }
+
     const timezone = group.timezone || 'Asia/Tashkent';
     const today = this.getTodayInGroupTz(timezone);
-    const fromDate = today;
+    const fromDate = (dto as any).fromDate || today;
 
     if (fromDate === dto.toDate) {
-      throw new BadRequestException('toDate must be different from today');
+      throw new BadRequestException('toDate must be different from fromDate');
     }
 
     if (dayjs.tz(dto.toDate, timezone).isBefore(dayjs.tz(today, timezone))) {
       throw new BadRequestException('toDate cannot be in the past');
+    }
+
+    if (dayjs.tz(fromDate, timezone).isBefore(dayjs.tz(today, timezone))) {
+      throw new BadRequestException('fromDate cannot be in the past');
     }
 
     const groupStartDate = dayjs(group.startDate).format('YYYY-MM-DD');
@@ -472,7 +488,7 @@ export class AttendanceService {
       window: { mode: 'range', from: fromDate, to: fromDate },
     });
     if (!fromValid.includes(fromDate)) {
-      throw new BadRequestException('today is not a scheduled lesson date');
+      throw new BadRequestException('fromDate is not a scheduled lesson date');
     }
 
     const toIsScheduled = computeLessonDates({
@@ -490,7 +506,7 @@ export class AttendanceService {
       where: { groupId, fromDate: fromDate as any },
     });
     if (existingFrom) {
-      throw new BadRequestException('today is already rescheduled');
+      throw new BadRequestException('fromDate is already rescheduled');
     }
 
     const existingTo = await this.overrideRepo.findOne({
@@ -504,7 +520,7 @@ export class AttendanceService {
       where: { groupId, lessonDate: fromDate as any },
     });
     if (fromAttendanceCount) {
-      throw new BadRequestException('Attendance already submitted for today');
+      throw new BadRequestException('Attendance already submitted for fromDate');
     }
 
     const toAttendanceCount = await this.attendanceRepo.count({

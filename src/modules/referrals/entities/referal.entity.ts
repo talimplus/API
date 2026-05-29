@@ -30,6 +30,6 @@ export class Referral {
   @Column({ default: false })
   isDiscountApplied: boolean;
 
-  @CreateDateColumn({ type: 'timestamp' })
-  createAt: Date;
+  @CreateDateColumn({ type: 'timestamp', name: 'createAt' })
+  createdAt: Date;
 }

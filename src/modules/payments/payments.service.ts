@@ -9,7 +9,7 @@ import {
   PaymentStatus,
 } from '@/modules/payments/entities/payment.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, QueryFailedError, Repository } from 'typeorm';
+import { Brackets, DataSource, QueryFailedError, Repository } from 'typeorm';
 import { instanceToPlain } from 'class-transformer';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Student } from '@/modules/students/entities/students.entity';
@@ -49,6 +49,7 @@ export class PaymentsService {
     private readonly referralRepo: Repository<Referral>,
     @Inject(forwardRef(() => TeacherEarningsService))
     private readonly teacherEarningsService: TeacherEarningsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private async computeReceiverCommissionSnapshot(args: {
@@ -80,30 +81,41 @@ export class PaymentsService {
     addAmount: number;
     confirmedById?: number;
   }): Promise<Payment> {
-    const { payment, addAmount } = args;
+    const { addAmount } = args;
+    const paymentId = args.payment.id;
 
-    const prevPaid = Number(payment.amountPaid ?? 0);
-    const amountDue = Number(payment.amountDue ?? 0);
-    const safeAdd = Math.max(0, Number(addAmount ?? 0));
-    const nextPaidRaw = this.round2(prevPaid + safeAdd);
-    const nextPaid = Math.min(nextPaidRaw, amountDue);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const lockedPayment = await manager
+        .getRepository(Payment)
+        .createQueryBuilder('p')
+        .setLock('pessimistic_write')
+        .where('p.id = :id', { id: paymentId })
+        .getOne();
 
-    payment.amountPaid = nextPaid as any;
-    if (payment.amountPaid >= amountDue) {
-      payment.status = PaymentStatus.PAID;
-    } else if (payment.amountPaid > 0) {
-      payment.status = PaymentStatus.PARTIAL;
-    } else {
-      payment.status = PaymentStatus.UNPAID;
-    }
+      if (!lockedPayment) throw new NotFoundException('To\'lov topilmadi');
 
-    const saved = await this.paymentRepo.save(payment);
+      const prevPaid = Number(lockedPayment.amountPaid ?? 0);
+      const amountDue = Number(lockedPayment.amountDue ?? 0);
+      const safeAdd = Math.max(0, Number(addAmount ?? 0));
+      const nextPaidRaw = this.round2(prevPaid + safeAdd);
+      const nextPaid = Math.min(nextPaidRaw, amountDue);
 
-    // Referral discount: apply only when this student makes their first CONFIRMED payment (amountPaid 0 -> >0)
-    if (prevPaid === 0 && Number(saved.amountPaid ?? 0) > 0) {
-      void this.applyReferralDiscountOnFirstPayment(saved.studentId).catch(
+      lockedPayment.amountPaid = nextPaid as any;
+      if (lockedPayment.amountPaid >= amountDue) {
+        lockedPayment.status = PaymentStatus.PAID;
+      } else if (lockedPayment.amountPaid > 0) {
+        lockedPayment.status = PaymentStatus.PARTIAL;
+      } else {
+        lockedPayment.status = PaymentStatus.UNPAID;
+      }
+
+      const result = await manager.save(lockedPayment);
+      return { result, prevPaid };
+    });
+
+    if (saved.prevPaid === 0 && Number(saved.result.amountPaid ?? 0) > 0) {
+      void this.applyReferralDiscountOnFirstPayment(saved.result.studentId).catch(
         (e) => {
-          // eslint-disable-next-line no-console
           console.warn(
             'referral discount apply failed:',
             (e as any)?.message ?? e,
@@ -112,13 +124,11 @@ export class PaymentsService {
       );
     }
 
-    // Recalculate teacher earnings on any CONFIRMED money received (partial payments included)
-    void this.triggerTeacherEarningsRecalcForPayment(saved.id).catch((e) => {
-      // eslint-disable-next-line no-console
+    void this.triggerTeacherEarningsRecalcForPayment(saved.result.id).catch((e) => {
       console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
     });
 
-    return saved;
+    return saved.result;
   }
 
   async submitReceipt(
@@ -130,10 +140,30 @@ export class PaymentsService {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
     const amt = Number(amount);
     if (!amt || amt <= 0) {
-      throw new BadRequestException('To‘lov miqdori noto‘g‘ri');
+      throw new BadRequestException(`To'lov miqdori noto'g'ri`);
+    }
+
+    const amountDue = Number(payment.amountDue ?? 0);
+    const amountPaid = Number(payment.amountPaid ?? 0);
+    const remaining = this.round2(amountDue - amountPaid);
+
+    // Sum pending receipts to prevent over-collection
+    const pendingSum = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .where('r.paymentId = :paymentId', { paymentId })
+      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
+      .getRawOne<{ sum: string }>();
+    const pendingTotal = Number(pendingSum?.sum ?? 0);
+
+    const availableToCollect = this.round2(remaining - pendingTotal);
+    if (amt > availableToCollect && availableToCollect >= 0) {
+      throw new BadRequestException(
+        `Maksimal qabul qilish mumkin bo'lgan summa: ${availableToCollect}`,
+      );
     }
 
     // If admin/super_admin submits, auto-confirm (boss took money)
@@ -186,7 +216,7 @@ export class PaymentsService {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
     const remaining = this.round2(
       Number(payment.amountDue ?? 0) - Number(payment.amountPaid ?? 0),
     );
@@ -221,7 +251,7 @@ export class PaymentsService {
     const payment = await this.paymentRepo.findOne({
       where: { id: receipt.paymentId },
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
 
     const updatedPayment = await this.applyConfirmedMoneyToPayment({
       payment,
@@ -242,6 +272,32 @@ export class PaymentsService {
     const savedReceipt = await this.receiptRepo.save(receipt);
 
     return { receipt: savedReceipt, payment: updatedPayment };
+  }
+
+  async rejectReceipt(receiptId: number, currentUser: CurrentUser, reason?: string) {
+    const isAdmin =
+      currentUser.role === UserRole.ADMIN ||
+      currentUser.role === UserRole.SUPER_ADMIN;
+    if (!isAdmin) {
+      throw new BadRequestException('Only admin can reject receipts');
+    }
+
+    const receipt = await this.receiptRepo.findOne({
+      where: { id: receiptId },
+    });
+    if (!receipt) throw new NotFoundException('Receipt not found');
+    if (receipt.status === PaymentReceiptStatus.CONFIRMED) {
+      throw new BadRequestException('Tasdiqlangan receiptni rad etib bo\'lmaydi');
+    }
+    if (receipt.status === PaymentReceiptStatus.REJECTED) {
+      return { receipt, alreadyRejected: true };
+    }
+
+    receipt.status = PaymentReceiptStatus.REJECTED;
+    (receipt as any).rejectedReason = reason ?? null;
+    const savedReceipt = await this.receiptRepo.save(receipt);
+
+    return { receipt: savedReceipt };
   }
 
   async listPendingReceipts(
@@ -653,7 +709,7 @@ export class PaymentsService {
       .leftJoinAndSelect('payments.group', 'group')
       .leftJoinAndSelect('group.schedules', 'schedule')
       .where('payments.studentId = :studentId', { studentId })
-      .andWhere('payments.forMonth = :forMonth', { forMonth: currentMonth })
+      .andWhere('payments.forMonth >= :forMonth', { forMonth: currentMonth })
       .getMany();
 
     if (!payments.length) return;
@@ -1197,25 +1253,25 @@ export class PaymentsService {
     }
   }
 
-  // To‘liq to‘lovni tasdiqlash
+  // To'liq to'lovni tasdiqlash
   async markAsPaid(paymentId: number): Promise<Payment> {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
 
     payment.amountPaid = payment.amountDue;
     payment.status = PaymentStatus.PAID;
     return this.paymentRepo.save(payment);
   }
 
-  // Qisman to‘lov qilish
+  // Qisman to'lov qilish
   async payPartial(paymentId: number, amount: number): Promise<Payment> {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
-    if (amount <= 0) throw new BadRequestException('To‘lov miqdori noto‘g‘ri');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
+    if (amount <= 0) throw new BadRequestException(`To'lov miqdori noto'g'ri`);
 
     const amountDue = Number(payment.amountDue ?? 0);
     const amountPaid = Number(payment.amountPaid ?? 0);
@@ -1262,19 +1318,12 @@ export class PaymentsService {
     const effectiveCenterId =
       centerId ?? (!isAdmin ? currentUser.centerId : undefined);
 
-    // Ensure missing monthly payments are present when listing payments
     try {
       await this.ensurePaymentsForOrganization(organizationId, {
         maxMonthsBack: 3,
         centerId: effectiveCenterId,
       });
-      // Also recalculate open payments in the same bounded window (pricing/discount updates)
-      await this.recalculateOpenPaymentsForOrganization(organizationId, {
-        maxMonthsBack: 3,
-        centerId: effectiveCenterId,
-      });
     } catch (e) {
-      // Helpful error when DB schema is outdated (migrations not applied)
       if (
         e instanceof QueryFailedError &&
         typeof (e as any).message === 'string' &&
@@ -1544,12 +1593,12 @@ export class PaymentsService {
       where: { id },
       relations: ['student', 'group'],
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
 
     // If payment is already paid, don't allow changes
     if (payment.status === PaymentStatus.PAID && payment.amountPaid > 0) {
       throw new BadRequestException(
-        'To‘lov allaqachon to‘langan, o‘zgartirib bo‘lmaydi',
+        `To'lov allaqachon to'langan, o'zgartirib bo'lmaydi`,
       );
     }
 
@@ -1628,7 +1677,7 @@ export class PaymentsService {
       where: { id },
       relations: ['group', 'student'],
     });
-    if (!payment) throw new NotFoundException('To‘lov topilmadi');
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
 
     const today = dayjs().format('YYYY-MM-DD');
     const hardDue = (payment as any).hardDueDate

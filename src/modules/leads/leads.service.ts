@@ -202,8 +202,19 @@ export class LeadsService {
 
     const groups =
       Array.isArray(dto.groupIds) && dto.groupIds.length
-        ? await this.groupRepo.findBy({ id: In(dto.groupIds) })
+        ? await this.groupRepo.find({
+            where: { id: In(dto.groupIds), center: { id: centerId } },
+          })
         : [];
+    if (
+      Array.isArray(dto.groupIds) &&
+      dto.groupIds.length &&
+      groups.length !== dto.groupIds.length
+    ) {
+      throw new BadRequestException(
+        'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+      );
+    }
 
     const lead = this.leadRepo.create({
       phone: dto.phone,
@@ -253,10 +264,14 @@ export class LeadsService {
       throw new BadRequestException('Converted lead cannot be edited');
     }
 
-    // center scoping: non-admin cannot change center
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
+
+    if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+      throw new NotFoundException('Lead not found');
+    }
+
     if (!isAdmin && dto.centerId !== undefined) {
       throw new BadRequestException('centerId cannot be changed');
     }
@@ -285,16 +300,33 @@ export class LeadsService {
     if (dto.passportSeries !== undefined) lead.passportSeries = dto.passportSeries ?? null;
     if (dto.passportNumber !== undefined) lead.passportNumber = dto.passportNumber ?? null;
     if (dto.jshshir !== undefined) lead.jshshir = dto.jshshir ?? null;
-    if (dto.status !== undefined) lead.status = dto.status ?? LeadStatus.NEW;
+    if (dto.status !== undefined) {
+      if (dto.status === LeadStatus.CONVERTED) {
+        throw new BadRequestException('CONVERTED statusini faqat transfer orqali o\'rnatish mumkin');
+      }
+      lead.status = dto.status ?? LeadStatus.NEW;
+    }
     if (dto.followUpDate !== undefined) {
       lead.followUpDate = dto.followUpDate ? new Date(dto.followUpDate) : null;
     }
 
     if (dto.groupIds !== undefined) {
+      const leadCenterId = lead.centerId;
       lead.groups =
         Array.isArray(dto.groupIds) && dto.groupIds.length
-          ? await this.groupRepo.findBy({ id: In(dto.groupIds) })
+          ? await this.groupRepo.find({
+              where: { id: In(dto.groupIds), center: { id: leadCenterId } },
+            })
           : [];
+      if (
+        Array.isArray(dto.groupIds) &&
+        dto.groupIds.length &&
+        lead.groups.length !== dto.groupIds.length
+      ) {
+        throw new BadRequestException(
+          'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+        );
+      }
     }
 
     const saved = await this.leadRepo.save(lead);
@@ -305,6 +337,7 @@ export class LeadsService {
     organizationId: number,
     id: number,
     dto: ChangeLeadStatusDto,
+    currentUser?: CurrentUser,
   ) {
     const lead = await this.leadRepo.findOne({
       where: { id },
@@ -312,6 +345,15 @@ export class LeadsService {
     });
     if (!lead || (lead as any).organizationId !== organizationId) {
       throw new NotFoundException('Lead not found');
+    }
+
+    if (currentUser) {
+      const isAdmin =
+        currentUser.role === UserRole.ADMIN ||
+        currentUser.role === UserRole.SUPER_ADMIN;
+      if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+        throw new NotFoundException('Lead not found');
+      }
     }
 
     if (lead.status === LeadStatus.CONVERTED) {
@@ -329,7 +371,7 @@ export class LeadsService {
     return instanceToPlain(saved);
   }
 
-  async remove(organizationId: number, id: number) {
+  async remove(organizationId: number, id: number, currentUser?: CurrentUser) {
     const lead = await this.leadRepo.findOne({
       where: { id },
       relations: ['organization'],
@@ -337,6 +379,16 @@ export class LeadsService {
     if (!lead || (lead as any).organizationId !== organizationId) {
       throw new NotFoundException('Lead not found');
     }
+
+    if (currentUser) {
+      const isAdmin =
+        currentUser.role === UserRole.ADMIN ||
+        currentUser.role === UserRole.SUPER_ADMIN;
+      if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+        throw new NotFoundException('Lead not found');
+      }
+    }
+
     await this.leadRepo.delete({ id });
     return { success: true };
   }

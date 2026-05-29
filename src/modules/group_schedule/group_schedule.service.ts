@@ -15,9 +15,24 @@ export class GroupScheduleService {
     private groupRepo: Repository<Group>,
   ) {}
 
-  async create(dto: CreateGroupScheduleDto) {
-    const group = await this.groupRepo.findOneBy({ id: dto.groupId });
+  private async findGroupOrThrow(
+    groupId: number,
+    organizationId: number,
+  ): Promise<Group> {
+    const group = await this.groupRepo.findOne({
+      where: {
+        id: groupId,
+        center: { organization: { id: organizationId } },
+      },
+    });
     if (!group) throw new NotFoundException('Group not found');
+    return group;
+  }
+
+  async create(dto: CreateGroupScheduleDto, organizationId: number) {
+    const group = await this.findGroupOrThrow(dto.groupId, organizationId);
+
+    await this.scheduleRepo.delete({ group: { id: dto.groupId } });
 
     const scheduleEntities = dto.days.map((day) =>
       this.scheduleRepo.create({
@@ -30,17 +45,29 @@ export class GroupScheduleService {
     return this.scheduleRepo.save(scheduleEntities);
   }
 
-  findAll() {
-    return this.scheduleRepo.find({ relations: ['group'] });
+  findAll(organizationId: number) {
+    return this.scheduleRepo.find({
+      where: {
+        group: { center: { organization: { id: organizationId } } },
+      },
+      relations: ['group'],
+    });
   }
 
-  findOne(id: number) {
-    return this.scheduleRepo.findOne({ where: { id }, relations: ['group'] });
+  async findOne(id: number, organizationId: number) {
+    const schedule = await this.scheduleRepo.findOne({
+      where: {
+        id,
+        group: { center: { organization: { id: organizationId } } },
+      },
+      relations: ['group'],
+    });
+    if (!schedule) throw new NotFoundException('Schedule not found');
+    return schedule;
   }
 
-  async update(groupId: number, dto: UpdateGroupScheduleDto) {
-    const group = await this.groupRepo.findOneBy({ id: groupId });
-    if (!group) throw new NotFoundException('Group not found');
+  async update(groupId: number, dto: UpdateGroupScheduleDto, organizationId: number) {
+    const group = await this.findGroupOrThrow(groupId, organizationId);
 
     await this.scheduleRepo.delete({ group: { id: groupId } });
 
@@ -55,8 +82,13 @@ export class GroupScheduleService {
     return this.scheduleRepo.save(newSchedules);
   }
 
-  async remove(id: number) {
-    const schedule = await this.scheduleRepo.findOneBy({ id });
+  async remove(id: number, organizationId: number) {
+    const schedule = await this.scheduleRepo.findOne({
+      where: {
+        id,
+        group: { center: { organization: { id: organizationId } } },
+      },
+    });
     if (!schedule) throw new NotFoundException('Schedule not found');
 
     return this.scheduleRepo.remove(schedule);

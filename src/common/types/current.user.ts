@@ -4,6 +4,6 @@ export interface CurrentUser {
   userId: number;
   email: string;
   role: UserRole;
-  centerId: number;
+  centerId?: number;
   organizationId: number;
 }

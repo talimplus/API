@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { LessThan, Repository } from 'typeorm';
 import { createHash } from 'crypto';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { BlacklistedToken } from '@/modules/blacklist/entities/blacklisted-token.entity';
 
 @Injectable()
@@ -34,6 +35,11 @@ export class BlacklistService {
       })
       .orIgnore()
       .execute();
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async cleanupExpiredTokens(): Promise<void> {
+    await this.repo.delete({ expiresAt: LessThan(new Date()) });
   }
 
   async isTokenBlacklisted(token: string): Promise<boolean> {

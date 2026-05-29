@@ -129,6 +129,17 @@ export class PaymentsController {
     return this.paymentsService.confirmReceipt(id, req.user);
   }
 
+  @Put('reject-receipt/:id')
+  @ApiOperation({ summary: 'Reject a payment receipt (admin rejection)' })
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  async rejectReceipt(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body('reason') reason?: string,
+  ) {
+    return this.paymentsService.rejectReceipt(id, req.user, reason);
+  }
+
   @Get('pending-receipts')
   @ApiOperation({ summary: 'List pending payment receipts' })
   @ApiQuery({ name: 'centerId', required: false, type: Number })

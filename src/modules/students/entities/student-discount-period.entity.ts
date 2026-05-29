@@ -29,7 +29,7 @@ export class StudentDiscountPeriod {
   fromMonth: Date;
 
   /**
-   * Month start (DATE, first day of month). Inclusive. NULL = permanent (no end).
+   * Month start (DATE, first day of month). Exclusive upper bound. NULL = permanent (no end).
    */
   @Column({ type: 'date', nullable: true })
   toMonth?: Date | null;

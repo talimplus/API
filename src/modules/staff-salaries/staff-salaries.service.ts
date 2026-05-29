@@ -63,10 +63,10 @@ export class StaffSalariesService {
 
     const employees = await this.userRepo.find({
       where: [
-        { role: UserRole.TEACHER },
-        { role: UserRole.MANAGER },
-        { role: UserRole.RECEPTION },
-        { role: UserRole.OTHER },
+        { role: UserRole.TEACHER, organization: { id: organizationId } },
+        { role: UserRole.MANAGER, organization: { id: organizationId } },
+        { role: UserRole.RECEPTION, organization: { id: organizationId } },
+        { role: UserRole.OTHER, organization: { id: organizationId } },
       ],
       relations: ['organization', 'center'],
     });
@@ -229,17 +229,15 @@ export class StaffSalariesService {
       .format('YYYY-MM');
 
     const teacherEarningById = new Map<number, any>();
-    for (const r of rows) {
-      if (r.user?.role !== UserRole.TEACHER) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const earning =
-        await this.teacherEarningsService.calculateTeacherEarningsForMonth(
-          organizationId,
-          r.userId,
-          payYm,
-          { force: r.status !== StaffSalaryStatus.PAID },
-        );
-      teacherEarningById.set(r.userId, earning);
+    const teacherUserIds = rows.filter((r) => r.user?.role === UserRole.TEACHER).map((r) => r.userId);
+    if (teacherUserIds.length) {
+      const earnings = await this.teacherEarningsService.listEarningsByUserIds(
+        teacherUserIds,
+        month,
+      );
+      for (const e of earnings) {
+        teacherEarningById.set(e.teacherId, e);
+      }
     }
 
     return rows.map((r: any) => {
@@ -298,6 +296,10 @@ export class StaffSalariesService {
       relations: ['user'],
     });
     if (!salary) throw new NotFoundException('Salary record not found');
+
+    if (salary.status === StaffSalaryStatus.PAID) {
+      throw new BadRequestException('Maosh allaqachon to\'liq to\'langan');
+    }
 
     const baseSalary = Number(salary.baseSalary ?? 0);
     const currentPaid = Number(salary.paidAmount ?? 0);

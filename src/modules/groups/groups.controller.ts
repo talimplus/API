@@ -29,7 +29,7 @@ export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 
   @Post()
-  // @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   @ApiOperation({ summary: 'Create new group' })
   @ApiResponse({ type: GroupResponseDto })
   create(@Body() dto: CreateGroupDto, @Req() req: any) {
@@ -37,7 +37,7 @@ export class GroupsController {
   }
 
   @Put(':id')
-  // @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   @ApiOperation({ summary: 'Update group' })
   @ApiResponse({ type: GroupResponseDto })
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateGroupDto) {
@@ -66,7 +66,7 @@ export class GroupsController {
   }
 
   @Get()
-  // @Roles(UserRole.ADMIN, UserRole.TEACHER, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
   @ApiOperation({ summary: 'Get all groups' })
   @ApiResponse({ type: PaginatedGroupResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -135,12 +135,12 @@ export class GroupsController {
   @Get(':id')
   @ApiOperation({ summary: 'Get one group' })
   @ApiResponse({ type: GroupResponseDto })
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.groupsService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.groupsService.findOne(id, req.user.organizationId);
   }
 
   @Delete(':id')
-  // @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Delete group' })
   @ApiResponse({ type: GroupResponseDto })
   remove(@Param('id', ParseIntPipe) id: number) {

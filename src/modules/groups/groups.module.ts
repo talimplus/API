@@ -13,6 +13,7 @@ import { GroupScheduleModule } from '@/modules/group_schedule/group_schedule.mod
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
+import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { Room } from '@/modules/rooms/entities/rooms.entity';
       Student,
       Room,
       GroupSchedule,
+      AttendanceLessonOverride,
     ]),
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
