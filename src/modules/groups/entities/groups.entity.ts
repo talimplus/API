@@ -15,6 +15,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
+import { Syllabus } from '@/modules/syllabus/entities/syllabus.entity';
 
 @Entity('groups')
 export class Group {
@@ -74,6 +75,12 @@ export class Group {
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   teacher: User;
+
+  /**
+   * Guruh amal qiladigan kurs rejasi (mavzular banki).
+   */
+  @ManyToOne(() => Syllabus, { onDelete: 'SET NULL', nullable: true })
+  syllabus?: Syllabus | null;
 
   @ManyToMany(() => Student, (student) => student.groups)
   students: Student[];

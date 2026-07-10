@@ -50,7 +50,7 @@ export class AttendanceService {
     if (!user) throw new ForbiddenException('Unauthorized');
 
     if (user.role === UserRole.TEACHER) {
-      if (!group.teacher?.id || group.teacher.id !== user.id) {
+      if (!group.teacher?.id || group.teacher.id !== user.userId) {
         throw new ForbiddenException('Teacher is not assigned to this group');
       }
     }
@@ -368,7 +368,7 @@ export class AttendanceService {
       lessonDate: dto.lessonDate as any,
       status: i.status ?? AttendanceStatus.PRESENT,
       comment: i.comment ?? null,
-      submittedById: user.id,
+      submittedById: user.userId,
       submittedAt: now,
       updatedAt: now,
     }));
@@ -535,7 +535,7 @@ export class AttendanceService {
       fromDate: fromDate as any,
       toDate: dto.toDate as any,
       reason: dto.reason ?? null,
-      createdById: user.id,
+      createdById: user.userId,
     });
 
     return {

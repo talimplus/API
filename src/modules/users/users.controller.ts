@@ -45,6 +45,7 @@ export class UsersController {
    * 📩 Email orqali foydalanuvchini topish (masalan, tizim ichida)
    */
   @Get('email/:email')
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Find user by email' })
   @ApiResponse({ type: UserResponseDto })
   async findOneByEmail(@Param('email') email: string) {
@@ -52,6 +53,7 @@ export class UsersController {
   }
 
   @Put(':id')
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Update user' })
   @ApiBody({ type: UpdateUserDto })
   @ApiResponse({ type: UserResponseDto })
@@ -132,6 +134,7 @@ export class UsersController {
    * 🔍 ID bo‘yicha foydalanuvchini olish (faqat markazdagi bo‘lsa)
    */
   @Get(':id')
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Find user by id' })
   @ApiResponse({ type: UserResponseDto })
   async findOneById(@Param('id', ParseIntPipe) id: number) {
@@ -142,6 +145,7 @@ export class UsersController {
    * 🗑️ Foydalanuvchini o‘chirish (haqiqiy o‘chirish emas, remove ishlatyapsiz)
    */
   @Delete(':id')
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Remove user' })
   @ApiResponse({ type: UserResponseDto })
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
