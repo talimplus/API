@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import OpenAI from 'openai';
 import { SyllabusTopic } from './entities/syllabus-topic.entity';
+import { TopicDifficulty } from './enums/topic-difficulty.enum';
 
 export type DistributedLesson = {
   lessonNumber: number;
@@ -16,6 +17,29 @@ export type GeneratedTopicContent = {
   lessonOutline: string;
   homework: string;
 };
+
+export type AiChatMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type AiPlanDraftTopic = {
+  title: string;
+  description?: string;
+  difficulty: TopicDifficulty;
+  estimatedLessons: number;
+};
+
+export type AiPlanDraft = {
+  name: string;
+  description?: string;
+  totalLessons?: number;
+  topics: AiPlanDraftTopic[];
+};
+
+export type CoursePlanChatResult =
+  | { type: 'question'; message: string }
+  | { type: 'plan'; message: string; plan: AiPlanDraft };
 
 @Injectable()
 export class LessonAiService {
@@ -38,15 +62,18 @@ export class LessonAiService {
     return this.client;
   }
 
-  private async completeJson(system: string, user: string): Promise<any> {
+  private async completeJson(
+    system: string,
+    user: string | AiChatMessage[],
+  ): Promise<any> {
     const client = this.getClient();
+    const history: { role: 'system' | 'user' | 'assistant'; content: string }[] =
+      typeof user === 'string' ? [{ role: 'user', content: user }] : user;
+
     const response = await client.chat.completions.create({
       model: this.model,
       response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+      messages: [{ role: 'system', content: system }, ...history],
     });
 
     const raw = response.choices[0]?.message?.content ?? '';
@@ -58,6 +85,114 @@ export class LessonAiService {
         'AI javobini o\'qib bo\'lmadi, qayta urinib ko\'ring',
       );
     }
+  }
+
+  /**
+   * Chat orqali kurs rejasini tuzadi. Ma'lumot yetishmasa savol qaytaradi,
+   * yetarli bo'lsa to'liq reja qoralamasini qaytaradi (bazaga saqlamaydi).
+   */
+  async chatCoursePlan(params: {
+    messages: AiChatMessage[];
+    subjectName?: string;
+  }): Promise<CoursePlanChatResult> {
+    const { messages, subjectName } = params;
+
+    const system = [
+      "Sen o'quv markazi uchun kurs rejasini (mavzular ro'yxatini) tuzuvchi AI yordamchisan.",
+      "Foydalanuvchi bilan o'zbek tilida suhbatlashib, kurs rejasini tuzasan.",
+      '',
+      "Reja tuzishdan oldin quyidagi ma'lumotlar aniq bo'lishi kerak:",
+      "1. Yo'nalish va qamrov — qaysi kurs/fan, unda nimalar o'rgatiladi (masalan frontend bo'lsa: HTML, CSS, JS, TypeScript kiradimi va h.k.).",
+      '2. Jami darslar soni. Foydalanuvchi buni bevosita aytmasligi mumkin — u holda kurs davomiyligi (necha oy) VA haftasiga necha kun dars bo\'lishini so\'rab, o\'zing hisoblaysan: jami darslar ≈ oylar soni × 4 hafta × haftadagi darslar soni.',
+      '',
+      'Qoidalar:',
+      "- Muhim ma'lumot yetishmasa, qisqa va aniq savol ber. Bir xabarda bir-ikkitadan ortiq savol berma, keraksiz narsani so'rama.",
+      "- Auditoriya darajasi kabi ikkinchi darajali detallar aytilmasa, o'zing oqilona taxmin qil — qayta so'rab o'tirma.",
+      "- Ma'lumot yetarli bo'lgach reja tuz: mavzular mantiqiy ketma-ketlikda, soddadan murakkabga, amaliy mashg'ulotlar va oraliq loyiha/imtihonlar bilan.",
+      "- Har mavzuga difficulty (easy, medium yoki hard) va estimatedLessons (mavzu nechta dars egallashi) belgila.",
+      "- Barcha mavzular estimatedLessons yig'indisi jami darslar soniga teng yoki undan 1-3 dars kam bo'lsin (takrorlash uchun zaxira).",
+      "- Faqat o'zbek tilida javob ber.",
+      '',
+      'Javobni FAQAT quyidagi ikki JSON formatdan birida qaytar:',
+      "Savol bo'lsa:",
+      '{"type": "question", "message": "savol matni"}',
+      "Reja tayyor bo'lsa:",
+      '{"type": "plan", "message": "reja haqida 1-2 gaplik izoh", "plan": {"name": "kurs rejasi nomi", "description": "qisqacha tavsif", "totalLessons": 48, "topics": [{"title": "mavzu nomi", "description": "qisqacha izoh", "difficulty": "easy", "estimatedLessons": 2}]}}',
+      subjectName ? `\nKurs bog'lanadigan fan: ${subjectName}` : '',
+    ].join('\n');
+
+    const parsed = await this.completeJson(system, messages);
+
+    if (parsed?.type === 'plan') {
+      const plan = this.sanitizePlanDraft(parsed?.plan);
+      if (!plan) {
+        throw new ServiceUnavailableException(
+          "AI reja tuzib bera olmadi, qayta urinib ko'ring",
+        );
+      }
+      return {
+        type: 'plan',
+        message: String(parsed?.message ?? 'Reja tayyor.'),
+        plan,
+      };
+    }
+
+    const message = String(parsed?.message ?? '').trim();
+    if (!message) {
+      throw new ServiceUnavailableException(
+        "AI javobini o'qib bo'lmadi, qayta urinib ko'ring",
+      );
+    }
+    return { type: 'question', message };
+  }
+
+  /**
+   * AI qaytargan reja qoralamasini tozalaydi: bo'sh mavzularni tashlaydi,
+   * difficulty/estimatedLessons qiymatlarini chegaraga keltiradi.
+   */
+  private sanitizePlanDraft(raw: any): AiPlanDraft | null {
+    const name = String(raw?.name ?? '').trim();
+    const rawTopics = Array.isArray(raw?.topics) ? raw.topics : [];
+
+    const difficulties = new Set<string>(Object.values(TopicDifficulty));
+    const topics: AiPlanDraftTopic[] = [];
+    for (const t of rawTopics) {
+      const title = String(t?.title ?? '').trim();
+      if (!title) continue;
+
+      const difficulty = difficulties.has(t?.difficulty)
+        ? (t.difficulty as TopicDifficulty)
+        : TopicDifficulty.MEDIUM;
+
+      const estimated = Number(t?.estimatedLessons);
+      const estimatedLessons =
+        Number.isInteger(estimated) && estimated >= 1
+          ? Math.min(estimated, 50)
+          : 1;
+
+      const description = String(t?.description ?? '').trim();
+      topics.push({
+        title,
+        description: description || undefined,
+        difficulty,
+        estimatedLessons,
+      });
+    }
+
+    if (!name || !topics.length) return null;
+
+    const totalLessons = Number(raw?.totalLessons);
+    const description = String(raw?.description ?? '').trim();
+
+    return {
+      name,
+      description: description || undefined,
+      totalLessons:
+        Number.isInteger(totalLessons) && totalLessons >= 1
+          ? totalLessons
+          : undefined,
+      topics,
+    };
   }
 
   /**

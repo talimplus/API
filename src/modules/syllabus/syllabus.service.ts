@@ -14,6 +14,8 @@ import { CreateTopicDto } from './dto/create-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
 import { ReorderTopicsDto } from './dto/reorder-topics.dto';
 import { GenerateTopicContentDto } from './dto/generate-topic-content.dto';
+import { AiPlanChatDto } from './dto/ai-plan-chat.dto';
+import { SaveAiPlanDto } from './dto/save-ai-plan.dto';
 import { LessonAiService } from './lesson-ai.service';
 
 @Injectable()
@@ -270,5 +272,71 @@ export class SyllabusService {
       audience: dto.audience,
       instructions: dto.instructions,
     });
+  }
+
+  /**
+   * AI bilan chat orqali kurs rejasi tuzish. Suhbat tarixi frontendda saqlanadi,
+   * har so'rovda to'liq yuboriladi. AI savol yoki tayyor reja qoralamasini
+   * qaytaradi — bazaga hech narsa saqlanmaydi (saqlash saveAiPlan orqali).
+   */
+  async aiPlanChat(dto: AiPlanChatDto, user: any) {
+    const last = dto.messages[dto.messages.length - 1];
+    if (last.role !== 'user') {
+      throw new BadRequestException(
+        "Oxirgi xabar foydalanuvchidan bo'lishi kerak",
+      );
+    }
+
+    let subjectName: string | undefined;
+    if (dto.subjectId) {
+      const subject = await this.getScopedSubject(dto.subjectId, user);
+      subjectName = subject.name;
+    }
+
+    return this.lessonAiService.chatCoursePlan({
+      messages: dto.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })),
+      subjectName,
+    });
+  }
+
+  /**
+   * AI tuzgan (va foydalanuvchi tasdiqlagan) rejani mavzulari bilan birga
+   * bitta tranzaksiyada saqlaydi.
+   */
+  async saveAiPlan(dto: SaveAiPlanDto, user: any) {
+    const subject = await this.getScopedSubject(dto.subjectId, user);
+
+    const syllabusId = await this.syllabusRepo.manager.transaction(
+      async (manager) => {
+        const syllabus = await manager.save(
+          manager.create(Syllabus, {
+            name: dto.name,
+            description: dto.description ?? null,
+            subject,
+            center: subject.center,
+            createdBy: user.userId ? ({ id: user.userId } as any) : null,
+          }),
+        );
+
+        const topics = dto.topics.map((t, i) =>
+          manager.create(SyllabusTopic, {
+            syllabusId: syllabus.id,
+            orderIndex: i,
+            title: t.title,
+            description: t.description ?? null,
+            difficulty: t.difficulty,
+            estimatedLessons: t.estimatedLessons ?? 1,
+          }),
+        );
+        await manager.save(topics);
+
+        return syllabus.id;
+      },
+    );
+
+    return this.findOne(syllabusId, user);
   }
 }

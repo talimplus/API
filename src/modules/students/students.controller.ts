@@ -171,7 +171,12 @@ export class StudentsController {
   }
 
   @Put('change-status/:id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
   @ApiOperation({ summary: 'Change student status' })
   @ApiResponse({ type: StudentResponseDto })
   @ApiBody({ type: ChangeStudentStatusDto, required: false })
@@ -191,7 +196,12 @@ export class StudentsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
   @ApiOperation({ summary: 'Update student' })
   @ApiResponse({ type: StudentResponseDto })
   async update(

@@ -20,6 +20,8 @@ import { CreateTopicDto } from './dto/create-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
 import { ReorderTopicsDto } from './dto/reorder-topics.dto';
 import { GenerateTopicContentDto } from './dto/generate-topic-content.dto';
+import { AiPlanChatDto } from './dto/ai-plan-chat.dto';
+import { SaveAiPlanDto } from './dto/save-ai-plan.dto';
 
 @ApiTags('Syllabus')
 @Controller('syllabuses')
@@ -50,6 +52,28 @@ export class SyllabusController {
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 10,
     });
+  }
+
+  // ---------- AI bilan reja tuzish ----------
+
+  @Post('ai/chat')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({
+    summary:
+      "AI bilan chat orqali kurs rejasi tuzish. Ma'lumot yetishmasa {type: 'question'}, tayyor bo'lsa {type: 'plan'} qaytaradi (saqlamaydi)",
+  })
+  aiPlanChat(@Body() dto: AiPlanChatDto, @Req() req: any) {
+    return this.syllabusService.aiPlanChat(dto, req.user);
+  }
+
+  @Post('ai/save')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @ApiOperation({
+    summary:
+      'AI tuzgan rejani mavzulari bilan birga saqlash (foydalanuvchi tasdiqlagandan keyin)',
+  })
+  saveAiPlan(@Body() dto: SaveAiPlanDto, @Req() req: any) {
+    return this.syllabusService.saveAiPlan(dto, req.user);
   }
 
   @Get(':id')
