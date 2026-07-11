@@ -3,18 +3,28 @@ import {
   Catch,
   ExceptionFilter,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 
 @Catch(QueryFailedError)
 export class TypeOrmExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(TypeOrmExceptionFilter.name);
+
   catch(exception: QueryFailedError, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<any>();
+    const request = ctx.getRequest<any>();
 
     const driver: any = (exception as any)?.driverError ?? {};
     const code = driver?.code;
+
+    this.logger.error(
+      `${request?.method} ${request?.url} — ${exception.message}` +
+        (driver?.detail ? ` | detail: ${driver.detail}` : '') +
+        ` | query: ${(exception as any)?.query ?? ''}`,
+    );
 
     // Postgres unique violation
     if (code === '23505') {

@@ -198,7 +198,7 @@ export class StatisticsService {
     const paymentsByMethodRaw = await this.receiptRepo
       .createQueryBuilder('r')
       .select([
-        'COALESCE(r.paymentMethod, \'unknown\') as "method"',
+        'COALESCE("r"."paymentMethod"::text, \'unknown\') as "method"',
         'COALESCE(SUM(r.amount), 0) as "totalAmount"',
         'COUNT(r.id) as "count"',
       ])
