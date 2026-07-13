@@ -29,7 +29,12 @@ export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
   @ApiOperation({ summary: 'Create new group' })
   @ApiResponse({ type: GroupResponseDto })
   create(@Body() dto: CreateGroupDto, @Req() req: any) {
@@ -37,7 +42,12 @@ export class GroupsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
   @ApiOperation({ summary: 'Update group' })
   @ApiResponse({ type: GroupResponseDto })
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateGroupDto) {
@@ -45,7 +55,12 @@ export class GroupsController {
   }
 
   @Put('change-status/:id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
   @ApiOperation({ summary: 'Change group status' })
   @ApiResponse({ type: GroupResponseDto })
   @ApiQuery({ name: 'status', required: false, enum: GroupStatus })
