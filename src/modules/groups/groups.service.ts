@@ -68,6 +68,60 @@ export class GroupsService {
     );
   }
 
+  /** Normalize 'HH:mm' or 'HH:mm:ss' to 'HH:mm:ss' for reliable comparison. */
+  private normalizeTime(t: string): string {
+    const [h = '00', m = '00', s = '00'] = String(t).split(':');
+    return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`;
+  }
+
+  /**
+   * Prevents double-booking a room: a room cannot host two (non-finished)
+   * groups on the same weekday at the same start time.
+   */
+  private async assertRoomScheduleAvailable(args: {
+    roomId?: number | null;
+    days?: { day: WeekDay; startTime: string }[];
+    excludeGroupId?: number;
+  }) {
+    const { roomId, days, excludeGroupId } = args;
+    if (!roomId || !days?.length) return;
+
+    const qb = this.scheduleRepo
+      .createQueryBuilder('sch')
+      .innerJoin('sch.group', 'g')
+      .innerJoin('g.room', 'r')
+      .where('r.id = :roomId', { roomId })
+      .andWhere('g.status != :finished', { finished: GroupStatus.FINISHED })
+      .select('sch.day', 'day')
+      .addSelect('sch.startTime', 'startTime')
+      .addSelect('g.name', 'groupName');
+    if (excludeGroupId) {
+      qb.andWhere('g.id != :excludeGroupId', { excludeGroupId });
+    }
+
+    const existing = await qb.getRawMany<{
+      day: WeekDay;
+      startTime: string;
+      groupName: string;
+    }>();
+
+    const taken = new Map<string, string>();
+    for (const e of existing) {
+      taken.set(`${e.day}|${this.normalizeTime(e.startTime)}`, e.groupName);
+    }
+
+    for (const d of days) {
+      const conflictGroup = taken.get(
+        `${d.day}|${this.normalizeTime(d.startTime)}`,
+      );
+      if (conflictGroup) {
+        throw new BadRequestException(
+          `Xona band: bu xona "${conflictGroup}" guruhiga ${d.day} kuni ${this.normalizeTime(d.startTime).slice(0, 5)} da biriktirilgan`,
+        );
+      }
+    }
+  }
+
   async create(dto: CreateGroupDto, centerId: number, role: UserRole) {
     if (role === UserRole.ADMIN && !dto.centerId) {
       throw new BadRequestException('Admin uchun centerId bo‘lishi kerak');
@@ -114,6 +168,11 @@ export class GroupsService {
       }
     }
 
+    await this.assertRoomScheduleAvailable({
+      roomId: dto.roomId,
+      days: dto.days,
+    });
+
     const group = this.groupRepo.create({
       name: dto.name,
       monthlyFee: dto.monthlyFee,
@@ -146,7 +205,10 @@ export class GroupsService {
   }
 
   async update(id: number, dto: UpdateGroupDto) {
-    const group = await this.groupRepo.findOneBy({ id });
+    const group = await this.groupRepo.findOne({
+      where: { id },
+      relations: ['room', 'schedules'],
+    });
 
     if (!group) throw new NotFoundException('Group not found');
 
@@ -185,6 +247,19 @@ export class GroupsService {
       });
       if (!group.teacher) throw new NotFoundException('Teacher not found');
     }
+
+    // Re-check room availability against the effective room + schedule.
+    const effectiveDays =
+      dto.days ??
+      (group.schedules ?? []).map((s) => ({
+        day: s.day,
+        startTime: s.startTime,
+      }));
+    await this.assertRoomScheduleAvailable({
+      roomId: group.room?.id,
+      days: effectiveDays,
+      excludeGroupId: id,
+    });
 
     const savedGroup = await this.groupRepo.save(group);
 
