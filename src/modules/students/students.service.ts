@@ -68,6 +68,7 @@ export class StudentsService {
       centerId,
       name,
       phone,
+      search,
       status,
       page = 1,
       perPage = 10,
@@ -80,6 +81,7 @@ export class StudentsService {
       centerId?: number;
       name?: string;
       phone?: string;
+      search?: string;
       page?: number;
       status: StudentStatus;
       perPage?: number;
@@ -147,6 +149,20 @@ export class StudentsService {
 
     if (phone)
       query.andWhere('student.phone ILIKE :phone', { phone: `%${phone}%` });
+
+    // Combined search: matches name (first/last/full) or phone numbers.
+    if (search && search.trim()) {
+      query.andWhere(
+        `(
+          student.firstName ILIKE :search
+          OR student.lastName ILIKE :search
+          OR (student.firstName || ' ' || student.lastName) ILIKE :search
+          OR student.phone ILIKE :search
+          OR student.secondPhone ILIKE :search
+        )`,
+        { search: `%${search.trim()}%` },
+      );
+    }
 
     if (groupId) {
       // avoid duplicating rows with many-to-many join; filter via join table subquery

@@ -95,7 +95,7 @@ export class UsersController {
    * 👷 Ishchilar ro'yxati (studentlar emas): teacher/manager/other
    */
   @Get('employees')
-  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
   @ApiOperation({ summary: 'Get employees (non-students)' })
   @ApiResponse({ type: PaginatedUserResponseDto })
   async findEmployees(

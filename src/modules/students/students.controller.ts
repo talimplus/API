@@ -41,6 +41,11 @@ export class StudentsController {
   @ApiQuery({ name: 'centerId', required: false })
   @ApiQuery({ name: 'name', required: false })
   @ApiQuery({ name: 'phone', required: false })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Umumiy qidiruv: ism (familiya bilan) yoki telefon raqam',
+  })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'groupId', required: false })
   @ApiQuery({
@@ -72,6 +77,7 @@ export class StudentsController {
     @Query('centerId') centerId?: number,
     @Query('name') name?: string,
     @Query('phone') phone?: string,
+    @Query('search') search?: string,
     @Query('status') status?: StudentStatus,
     @Query('groupId') groupId?: number,
     @Query('returnLikelihood') returnLikelihood?: StudentReturnLikelihood,
@@ -94,6 +100,7 @@ export class StudentsController {
         centerId: centerId ? +centerId : undefined,
         name,
         phone,
+        search,
         status: status ?? StudentStatus.ACTIVE,
         groupId,
         returnLikelihood,
