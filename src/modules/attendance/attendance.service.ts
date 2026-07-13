@@ -301,9 +301,16 @@ export class AttendanceService {
     const isAdmin = this.isAdminRole(user.role);
     const isTeacher = user.role === UserRole.TEACHER;
 
-    // Teacher can submit only for today (group TZ). Admin can override past.
+    // Teacher can submit for today or any past date within the current month
+    // (group TZ). Admin can override any past date. Future is blocked below.
     if (isTeacher && dto.lessonDate !== today) {
-      throw new ForbiddenException('Teachers can submit only for today');
+      const monthStart = dayjs.tz(today, timezone).startOf('month');
+      const lessonDay = dayjs.tz(dto.lessonDate, timezone);
+      if (lessonDay.isBefore(monthStart)) {
+        throw new ForbiddenException(
+          'Teachers can submit only for dates within the current month',
+        );
+      }
     }
     if (!isAdmin && !isTeacher) {
       throw new ForbiddenException('Not allowed');

@@ -78,7 +78,7 @@ export class GroupAttendanceController {
     description:
       'Creates/updates persisted attendance facts for a specific lessonDate. ' +
       'Validates that lessonDate is a real lesson date computed from schedule (not from attendance). ' +
-      'Teachers can submit only for today (in group timezone). Admins may override past dates. ' +
+      'Teachers can submit for today or any past date within the current month (group timezone). Admins may override any past date. ' +
       'Upserts by unique key (groupId, studentId, lessonDate).',
   })
   @ApiParam({ name: 'groupId', type: Number })
