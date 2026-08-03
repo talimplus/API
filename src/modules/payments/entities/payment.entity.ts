@@ -79,6 +79,15 @@ export class Payment {
   lessonsBillable: number | null;
 
   /**
+   * How many billable lessons were marked EXCUSED (sababli) for this student in
+   * this month. These are deducted from the billable lessons when computing
+   * amountDue: effectiveBillable = lessonsBillable - lessonsExcused.
+   * Absent (kelmadi) lessons are NOT deducted (student still pays).
+   */
+  @Column({ type: 'int', default: 0 })
+  lessonsExcused: number;
+
+  /**
    * Planned study end date for this month (YYYY-MM-DD).
    * If set, student plans to study only until this date (inclusive).
    * Used to calculate prorated payment amount.

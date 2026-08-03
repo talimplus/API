@@ -40,6 +40,7 @@ export class GroupAttendanceController {
     UserRole.ADMIN,
     UserRole.SUPER_ADMIN,
     UserRole.MANAGER,
+    UserRole.RECEPTION,
   )
   @ApiOperation({
     summary: 'Lesson dates view (schedule-driven, gaps allowed)',
@@ -72,6 +73,7 @@ export class GroupAttendanceController {
     UserRole.ADMIN,
     UserRole.SUPER_ADMIN,
     UserRole.MANAGER,
+    UserRole.RECEPTION,
   )
   @ApiOperation({
     summary: 'Submit attendance (lazy creation, bulk upsert, no duplicates)',
@@ -107,6 +109,7 @@ export class GroupAttendanceController {
     UserRole.ADMIN,
     UserRole.SUPER_ADMIN,
     UserRole.MANAGER,
+    UserRole.RECEPTION,
   )
   @ApiOperation({
     summary: 'Reschedule a lesson to a new date',
@@ -137,6 +140,7 @@ export class GroupAttendanceController {
     UserRole.ADMIN,
     UserRole.SUPER_ADMIN,
     UserRole.MANAGER,
+    UserRole.RECEPTION,
   )
   @ApiOperation({
     summary: 'Attendance report (database-driven only)',

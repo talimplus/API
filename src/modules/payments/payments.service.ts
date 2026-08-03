@@ -17,6 +17,8 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import { Attendance } from '@/modules/attendance/entities/attendance.entity';
+import { AttendanceStatus } from '@/modules/attendance/enums/attendance-status.enum';
 import { TeacherEarningsService } from '@/modules/teacher-earnings/teacher-earnings.service';
 import { Inject, forwardRef } from '@nestjs/common';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
@@ -48,6 +50,8 @@ export class PaymentsService {
     private readonly discountPeriodRepo: Repository<StudentDiscountPeriod>,
     @InjectRepository(Referral)
     private readonly referralRepo: Repository<Referral>,
+    @InjectRepository(Attendance)
+    private readonly attendanceRepo: Repository<Attendance>,
     @Inject(forwardRef(() => TeacherEarningsService))
     private readonly teacherEarningsService: TeacherEarningsService,
     private readonly dataSource: DataSource,
@@ -591,7 +595,11 @@ export class PaymentsService {
     forMonth: string; // YYYY-MM-01
     studentActiveStart: string; // YYYY-MM-DD
     studentActiveEndExclusive?: string; // YYYY-MM-DD (optional)
-  }): { lessonsPlanned: number; lessonsBillable: number } {
+  }): {
+    lessonsPlanned: number;
+    lessonsBillable: number;
+    billableDates: string[];
+  } {
     const { group, forMonth, studentActiveStart, studentActiveEndExclusive } =
       args;
     const timezone = group.timezone || 'Asia/Tashkent';
@@ -632,18 +640,106 @@ export class PaymentsService {
     });
 
     const lessonsPlanned = plannedDates.length;
-    if (!lessonsPlanned) return { lessonsPlanned: 0, lessonsBillable: 0 };
+    if (!lessonsPlanned)
+      return { lessonsPlanned: 0, lessonsBillable: 0, billableDates: [] };
 
     // Billable lessons: subset of the full month schedule starting from studentActiveStart
     // and optionally ending before studentActiveEndExclusive (used for STOPPED refunds).
-    const lessonsBillable = plannedDates.filter((d) => {
+    const billableDates = plannedDates.filter((d) => {
       if (d < studentActiveStart) return false;
       if (studentActiveEndExclusive && d >= studentActiveEndExclusive)
         return false;
       return true;
-    }).length;
+    });
 
-    return { lessonsPlanned, lessonsBillable };
+    return {
+      lessonsPlanned,
+      lessonsBillable: billableDates.length,
+      billableDates,
+    };
+  }
+
+  /**
+   * Count EXCUSED (sababli) attendance rows for a student in a group that fall
+   * on the given billable lesson dates. These are deducted from billing.
+   * Absent (kelmadi), present and late lessons are NOT counted here.
+   */
+  private async countExcusedOnDates(
+    groupId: number,
+    studentId: number,
+    dates: string[],
+  ): Promise<number> {
+    if (!dates.length) return 0;
+    return this.attendanceRepo
+      .createQueryBuilder('a')
+      .where('a.groupId = :groupId', { groupId })
+      .andWhere('a.studentId = :studentId', { studentId })
+      .andWhere('a.status = :status', { status: AttendanceStatus.EXCUSED })
+      .andWhere('a.lessonDate IN (:...dates)', { dates })
+      .getCount();
+  }
+
+  /**
+   * Single source of truth for one payment's monthly billing.
+   * Combines schedule-based lesson counts, EXCUSED deductions and discounts.
+   */
+  private async computeMonthBilling(args: {
+    student: Student;
+    group: Group;
+    forMonth: string; // YYYY-MM-01
+    studentActiveEndExclusive?: string;
+  }): Promise<{
+    studentActiveStart: string;
+    lessonsPlanned: number;
+    lessonsBillable: number; // schedule-based (pre-excused)
+    lessonsExcused: number;
+    effectiveBillable: number; // lessonsBillable - lessonsExcused
+    discountPercent: number;
+    amountDue: number;
+  }> {
+    const { student, group, forMonth, studentActiveEndExclusive } = args;
+
+    const studentActiveStart = this.computeStudentActiveStartForMonth({
+      student,
+      group,
+      forMonth,
+    });
+
+    const { lessonsPlanned, lessonsBillable, billableDates } =
+      this.computeMonthLessonCounts({
+        group,
+        forMonth,
+        studentActiveStart,
+        studentActiveEndExclusive,
+      });
+
+    const lessonsExcused = lessonsPlanned
+      ? await this.countExcusedOnDates(group.id, student.id, billableDates)
+      : 0;
+    const effectiveBillable = Math.max(0, lessonsBillable - lessonsExcused);
+
+    const { percent: discountPercent } = await this.resolveDiscountForMonth({
+      student,
+      forMonth,
+    });
+
+    const amountDue = this.computeAmountDue({
+      student,
+      group,
+      lessonsPlanned,
+      lessonsBillable: effectiveBillable,
+      discountPercent,
+    });
+
+    return {
+      studentActiveStart,
+      lessonsPlanned,
+      lessonsBillable,
+      lessonsExcused,
+      effectiveBillable,
+      discountPercent,
+      amountDue,
+    };
   }
 
   private computeStudentActiveStartForMonth(args: {
@@ -726,11 +822,6 @@ export class PaymentsService {
       const timezone = p.group.timezone || 'Asia/Tashkent';
       const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
 
-      const studentActiveStart = this.computeStudentActiveStartForMonth({
-        student: p.student,
-        group: p.group,
-        forMonth,
-      });
       const studentActiveEndExclusive =
         this.computeStudentActiveEndExclusiveForMonth({
           student: p.student,
@@ -738,26 +829,13 @@ export class PaymentsService {
           forMonth,
         });
 
-      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
-        {
+      const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+        await this.computeMonthBilling({
+          student: p.student,
           group: p.group,
           forMonth,
-          studentActiveStart,
           studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
-        },
-      );
-
-      const { percent: discountPercent } = await this.resolveDiscountForMonth({
-        student: p.student,
-        forMonth,
-      });
-      const amountDue = this.computeAmountDue({
-        student: p.student,
-        group: p.group,
-        lessonsPlanned,
-        lessonsBillable,
-        discountPercent,
-      });
+        });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
 
@@ -782,6 +860,7 @@ export class PaymentsService {
 
       p.lessonsPlanned = lessonsPlanned;
       p.lessonsBillable = lessonsBillable;
+      p.lessonsExcused = lessonsExcused;
       p.amountDue = amountDue as any;
       p.amountPaid = newPaid as any;
       p.refundedAmount = newRefunded as any;
@@ -876,22 +955,16 @@ export class PaymentsService {
       const timezone = p.group.timezone || 'Asia/Tashkent';
       const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
 
-      const studentActiveStart = this.computeStudentActiveStartForMonth({
-        student: p.student,
-        group: p.group,
-        forMonth,
-      });
       const plannedEndExclusive = p.plannedStudyUntilDate
         ? dayjs(p.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
         : undefined;
-      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
-        {
+      const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+        await this.computeMonthBilling({
+          student: p.student,
           group: p.group,
           forMonth,
-          studentActiveStart,
           studentActiveEndExclusive: plannedEndExclusive,
-        },
-      );
+        });
 
       // Keep the system free of useless zero-bill payments:
       // if nothing is billable and nothing was paid -> delete open payment
@@ -902,18 +975,6 @@ export class PaymentsService {
         }
         continue;
       }
-
-      const { percent: discountPercent } = await this.resolveDiscountForMonth({
-        student: p.student,
-        forMonth,
-      });
-      const amountDue = this.computeAmountDue({
-        student: p.student,
-        group: p.group,
-        lessonsPlanned,
-        lessonsBillable,
-        discountPercent,
-      });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
 
@@ -930,6 +991,7 @@ export class PaymentsService {
 
       p.lessonsPlanned = lessonsPlanned;
       p.lessonsBillable = lessonsBillable;
+      p.lessonsExcused = lessonsExcused;
       p.amountDue = amountDue as any;
       p.amountPaid = newAmountPaid as any;
       p.status = newStatus;
@@ -1041,11 +1103,6 @@ export class PaymentsService {
       const timezone = p.group.timezone || 'Asia/Tashkent';
       const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
 
-      const studentActiveStart = this.computeStudentActiveStartForMonth({
-        student: p.student,
-        group: p.group,
-        forMonth,
-      });
       const studentActiveEndExclusive =
         this.computeStudentActiveEndExclusiveForMonth({
           student: p.student,
@@ -1053,32 +1110,19 @@ export class PaymentsService {
           forMonth,
         });
 
-      const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts(
-        {
+      const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+        await this.computeMonthBilling({
+          student: p.student,
           group: p.group,
           forMonth,
-          studentActiveStart,
           studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
-        },
-      );
+        });
 
       const amountPaid = Number(p.amountPaid ?? 0);
       if (!lessonsPlanned || !lessonsBillable) {
         if (amountPaid === 0) toDeleteIds.push(p.id);
         continue;
       }
-
-      const { percent: discountPercent } = await this.resolveDiscountForMonth({
-        student: p.student,
-        forMonth,
-      });
-      const amountDue = this.computeAmountDue({
-        student: p.student,
-        group: p.group,
-        lessonsPlanned,
-        lessonsBillable,
-        discountPercent,
-      });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
 
@@ -1091,6 +1135,7 @@ export class PaymentsService {
 
       p.lessonsPlanned = lessonsPlanned;
       p.lessonsBillable = lessonsBillable;
+      p.lessonsExcused = lessonsExcused;
       p.amountDue = amountDue as any;
       p.amountPaid = newAmountPaid as any;
       p.status = newStatus;
@@ -1102,6 +1147,114 @@ export class PaymentsService {
 
     if (toDeleteIds.length) await this.paymentRepo.delete(toDeleteIds);
     if (toSave.length) await this.paymentRepo.save(toSave);
+  }
+
+  /**
+   * Recalculate a single payment after an attendance change (present/absent/
+   * excused) for one (student, group, month). EXCUSED lessons reduce amountDue;
+   * flipping a lesson back to PRESENT restores it. Unlike the "open payments"
+   * recalcs, this ALSO adjusts already-PAID payments and issues a refund when
+   * the newly-computed amountDue drops below what was already paid.
+   */
+  async recalcPaymentForAttendanceChange(
+    studentId: number,
+    groupId: number,
+    forMonthInput: string, // any date within the month
+  ): Promise<void> {
+    this.discountCache.clear();
+    const forMonth = dayjs(forMonthInput)
+      .startOf('month')
+      .format('YYYY-MM-01');
+
+    let payment = await this.paymentRepo.findOne({
+      where: {
+        studentId,
+        groupId: groupId as any,
+        forMonth: forMonth as any,
+      },
+      relations: ['student', 'group', 'group.schedules'],
+    });
+
+    // No payment row yet (e.g. attendance submitted before payments ensured):
+    // try to create it, then re-load. Only applies to active students.
+    if (!payment) {
+      await this.ensurePaymentsForStudent(studentId, {
+        onlyCurrentMonth: false,
+      }).catch(() => {});
+      payment = await this.paymentRepo.findOne({
+        where: {
+          studentId,
+          groupId: groupId as any,
+          forMonth: forMonth as any,
+        },
+        relations: ['student', 'group', 'group.schedules'],
+      });
+    }
+
+    if (!payment || !payment.student || !payment.group) return;
+    if (!payment.group.schedules?.length) return;
+
+    const timezone = payment.group.timezone || 'Asia/Tashkent';
+
+    // Prorate boundary: respect plannedStudyUntilDate and STOPPED date, take the
+    // earlier of the two so billing stays correct in every case.
+    const plannedEndExclusive = payment.plannedStudyUntilDate
+      ? dayjs(payment.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
+      : null;
+    const stoppedEndExclusive = this.computeStudentActiveEndExclusiveForMonth({
+      student: payment.student,
+      group: payment.group,
+      forMonth,
+    });
+    const endExclusive =
+      [plannedEndExclusive, stoppedEndExclusive]
+        .filter((d): d is string => !!d)
+        .sort()[0] ?? undefined;
+
+    const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+      await this.computeMonthBilling({
+        student: payment.student,
+        group: payment.group,
+        forMonth,
+        studentActiveEndExclusive: endExclusive,
+      });
+
+    const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
+
+    const prevPaid = Number(payment.amountPaid ?? 0);
+    const prevRefunded = Number(payment.refundedAmount ?? 0);
+
+    let newPaid = prevPaid;
+    let newRefunded = prevRefunded;
+    let refundedAt: Date | null = payment.refundedAt ?? null;
+
+    // If already paid more than the new due amount, refund the difference.
+    if (newPaid > amountDue) {
+      const refund = this.round2(newPaid - amountDue);
+      newRefunded = this.round2(newRefunded + refund);
+      newPaid = amountDue;
+      refundedAt = new Date();
+    }
+
+    let newStatus = payment.status;
+    if (newPaid >= amountDue) newStatus = PaymentStatus.PAID;
+    else if (newPaid > 0) newStatus = PaymentStatus.PARTIAL;
+    else newStatus = PaymentStatus.UNPAID;
+
+    payment.lessonsPlanned = lessonsPlanned;
+    payment.lessonsBillable = lessonsBillable;
+    payment.lessonsExcused = lessonsExcused;
+    payment.amountDue = amountDue as any;
+    payment.amountPaid = newPaid as any;
+    payment.refundedAmount = newRefunded as any;
+    payment.refundedAt = refundedAt as any;
+    payment.status = newStatus;
+    payment.dueDate = dueDate as any;
+    payment.hardDueDate = hardDueDate as any;
+
+    await this.paymentRepo.save(payment);
+
+    void this.triggerTeacherEarningsRecalcForPayment(payment.id).catch(() => {});
   }
 
   private async ensurePaymentsForStudents(
@@ -1181,17 +1334,8 @@ export class PaymentsService {
             continue;
           }
 
-          const studentActiveStart = this.computeStudentActiveStartForMonth({
-            student,
-            group,
-            forMonth,
-          });
-          const { lessonsPlanned, lessonsBillable } =
-            this.computeMonthLessonCounts({
-              group,
-              forMonth,
-              studentActiveStart,
-            });
+          const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+            await this.computeMonthBilling({ student, group, forMonth });
 
           if (!lessonsPlanned) {
             cursor = cursor.add(1, 'month');
@@ -1203,16 +1347,6 @@ export class PaymentsService {
             cursor = cursor.add(1, 'month');
             continue;
           }
-
-          const { percent: discountPercent } =
-            await this.resolveDiscountForMonth({ student, forMonth });
-          const amountDue = this.computeAmountDue({
-            student,
-            group,
-            lessonsPlanned,
-            lessonsBillable,
-            discountPercent,
-          });
 
           const { dueDate, hardDueDate } = this.computeDueDates(
             forMonth,
@@ -1232,6 +1366,7 @@ export class PaymentsService {
             hardDueDate: hardDueDate as any,
             lessonsPlanned,
             lessonsBillable,
+            lessonsExcused,
           });
           existingSet.add(key);
 
@@ -1481,6 +1616,7 @@ export class PaymentsService {
           discountBreakdown: discount.breakdown,
           lessonsPlanned: p.lessonsPlanned ?? 0,
           lessonsBillable: p.lessonsBillable ?? 0,
+          lessonsExcused: p.lessonsExcused ?? 0,
         };
       }),
     );
@@ -1517,12 +1653,6 @@ export class PaymentsService {
       .startOf('month')
       .format('YYYY-MM-01');
 
-    const studentActiveStart = this.computeStudentActiveStartForMonth({
-      student: payment.student,
-      group: payment.group,
-      forMonth,
-    });
-
     // Parse plannedStudyUntilDate (can be ISO string or YYYY-MM-DD)
     const plannedEndDate = dayjs(dto.plannedStudyUntilDate)
       .startOf('day')
@@ -1531,29 +1661,22 @@ export class PaymentsService {
       .add(1, 'day')
       .format('YYYY-MM-DD');
 
-    const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts({
+    const {
+      lessonsPlanned,
+      lessonsBillable,
+      lessonsExcused,
+      discountPercent,
+      amountDue,
+    } = await this.computeMonthBilling({
+      student: payment.student,
       group: payment.group,
       forMonth,
-      studentActiveStart,
       studentActiveEndExclusive: plannedEndExclusive,
     });
 
     if (lessonsPlanned === 0) {
       throw new BadRequestException('Bu oy uchun darslar rejalashtirilmagan');
     }
-
-    const { percent: discountPercent } = await this.resolveDiscountForMonth({
-      student: payment.student,
-      forMonth,
-    });
-
-    const amountDue = this.computeAmountDue({
-      student: payment.student,
-      group: payment.group,
-      lessonsPlanned,
-      lessonsBillable,
-      discountPercent,
-    });
 
     // Get pending receipts amount
     const pendingRaw = await this.receiptRepo
@@ -1581,6 +1704,7 @@ export class PaymentsService {
       plannedStudyUntilDate: plannedEndDate,
       lessonsPlanned,
       lessonsBillable,
+      lessonsExcused,
       discountPercent,
       amountDue,
       currentAmountDue: Number(payment.amountDue ?? 0),
@@ -1595,7 +1719,7 @@ export class PaymentsService {
   async updatePayment(id: number, dto: UpdatePaymentDto) {
     const payment = await this.paymentRepo.findOne({
       where: { id },
-      relations: ['student', 'group'],
+      relations: ['student', 'group', 'group.schedules'],
     });
     if (!payment) throw new NotFoundException(`To'lov topilmadi`);
 
@@ -1618,39 +1742,22 @@ export class PaymentsService {
       .startOf('month')
       .format('YYYY-MM-01');
 
-    const studentActiveStart = this.computeStudentActiveStartForMonth({
-      student: payment.student!,
-      group: payment.group!,
-      forMonth,
-    });
-
     const plannedEndExclusive = payment.plannedStudyUntilDate
       ? dayjs(payment.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
       : undefined;
 
-    const { lessonsPlanned, lessonsBillable } = this.computeMonthLessonCounts({
-      group: payment.group!,
-      forMonth,
-      studentActiveStart,
-      studentActiveEndExclusive: plannedEndExclusive,
-    });
-
-    const { percent: discountPercent } = await this.resolveDiscountForMonth({
-      student: payment.student!,
-      forMonth,
-    });
-
-    const amountDue = this.computeAmountDue({
-      student: payment.student!,
-      group: payment.group!,
-      lessonsPlanned,
-      lessonsBillable,
-      discountPercent,
-    });
+    const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+      await this.computeMonthBilling({
+        student: payment.student!,
+        group: payment.group!,
+        forMonth,
+        studentActiveEndExclusive: plannedEndExclusive,
+      });
 
     // Update payment fields
     payment.lessonsPlanned = lessonsPlanned;
     payment.lessonsBillable = lessonsBillable;
+    payment.lessonsExcused = lessonsExcused;
     payment.amountDue = amountDue as any;
 
     // Adjust amountPaid if it exceeds new amountDue
@@ -1744,6 +1851,7 @@ export class PaymentsService {
       discountBreakdown: discount.breakdown,
       lessonsPlanned: (payment as any).lessonsPlanned ?? 0,
       lessonsBillable: (payment as any).lessonsBillable ?? 0,
+      lessonsExcused: (payment as any).lessonsExcused ?? 0,
       plannedStudyUntilDate: (payment as any).plannedStudyUntilDate
         ? dayjs((payment as any).plannedStudyUntilDate).format('YYYY-MM-DD')
         : null,

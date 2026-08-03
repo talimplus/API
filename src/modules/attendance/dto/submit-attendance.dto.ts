@@ -21,7 +21,12 @@ export class SubmitAttendanceItemDto {
   @IsEnum(AttendanceStatus)
   status: AttendanceStatus;
 
-  @ApiProperty({ required: false, example: 'Arrived 10 minutes late' })
+  @ApiProperty({
+    required: false,
+    example: 'Kasal bo\'lgani uchun',
+    description:
+      'Optional note. REQUIRED when status is "excused" (sababli) — used as the excuse reason and to justify the payment deduction.',
+  })
   @IsOptional()
   @IsString()
   comment?: string;

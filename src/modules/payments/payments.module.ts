@@ -11,6 +11,7 @@ import { StudentDiscountPeriod } from '@/modules/students/entities/student-disco
 import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { PaymentReceipt } from '@/modules/payments/entities/payment-receipt.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { User } from '@/modules/users/entities/user.entity';
       StudentDiscountPeriod,
       Referral,
       User,
+      Attendance,
     ]),
     forwardRef(() => StudentsModule),
     forwardRef(() => TeacherEarningsModule),

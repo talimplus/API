@@ -11,15 +11,21 @@ import { dayjs } from '@/shared/utils/dayjs';
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { PaymentsService } from '@/modules/payments/payments.service';
 
 @Injectable()
 export class AttendanceService {
+  private readonly logger = new Logger(AttendanceService.name);
+
   constructor(
     @InjectRepository(Attendance)
     private readonly attendanceRepo: Repository<Attendance>,
@@ -29,6 +35,9 @@ export class AttendanceService {
 
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
+
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   private isAdminRole(role: UserRole): boolean {
@@ -300,9 +309,11 @@ export class AttendanceService {
 
     const isAdmin = this.isAdminRole(user.role);
     const isTeacher = user.role === UserRole.TEACHER;
+    const isReception = user.role === UserRole.RECEPTION;
 
     // Teacher can submit for today or any past date within the current month
-    // (group TZ). Admin can override any past date. Future is blocked below.
+    // (group TZ). Admin and reception can override any past date. Future is
+    // blocked below.
     if (isTeacher && dto.lessonDate !== today) {
       const monthStart = dayjs.tz(today, timezone).startOf('month');
       const lessonDay = dayjs.tz(dto.lessonDate, timezone);
@@ -312,7 +323,7 @@ export class AttendanceService {
         );
       }
     }
-    if (!isAdmin && !isTeacher) {
+    if (!isAdmin && !isTeacher && !isReception) {
       throw new ForbiddenException('Not allowed');
     }
     // Disallow future submissions for now (keeps "no invented future facts")
@@ -368,6 +379,21 @@ export class AttendanceService {
       );
     }
 
+    // Excused (sababli) requires a reason so it is auditable and so payment
+    // deductions are justified.
+    const missingReason = dto.items.filter(
+      (i) =>
+        i.status === AttendanceStatus.EXCUSED &&
+        !(i.comment && i.comment.trim()),
+    );
+    if (missingReason.length) {
+      throw new BadRequestException(
+        `Sababli (excused) qilish uchun sabab yozilishi shart: studentId ${missingReason
+          .map((i) => i.studentId)
+          .join(', ')}`,
+      );
+    }
+
     const now = new Date();
     const upsertRows = dto.items.map((i) => ({
       groupId,
@@ -385,6 +411,28 @@ export class AttendanceService {
       'studentId',
       'lessonDate',
     ]);
+
+    // Recalculate payments for affected students: EXCUSED lessons are deducted
+    // from billing, and flipping a lesson back to PRESENT/ABSENT restores it.
+    // Failures here must not break attendance submission.
+    const affectedStudentIds = Array.from(
+      new Set(dto.items.map((i) => i.studentId)),
+    );
+    for (const sid of affectedStudentIds) {
+      try {
+        await this.paymentsService.recalcPaymentForAttendanceChange(
+          sid,
+          groupId,
+          dto.lessonDate,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `Payment recalc failed after attendance for student ${sid}: ${
+            (e as any)?.message ?? e
+          }`,
+        );
+      }
+    }
 
     // return persisted rows for that date
     const rows = await this.attendanceRepo.find({
