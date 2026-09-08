@@ -142,9 +142,11 @@ export class PaymentsService {
     currentUser: CurrentUser,
     comment?: string,
     paymentMethod?: PaymentMethod,
+    paidAt?: string | Date | null,
   ) {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
+      relations: ['student'],
     });
     if (!payment) throw new NotFoundException(`To'lov topilmadi`);
     const amt = Number(amount);
@@ -172,6 +174,35 @@ export class PaymentsService {
       );
     }
 
+    // ── Chek/invoice raqamini hosil qilish ───────────────────────────────
+    // Bazaviy raqam (invoiceNo) markaz ichida ketma-ket, oyning birinchi
+    // to'lovida biriktiriladi. Keyingi qismlarga harf qo'shiladi (A, B, C...).
+    const centerId = payment.student?.centerId ?? null;
+    const invoiceNo = await this.assignInvoiceNoIfNeeded(payment, centerId);
+
+    // Shu oy uchun rad etilmagan receiptlar soni -> keyingi qism indeksi.
+    const priorCount = await this.receiptRepo
+      .createQueryBuilder('r')
+      .where('r.paymentId = :paymentId', { paymentId })
+      .andWhere('r.status != :rejected', {
+        rejected: PaymentReceiptStatus.REJECTED,
+      })
+      .getCount();
+    const installmentIndex = priorCount + 1;
+
+    // Bir martalik to'liq to'lovmi? (birinchi va butun qoldiqni yopadi)
+    const singleFull =
+      installmentIndex === 1 &&
+      this.round2(amountPaid + pendingTotal + amt) >= this.round2(amountDue);
+    const checkNo = this.buildCheckNo(invoiceNo, installmentIndex, singleFull);
+
+    // Global yagona tranzaktsiya raqami (har to'lov uchun alohida).
+    const transactionNo = await this.generateTransactionNo();
+
+    // To'lovdan oldingi/keyingi umumiy qoldiq (qarz) snapshot.
+    const balanceBefore = await this.getStudentTotalDebt(payment.studentId);
+    const balanceAfter = this.round2(Math.max(0, balanceBefore - amt));
+
     // If admin/super_admin submits, auto-confirm (boss took money)
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
@@ -180,6 +211,13 @@ export class PaymentsService {
     const receipt = this.receiptRepo.create({
       paymentId: payment.id,
       amount: this.round2(amt) as any,
+      invoiceNo: invoiceNo as any,
+      installmentIndex,
+      checkNo,
+      transactionNo,
+      balanceBefore: balanceBefore as any,
+      balanceAfter: balanceAfter as any,
+      paidAt: this.normalizePaidAt(paidAt),
       receivedById: currentUser.userId,
       receivedAt: new Date(),
       status: isAdmin
@@ -202,6 +240,7 @@ export class PaymentsService {
     }
 
     const savedReceipt = await this.receiptRepo.save(receipt);
+    const check = await this.buildCheckFromReceipt(savedReceipt.id);
 
     if (isAdmin) {
       const updated = await this.applyConfirmedMoneyToPayment({
@@ -209,10 +248,10 @@ export class PaymentsService {
         addAmount: amt,
         confirmedById: currentUser.userId,
       });
-      return { receipt: savedReceipt, payment: updated, pending: false };
+      return { receipt: savedReceipt, payment: updated, pending: false, check };
     }
 
-    return { receipt: savedReceipt, pending: true };
+    return { receipt: savedReceipt, pending: true, check };
   }
 
   async submitFullReceipt(
@@ -220,6 +259,7 @@ export class PaymentsService {
     currentUser: CurrentUser,
     comment?: string,
     paymentMethod?: PaymentMethod,
+    paidAt?: string | Date | null,
   ) {
     const payment = await this.paymentRepo.findOne({
       where: { id: paymentId },
@@ -231,7 +271,14 @@ export class PaymentsService {
     if (remaining <= 0) {
       throw new BadRequestException('Payment is already fully paid');
     }
-    return this.submitReceipt(paymentId, remaining, currentUser, comment, paymentMethod);
+    return this.submitReceipt(
+      paymentId,
+      remaining,
+      currentUser,
+      comment,
+      paymentMethod,
+      paidAt,
+    );
   }
 
   async confirmReceipt(receiptId: number, currentUser: CurrentUser) {
@@ -278,8 +325,9 @@ export class PaymentsService {
     receipt.receiverCommissionPercentSnapshot = snap.percent as any;
     receipt.receiverCommissionAmountSnapshot = snap.amount as any;
     const savedReceipt = await this.receiptRepo.save(receipt);
+    const check = await this.buildCheckFromReceipt(savedReceipt.id);
 
-    return { receipt: savedReceipt, payment: updatedPayment };
+    return { receipt: savedReceipt, payment: updatedPayment, check };
   }
 
   async rejectReceipt(receiptId: number, currentUser: CurrentUser, reason?: string) {
@@ -342,6 +390,474 @@ export class PaymentsService {
         perPage,
         totalPages: Math.ceil(total / perPage),
       },
+    };
+  }
+
+  /**
+   * Sum of PENDING receipts grouped by paymentId for the given payment ids.
+   * Returns a Map<paymentId, pendingAmount>.
+   */
+  private async getPendingSumByPayment(
+    paymentIds: number[],
+  ): Promise<Map<number, number>> {
+    if (paymentIds.length === 0) return new Map();
+    const rows = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select('r.paymentId', 'paymentId')
+      .addSelect('COALESCE(SUM(r.amount), 0)', 'sum')
+      .where('r.paymentId IN (:...ids)', { ids: paymentIds })
+      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
+      .groupBy('r.paymentId')
+      .getRawMany<{ paymentId: number; sum: string }>();
+    return new Map(rows.map((r) => [Number(r.paymentId), Number(r.sum ?? 0)]));
+  }
+
+  /**
+   * Payment summary for a single student: per-month breakdown + aggregate totals.
+   * Used by the student view page (info + monthly payments + total debt).
+   */
+  async getStudentPaymentSummary(studentId: number, _currentUser: CurrentUser) {
+    const student = await this.studentRepo.findOne({
+      where: { id: studentId },
+      relations: ['groups', 'groups.schedules', 'subject', 'center'],
+    });
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+
+    // Make sure monthly payment rows exist (no-op for non-active students).
+    await this.ensurePaymentsForStudent(studentId).catch(() => undefined);
+
+    const payments = await this.paymentRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.group', 'group')
+      .where('p.studentId = :studentId', { studentId })
+      .orderBy('p.forMonth', 'DESC')
+      .getMany();
+
+    const pendingMap = await this.getPendingSumByPayment(
+      payments.map((p) => p.id),
+    );
+
+    const studentFee = Number(student.monthlyFee ?? 0);
+
+    const months = await Promise.all(
+      payments.map(async (p) => {
+        const amountDue = Number(p.amountDue ?? 0);
+        const amountPaid = Number(p.amountPaid ?? 0);
+        const pendingAmount = this.round2(pendingMap.get(p.id) ?? 0);
+        const remaining = this.round2(Math.max(0, amountDue - amountPaid));
+
+        // Proratsiyani tushuntirish uchun dars sanoqlari (Payment'da saqlangan).
+        const lessonsPlanned = p.lessonsPlanned ?? null;
+        const lessonsBillable = p.lessonsBillable ?? null;
+        // EXCUSED endi to'lovni kamaytirmaydi (Req1) — faqat ma'lumot uchun.
+        const lessonsExcused = Number(p.lessonsExcused ?? 0);
+        // To'lovga kiradigan darslar = lessonsBillable (mid-month proratsiya).
+        const effectiveBillable = lessonsBillable;
+
+        // fullAmount = proratsiyasiz to'liq oylik (chegirma bilan, manual
+        // exclusionsiz). amountDue = fullAmount * (billable/planned) - manualExcluded.
+        const groupFee = Number((p as any).group?.monthlyFee ?? 0);
+        const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
+        let fullAmount: number | null = null;
+        if (baseMonthlyFee > 0) {
+          try {
+            const { percent } = await this.resolveDiscountForMonth({
+              student,
+              forMonth: dayjs(p.forMonth).format('YYYY-MM-01'),
+            });
+            fullAmount = this.round2(
+              baseMonthlyFee * (1 - Number(percent ?? 0) / 100),
+            );
+          } catch {
+            fullAmount = this.round2(baseMonthlyFee);
+          }
+        }
+
+        // Bitta dars narxi (chiqarib tashlashda kun -> summa hisoblash uchun).
+        const perLessonAmount =
+          fullAmount != null && lessonsPlanned && lessonsPlanned > 0
+            ? this.round2(fullAmount / lessonsPlanned)
+            : 0;
+
+        // Proratsiya bo'lganmi: to'lovga kiradigan darslar to'liq oydan kam.
+        const isProrated =
+          lessonsPlanned != null &&
+          effectiveBillable != null &&
+          effectiveBillable < lessonsPlanned;
+
+        return {
+          paymentId: p.id,
+          forMonth: dayjs(p.forMonth).format('YYYY-MM'),
+          groupId: p.groupId,
+          groupName: p.group?.name ?? null,
+          amountDue,
+          amountPaid,
+          pendingAmount, // tasdiqlash kutayotgan receiptlar summasi
+          remaining, // shu oy uchun qolgan qarz
+          status: p.status,
+          // ↓ proratsiyani tushuntirish uchun
+          lessonsPlanned, // guruhda shu oyda jami rejalashtirilgan darslar
+          lessonsBillable, // o'quvchiga hisoblangan darslar
+          lessonsExcused, // sababli darslar (INFO — to'lovga ta'sir qilmaydi)
+          effectiveBillable, // to'lovga kiradigan darslar (== lessonsBillable)
+          fullAmount, // proratsiyasiz to'liq oylik (chegirma bilan)
+          perLessonAmount, // bitta dars narxi
+          isProrated, // proratsiya qilinganmi
+          // ↓ qo'lda chiqarib tashlangan (manual exclusion)
+          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
+          manualExcludedLessons: p.manualExcludedLessons ?? null,
+          manualExcludedReason: p.manualExcludedReason ?? null,
+        };
+      }),
+    );
+
+    const sum = (pick: (m: (typeof months)[number]) => number) =>
+      this.round2(months.reduce((s, m) => s + pick(m), 0));
+
+    const totalDue = sum((m) => m.amountDue);
+    const totalPaid = sum((m) => m.amountPaid);
+    const totalDebt = sum((m) => m.remaining);
+    const totalPending = sum((m) => m.pendingAmount);
+    // Hozir yig'ish mumkin bo'lgan summa (qarzdan tasdiqlash kutayotgani ayirilgan).
+    const payableNow = this.round2(Math.max(0, totalDebt - totalPending));
+
+    // Distinct schedule days across all of the student's groups (week order).
+    const WEEK_ORDER = [
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday',
+      'saturday',
+      'sunday',
+    ];
+    const groups = (student.groups ?? []).map((g: any) => {
+      const days = Array.from(
+        new Set((g.schedules ?? []).map((s: any) => s.day)),
+      ).sort((a: any, b: any) => WEEK_ORDER.indexOf(a) - WEEK_ORDER.indexOf(b));
+      const times = (g.schedules ?? [])
+        .slice()
+        .sort(
+          (a: any, b: any) =>
+            WEEK_ORDER.indexOf(a.day) - WEEK_ORDER.indexOf(b.day),
+        )
+        .map((s: any) => ({ day: s.day, startTime: s.startTime }));
+      return {
+        id: g.id,
+        name: g.name,
+        monthlyFee: Number(g.monthlyFee ?? 0),
+        days, // guruh dars kunlari
+        schedule: times, // kun + boshlanish vaqti
+      };
+    });
+
+    return {
+      student: {
+        id: student.id,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        phone: student.phone,
+        secondPhone: student.secondPhone ?? null,
+        birthDate: student.birthDate ?? null,
+        comment: student.comment ?? null,
+        heardAboutUs: student.heardAboutUs ?? null,
+        preferredTime: student.preferredTime ?? null,
+        preferredDays: student.preferredDays ?? null,
+        studyDays: student.studyDays ?? null, // guruhdan yozilgan dars kunlari
+        passportSeries: student.passportSeries ?? null,
+        passportNumber: student.passportNumber ?? null,
+        jshshir: student.jshshir ?? null,
+        status: student.status,
+        returnLikelihood: student.returnLikelihood ?? null,
+        monthlyFee: Number(student.monthlyFee ?? 0),
+        discountPercent: Number(student.discountPercent ?? 0),
+        discountReason: student.discountReason ?? null,
+        activatedAt: student.activatedAt ?? null,
+        stoppedAt: student.stoppedAt ?? null,
+        createdAt: student.createdAt,
+        centerId: student.centerId,
+        centerName: (student as any).center?.name ?? null,
+        subject: student.subject
+          ? { id: student.subject.id, name: (student.subject as any).name }
+          : null,
+        groups,
+      },
+      totals: {
+        totalDue,
+        totalPaid,
+        totalDebt,
+        totalPending,
+        payableNow,
+      },
+      months,
+    };
+  }
+
+  /**
+   * Pay a student's total debt with a single amount, distributing it across
+   * open (unpaid/partial) months oldest-first.
+   *
+   * Example: 400000/oy dan 2 oy (jami 800000) qarzi bor o'quvchi 600000 to'lasa:
+   *  - 1-oy to'liq yopiladi (400000)
+   *  - 2-oyga 200000 tushadi (partial), 200000 qarz qoladi.
+   *
+   * amount berilmasa — jami qarz to'liq to'lanadi (default).
+   * Har oy uchun mavjud submitReceipt oqimi ishlatiladi: admin/super_admin
+   * bo'lsa avtomatik tasdiqlanadi, reception/manager bo'lsa PENDING receipt
+   * yaratiladi (admin keyin tasdiqlaydi).
+   */
+  async payStudentDebt(
+    studentId: number,
+    amountInput: number | undefined,
+    currentUser: CurrentUser,
+    comment?: string,
+    paymentMethod?: PaymentMethod,
+    paidAt?: string | Date | null,
+  ) {
+    const student = await this.studentRepo.findOne({
+      where: { id: studentId },
+    });
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+
+    await this.ensurePaymentsForStudent(studentId).catch(() => undefined);
+
+    const openPayments = await this.paymentRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.group', 'group')
+      .where('p.studentId = :studentId', { studentId })
+      .andWhere('p.status IN (:...statuses)', {
+        statuses: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL],
+      })
+      .orderBy('p.forMonth', 'ASC') // eng eski oydan boshlab
+      .getMany();
+
+    if (openPayments.length === 0) {
+      throw new BadRequestException(`O'quvchida qarzdorlik yo'q`);
+    }
+
+    const pendingMap = await this.getPendingSumByPayment(
+      openPayments.map((p) => p.id),
+    );
+
+    // Har oy uchun hozir yig'ish mumkin bo'lgan summa = qoldiq - pending.
+    const perMonth = openPayments
+      .map((p) => {
+        const remaining = this.round2(
+          Number(p.amountDue ?? 0) - Number(p.amountPaid ?? 0),
+        );
+        const pending = pendingMap.get(p.id) ?? 0;
+        const available = this.round2(Math.max(0, remaining - pending));
+        return { payment: p, available };
+      })
+      .filter((x) => x.available > 0);
+
+    const totalAvailable = this.round2(
+      perMonth.reduce((s, x) => s + x.available, 0),
+    );
+    if (totalAvailable <= 0) {
+      throw new BadRequestException(
+        `Yig'ish mumkin bo'lgan qarz yo'q (barcha summalar tasdiqlash kutmoqda)`,
+      );
+    }
+
+    let amount =
+      amountInput != null && amountInput !== undefined
+        ? this.round2(Number(amountInput))
+        : totalAvailable;
+
+    if (!amount || amount <= 0) {
+      throw new BadRequestException(`To'lov miqdori noto'g'ri`);
+    }
+    if (amount > totalAvailable) {
+      throw new BadRequestException(
+        `Maksimal to'lash mumkin bo'lgan summa: ${totalAvailable}`,
+      );
+    }
+
+    let left = amount;
+    const allocations: Array<{
+      paymentId: number;
+      forMonth: string;
+      groupId: number | null;
+      allocated: number;
+      pending: boolean;
+      checkNo: string | null;
+      transactionNo: string | null;
+    }> = [];
+    // Har bir oy uchun alohida chek (invoice) hosil bo'ladi.
+    const checks: any[] = [];
+
+    for (const item of perMonth) {
+      if (left <= 0) break;
+      const alloc = this.round2(Math.min(left, item.available));
+      if (alloc <= 0) continue;
+      const res: any = await this.submitReceipt(
+        item.payment.id,
+        alloc,
+        currentUser,
+        comment,
+        paymentMethod,
+        paidAt,
+      );
+      allocations.push({
+        paymentId: item.payment.id,
+        forMonth: dayjs(item.payment.forMonth).format('YYYY-MM'),
+        groupId: item.payment.groupId,
+        allocated: alloc,
+        pending: res?.pending ?? false,
+        checkNo: res?.check?.checkNo ?? null,
+        transactionNo: res?.check?.transactionNo ?? null,
+      });
+      if (res?.check) checks.push(res.check);
+      left = this.round2(left - alloc);
+    }
+
+    const summary = await this.getStudentPaymentSummary(studentId, currentUser);
+
+    return {
+      studentId,
+      requestedAmount: amount,
+      distributedAmount: this.round2(amount - left),
+      unallocated: this.round2(left),
+      allocations,
+      checks,
+      summary,
+    };
+  }
+
+  /**
+   * Bir oy (payment) uchun "chiqarib tashlash" (exclusion) natijasini oldindan
+   * hisoblaydi — SAQLAMAYDI. excludeLessons (kun) yoki excludeAmount (summa)
+   * beriladi; kun berilsa perLessonAmount orqali summaga aylantiriladi.
+   */
+  async previewExclusion(
+    paymentId: number,
+    args: { excludeLessons?: number; excludeAmount?: number },
+  ) {
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+      relations: ['student', 'group', 'group.schedules'],
+    });
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
+    if (!payment.student || !payment.group) {
+      throw new BadRequestException(
+        "To'lov student yoki group ma'lumotlari topilmadi",
+      );
+    }
+
+    const forMonth = dayjs(payment.forMonth)
+      .startOf('month')
+      .format('YYYY-MM-01');
+
+    // Bazaviy summa (manual exclusionsiz to'liq hisob).
+    const base = await this.computeMonthBilling({
+      student: payment.student,
+      group: payment.group,
+      forMonth,
+      manualExcludedAmount: 0,
+    });
+
+    const amountPaid = Number(payment.amountPaid ?? 0);
+    // Bitta billable dars narxi.
+    const perLessonAmount =
+      base.lessonsBillable > 0
+        ? this.round2(base.amountDue / base.lessonsBillable)
+        : 0;
+
+    let excludedLessons: number | null = null;
+    let excludedTotal = 0;
+    if (args.excludeAmount != null) {
+      excludedTotal = this.round2(Math.max(0, Number(args.excludeAmount)));
+    } else if (args.excludeLessons != null) {
+      excludedLessons = Math.max(0, Math.floor(Number(args.excludeLessons)));
+      excludedTotal = this.round2(excludedLessons * perLessonAmount);
+    }
+    // Bazaviy summadan oshib ketmasin.
+    excludedTotal = this.round2(Math.min(excludedTotal, base.amountDue));
+
+    const newAmountDue = this.round2(Math.max(0, base.amountDue - excludedTotal));
+    const newRemaining = this.round2(Math.max(0, newAmountDue - amountPaid));
+
+    return {
+      paymentId: payment.id,
+      forMonth: dayjs(payment.forMonth).format('YYYY-MM'),
+      lessonsPlanned: base.lessonsPlanned,
+      lessonsBillable: base.lessonsBillable,
+      perLessonAmount,
+      baseAmountDue: base.amountDue, // manual exclusionsiz to'liq summa
+      currentAmountDue: Number(payment.amountDue ?? 0), // hozirgi (avvalgi exclusion bilan)
+      amountPaid,
+      excludeLessons: excludedLessons,
+      excludedAmount: excludedTotal,
+      newAmountDue,
+      newRemaining,
+    };
+  }
+
+  /**
+   * Chiqarib tashlashni SAQLAYDI: payment.amountDue kamayadi, sabab (comment)
+   * yoziladi. excludeLessons yoki excludeAmount + comment (majburiy) kerak.
+   * Recalc paytida ham saqlanadi (manualExcludedAmount computeAmountDue'da ayiriladi).
+   */
+  async applyExclusion(
+    paymentId: number,
+    args: { excludeLessons?: number; excludeAmount?: number; comment?: string },
+    _currentUser: CurrentUser,
+  ) {
+    const hasExclusion =
+      args.excludeAmount != null || args.excludeLessons != null;
+    if (!hasExclusion) {
+      throw new BadRequestException(
+        'excludeLessons (kun) yoki excludeAmount (summa) yuborilishi kerak',
+      );
+    }
+    if (!args.comment || !String(args.comment).trim()) {
+      throw new BadRequestException(
+        "Chiqarib tashlashda izoh (comment) majburiy",
+      );
+    }
+
+    const preview = await this.previewExclusion(paymentId, {
+      excludeLessons: args.excludeLessons,
+      excludeAmount: args.excludeAmount,
+    });
+
+    const payment = await this.paymentRepo.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment) throw new NotFoundException(`To'lov topilmadi`);
+
+    payment.manualExcludedAmount = preview.excludedAmount as any;
+    payment.manualExcludedLessons = preview.excludeLessons ?? null;
+    payment.manualExcludedReason = String(args.comment).trim();
+    payment.amountDue = preview.newAmountDue as any;
+
+    // Agar allaqachon yangi summadan ko'p to'langan bo'lsa — farqni qaytaramiz.
+    const amountDue = preview.newAmountDue;
+    let amountPaid = Number(payment.amountPaid ?? 0);
+    if (amountPaid > amountDue) {
+      const refund = this.round2(amountPaid - amountDue);
+      payment.refundedAmount = this.round2(
+        Number(payment.refundedAmount ?? 0) + refund,
+      ) as any;
+      payment.refundedAt = new Date();
+      amountPaid = amountDue;
+      payment.amountPaid = amountDue as any;
+    }
+
+    if (amountPaid >= amountDue) payment.status = PaymentStatus.PAID;
+    else if (amountPaid > 0) payment.status = PaymentStatus.PARTIAL;
+    else payment.status = PaymentStatus.UNPAID;
+
+    await this.paymentRepo.save(payment);
+
+    return {
+      ...preview,
+      amountDue: preview.newAmountDue,
+      manualExcludedAmount: preview.excludedAmount,
+      manualExcludedLessons: preview.excludeLessons,
+      manualExcludedReason: payment.manualExcludedReason,
+      status: payment.status,
     };
   }
 
@@ -575,6 +1091,232 @@ export class PaymentsService {
     return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
+  /** "date input" (YYYY-MM-DD yoki ISO) -> Date | null. */
+  private normalizePaidAt(input?: string | Date | null): Date | null {
+    if (!input) return null;
+    const d = dayjs(input);
+    if (!d.isValid()) return null;
+    return d.startOf('day').toDate();
+  }
+
+  /**
+   * O'quvchining barcha oylar bo'yicha umumiy qoldig'i (qarzi):
+   *   SUM(amountDue - amountPaid) (manfiy bo'lmaydi).
+   */
+  private async getStudentTotalDebt(studentId: number): Promise<number> {
+    const raw = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select(
+        'COALESCE(SUM(GREATEST(p.amountDue - p.amountPaid, 0)), 0)',
+        'debt',
+      )
+      .where('p.studentId = :studentId', { studentId })
+      .getRawOne<{ debt: string }>();
+    return this.round2(Number(raw?.debt ?? 0));
+  }
+
+  /**
+   * Payment'ga bazaviy chek raqami (invoiceNo) biriktiradi (agar hali yo'q bo'lsa).
+   * Raqam markaz (center) ichida ketma-ket beriladi. Bir vaqtning o'zida ikki
+   * to'lov bir xil raqam olmasligi uchun center bo'yicha advisory lock ishlatamiz.
+   */
+  private async assignInvoiceNoIfNeeded(
+    payment: Payment,
+    centerId: number | null,
+  ): Promise<number> {
+    if (payment.invoiceNo != null) return Number(payment.invoiceNo);
+
+    const next = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Payment);
+      const locked = await repo
+        .createQueryBuilder('p')
+        .setLock('pessimistic_write')
+        .where('p.id = :id', { id: payment.id })
+        .getOne();
+      if (!locked) throw new NotFoundException(`To'lov topilmadi`);
+      if (locked.invoiceNo != null) return Number(locked.invoiceNo);
+
+      // Center bo'yicha raqam ketma-ketligini serializatsiya qilish.
+      // centerId null bo'lsa 0 kalitidan foydalanamiz (global ketma-ketlik).
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [centerId ?? 0]);
+
+      const row = await manager.query(
+        `SELECT COALESCE(MAX(p."invoiceNo"), 0) AS max
+           FROM payments p
+           JOIN students s ON s.id = p."studentId"
+          WHERE ($1::int IS NULL AND s."centerId" IS NULL)
+             OR s."centerId" = $1`,
+        [centerId],
+      );
+      const nextNo = Number(row?.[0]?.max ?? 0) + 1;
+      locked.invoiceNo = nextNo;
+      await repo.save(locked);
+      return nextNo;
+    });
+
+    payment.invoiceNo = next;
+    return next;
+  }
+
+  /** 1 -> A, 2 -> B, ... 26 -> Z, 27 -> AA (Excel uslubi). */
+  private columnLetter(n: number): string {
+    let s = '';
+    let x = Math.max(1, Math.floor(n));
+    while (x > 0) {
+      const m = (x - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      x = Math.floor((x - 1) / 26);
+    }
+    return s;
+  }
+
+  /**
+   * Chek raqamini quradi:
+   *  - bir martalik to'liq to'lov -> "1"
+   *  - qisman to'lovlar -> "1-A", "1-A-B", "1-A-B-C" ...
+   */
+  private buildCheckNo(
+    invoiceNo: number,
+    installmentIndex: number,
+    singleFull: boolean,
+  ): string {
+    if (installmentIndex <= 1 && singleFull) return String(invoiceNo);
+    const letters: string[] = [];
+    for (let i = 1; i <= installmentIndex; i++) letters.push(this.columnLetter(i));
+    return `${invoiceNo}-${letters.join('-')}`;
+  }
+
+  /**
+   * Global yagona tranzaktsiya raqamini hosil qiladi:
+   *   TRX-YYYYMMDD-NNNNNN
+   * Ketma-ket raqam butun tizim bo'yicha yagona Postgres sequence'dan olinadi
+   * (nextval — atomar, parallel to'lovlarda ham takrorlanmaydi). Sana qismi —
+   * to'lov qabul qilingan kun. Chek qaytib kelganda shu raqam bo'yicha
+   * aynan qaysi to'lov ekani aniqlanadi.
+   */
+  private async generateTransactionNo(when: Date = new Date()): Promise<string> {
+    const rows = await this.dataSource.query(
+      `SELECT nextval('payment_receipt_transaction_seq') AS seq`,
+    );
+    const seq = Number(rows?.[0]?.seq ?? 0);
+    const datePart = dayjs(when).format('YYYYMMDD');
+    const numPart = String(seq).padStart(6, '0');
+    return `TRX-${datePart}-${numPart}`;
+  }
+
+  private static readonly CHECK_RELATIONS = [
+    'payment',
+    'payment.student',
+    'payment.group',
+    'payment.group.teacher',
+    'receivedBy',
+  ];
+
+  /**
+   * Frontendda chek (invoice) chiqarish uchun barcha kerakli maydonlarni
+   * yig'ib beradi: chek raqami, ism-familiya, telefon, guruh, o'qituvchi,
+   * to'lovdan oldingi/keyingi qoldiq, to'lov usuli, summa, sana-vaqt.
+   *
+   * MUHIM: balanceBefore/balanceAfter va checkNo — to'lov PAYTIDAGI snapshot
+   * qiymatlar (receipt jadvalida saqlangan), bu yerda qayta hisoblanmaydi.
+   * Shu sabab chek istalgan vaqtda qayta chop etilganda ham o'zgarmaydi.
+   */
+  async buildCheckFromReceipt(receiptId: number) {
+    const receipt = await this.receiptRepo.findOne({
+      where: { id: receiptId },
+      relations: PaymentsService.CHECK_RELATIONS,
+    });
+    if (!receipt) throw new NotFoundException('Receipt topilmadi');
+    return this.mapReceiptToCheck(receipt);
+  }
+
+  /**
+   * Bitta payment (o'quvchining bitta oyi) uchun qilingan BARCHA to'lovlarni
+   * (receipt'larni) chek ko'rinishida qaytaradi. Tartib: receivedAt bo'yicha ASC
+   * (eng eski to'lovdan boshlab) — chek raqamlari 1, 1-A, 1-A-B ketma-ketligiga
+   * mos tushadi. Rad etilgan (rejected) receipt'lar ham status'i bilan qaytadi.
+   */
+  async getReceiptsForPayment(paymentId: number) {
+    const paymentExists = await this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.id = :id', { id: paymentId })
+      .getExists();
+    if (!paymentExists) throw new NotFoundException(`To'lov topilmadi`);
+
+    const receipts = await this.receiptRepo.find({
+      where: { paymentId },
+      relations: PaymentsService.CHECK_RELATIONS,
+      order: { receivedAt: 'ASC', createdAt: 'ASC', id: 'ASC' },
+    });
+
+    return { data: receipts.map((r) => this.mapReceiptToCheck(r)) };
+  }
+
+  /** Yuklangan (relations bilan) receipt'ni chek obyektiga aylantiradi (N+1 siz). */
+  private mapReceiptToCheck(receipt: PaymentReceipt) {
+    const payment = (receipt as any).payment;
+    const student = payment?.student ?? null;
+    const group = payment?.group ?? null;
+    const teacher = group?.teacher ?? null;
+    const receivedBy = (receipt as any).receivedBy ?? null;
+
+    const fullName = (u: any) =>
+      u
+        ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || null
+        : null;
+
+    return {
+      receiptId: receipt.id,
+      checkNo: receipt.checkNo ?? null,
+      transactionNo: receipt.transactionNo ?? null,
+      invoiceNo: receipt.invoiceNo ?? null,
+      installmentIndex: receipt.installmentIndex ?? null,
+      status: receipt.status,
+      // O'quvchi
+      student: student
+        ? {
+            id: student.id,
+            firstName: student.firstName,
+            lastName: student.lastName,
+            fullName:
+              [student.firstName, student.lastName]
+                .filter(Boolean)
+                .join(' ')
+                .trim() || null,
+            phone: student.phone ?? null,
+          }
+        : null,
+      // Guruh + o'qituvchi
+      group: group ? { id: group.id, name: group.name ?? null } : null,
+      teacher: teacher
+        ? { id: teacher.id, fullName: fullName(teacher) }
+        : null,
+      // Oy
+      forMonth: payment?.forMonth
+        ? dayjs(payment.forMonth).format('YYYY-MM')
+        : null,
+      // Summa va qoldiqlar
+      amount: Number(receipt.amount ?? 0),
+      balanceBefore:
+        receipt.balanceBefore != null ? Number(receipt.balanceBefore) : null,
+      balanceAfter:
+        receipt.balanceAfter != null ? Number(receipt.balanceAfter) : null,
+      // To'lov usuli va sana
+      paymentMethod: receipt.paymentMethod ?? null,
+      paidAt: receipt.paidAt ? dayjs(receipt.paidAt).format('YYYY-MM-DD') : null,
+      receivedAt: receipt.receivedAt
+        ? dayjs(receipt.receivedAt).toISOString()
+        : null,
+      createdAt: receipt.createdAt
+        ? dayjs(receipt.createdAt).toISOString()
+        : null,
+      receivedBy: receivedBy
+        ? { id: receivedBy.id, fullName: fullName(receivedBy) }
+        : null,
+      comment: receipt.comment ?? null,
+    };
+  }
+
   private computeDueDates(
     forMonth: string,
     timezone: string,
@@ -688,21 +1430,33 @@ export class PaymentsService {
     group: Group;
     forMonth: string; // YYYY-MM-01
     studentActiveEndExclusive?: string;
+    manualExcludedAmount?: number;
   }): Promise<{
     studentActiveStart: string;
     lessonsPlanned: number;
-    lessonsBillable: number; // schedule-based (pre-excused)
-    lessonsExcused: number;
-    effectiveBillable: number; // lessonsBillable - lessonsExcused
+    lessonsBillable: number; // schedule-based (mid-month proration only)
+    lessonsExcused: number; // INFO only — no longer reduces amountDue (Req1)
+    effectiveBillable: number; // billing lessons (== lessonsBillable)
     discountPercent: number;
     amountDue: number;
   }> {
-    const { student, group, forMonth, studentActiveEndExclusive } = args;
+    const {
+      student,
+      group,
+      forMonth,
+      studentActiveEndExclusive,
+      manualExcludedAmount = 0,
+    } = args;
+
+    // O'quvchi shu GURUHGA qachon qo'shilgani (join sanasi). Oy o'rtasida yangi
+    // guruhga qo'shilgan bo'lsa, proratsiya shu sanadan boshlanadi.
+    const joinedAt = await this.getEnrollmentJoinedAt(student.id, group.id);
 
     const studentActiveStart = this.computeStudentActiveStartForMonth({
       student,
       group,
       forMonth,
+      joinedAt,
     });
 
     const { lessonsPlanned, lessonsBillable, billableDates } =
@@ -713,10 +1467,13 @@ export class PaymentsService {
         studentActiveEndExclusive,
       });
 
+    // EXCUSED (sababli) darslar endi to'lovni kamaytirmaydi (Req1) — faqat
+    // ma'lumot uchun sanaymiz. Kamaytirish faqat qo'lda (manualExcludedAmount)
+    // orqali reception tomonidan qilinadi.
     const lessonsExcused = lessonsPlanned
       ? await this.countExcusedOnDates(group.id, student.id, billableDates)
       : 0;
-    const effectiveBillable = Math.max(0, lessonsBillable - lessonsExcused);
+    const effectiveBillable = lessonsBillable;
 
     const { percent: discountPercent } = await this.resolveDiscountForMonth({
       student,
@@ -727,8 +1484,9 @@ export class PaymentsService {
       student,
       group,
       lessonsPlanned,
-      lessonsBillable: effectiveBillable,
+      lessonsBillable, // excused ayirilmaydi
       discountPercent,
+      manualExcludedAmount,
     });
 
     return {
@@ -746,8 +1504,9 @@ export class PaymentsService {
     student: Student;
     group: Group;
     forMonth: string; // YYYY-MM-01
+    joinedAt?: Date | string | null; // o'quvchi shu guruhga qo'shilgan sana
   }): string {
-    const { student, group, forMonth } = args;
+    const { student, group, forMonth, joinedAt } = args;
     const timezone = group.timezone || 'Asia/Tashkent';
 
     // IMPORTANT: parse first, then apply timezone
@@ -764,7 +1523,52 @@ export class PaymentsService {
     const g = groupStart.startOf('day');
     if (a.isAfter(max)) max = a;
     if (g.isAfter(max)) max = g;
+
+    // Guruhga qo'shilgan sana — yana bir quyi chegara. O'quvchi guruhga
+    // qo'shilishidan oldingi darslar uchun to'lov qilmaydi. Sana kuni (start of
+    // day) hisobga olinadi: o'sha kungi dars ham to'lovga kiradi.
+    if (joinedAt) {
+      const j = dayjs(joinedAt).tz(timezone).startOf('day');
+      if (j.isValid() && j.isAfter(max)) max = j;
+    }
+
     return max.format('YYYY-MM-DD');
+  }
+
+  // (student, group) -> guruhga qo'shilgan sana keshi. Har bir billing
+  // operatsiyasi boshida tozalanadi (discountCache bilan birga).
+  private joinedAtCache = new Map<string, Date | null>();
+
+  /**
+   * O'quvchining berilgan guruhga qo'shilgan sanasini (students_groups_groups.
+   * joinedAt) qaytaradi. Yozuv topilmasa null. Natija kesh qilinadi (PK bo'yicha
+   * tez qidiruv, N+1 dan qochish uchun).
+   */
+  private async getEnrollmentJoinedAt(
+    studentId: number,
+    groupId: number,
+  ): Promise<Date | null> {
+    const key = `${studentId}:${groupId}`;
+    const cached = this.joinedAtCache.get(key);
+    if (cached !== undefined) return cached;
+
+    let val: Date | null = null;
+    try {
+      const rows = await this.dataSource.query(
+        `SELECT "joinedAt" FROM "students_groups_groups"
+          WHERE "studentsId" = $1 AND "groupsId" = $2 LIMIT 1`,
+        [studentId, groupId],
+      );
+      const raw = rows?.[0]?.joinedAt ?? null;
+      val = raw ? new Date(raw) : null;
+    } catch {
+      // joinedAt ustuni hali yo'q bo'lsa (migratsiya ishlamagan) — eski
+      // xatti-harakat (proratsiya activatedAt/groupStart bo'yicha).
+      val = null;
+    }
+
+    this.joinedAtCache.set(key, val);
+    return val;
   }
 
   private computeStudentActiveEndExclusiveForMonth(args: {
@@ -794,6 +1598,7 @@ export class PaymentsService {
 
   async adjustPaymentsForStudentStopped(studentId: number) {
     this.discountCache.clear();
+    this.joinedAtCache.clear();
     const student = await this.studentRepo.findOne({
       where: { id: studentId },
       relations: ['groups'],
@@ -835,6 +1640,7 @@ export class PaymentsService {
           group: p.group,
           forMonth,
           studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
+          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
         });
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
@@ -882,15 +1688,138 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * O'quvchi GURUHDAN chiqarilganda (student edit'da guruh olib tashlanganda)
+   * o'sha guruhning joriy va kelajak oy to'lovlarini to'g'rilaydi:
+   *  - chiqarilgan kungacha (bugun, exclusive) o'tgan darslar bo'yicha prorate;
+   *  - agar birorta ham dars o'tmagan bo'lsa (masalan o'sha kuni qo'shib-olib
+   *    tashlansa) va pul to'lanmagan bo'lsa — to'lov butunlay o'chiriladi;
+   *  - kelajak oylar (bugundan keyin) — billable=0 bo'ladi -> o'chadi;
+   *  - agar allaqachon ortiqcha pul to'langan bo'lsa — farq refund qilinadi.
+   *
+   * MUHIM: bu metod many-to-many biriktirish (students_groups_groups) yozuvi
+   * DB'dan o'chirilishidan OLDIN chaqirilishi kerak, aks holda guruhga qo'shilgan
+   * sana (joinedAt) yo'qoladi va proratsiya noto'g'ri (qo'shilishdan oldingi
+   * darslar ham) hisoblanadi.
+   */
+  async adjustPaymentsForStudentLeftGroup(studentId: number, groupId: number) {
+    this.discountCache.clear();
+    this.joinedAtCache.clear();
+
+    const currentMonth = dayjs().startOf('month').format('YYYY-MM-01');
+
+    const payments = await this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .where('payments.studentId = :studentId', { studentId })
+      .andWhere('payments.groupId = :groupId', { groupId })
+      .andWhere('payments.forMonth >= :forMonth', { forMonth: currentMonth })
+      .getMany();
+
+    if (!payments.length) return;
+
+    const toSave: Payment[] = [];
+    const toDeleteIds: number[] = [];
+
+    for (const p of payments as any[]) {
+      if (!p.group || !p.student || !p.group.schedules?.length) continue;
+
+      const timezone = p.group.timezone || 'Asia/Tashkent';
+      const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
+
+      // Chiqish chegarasi = BUGUN (exclusive): bugundan boshlab darslar to'lovga
+      // kirmaydi. Joriy oy uchun bu bugungacha o'tgan darslarni beradi; kelajak
+      // oylar uchun (oy boshi > bugun) hech qanday dars qolmaydi -> billable=0.
+      const leftExclusive = dayjs().tz(timezone).startOf('day').format('YYYY-MM-DD');
+
+      const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
+        await this.computeMonthBilling({
+          student: p.student,
+          group: p.group,
+          forMonth,
+          studentActiveEndExclusive: leftExclusive,
+          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
+        });
+
+      const amountPaid = Number(p.amountPaid ?? 0);
+
+      // Hech qanday to'lovga kiradigan dars qolmadi.
+      if (!lessonsBillable) {
+        if (amountPaid === 0) {
+          // Pul to'lanmagan -> to'lovni butunlay o'chiramiz.
+          toDeleteIds.push(p.id);
+        } else {
+          // Pul to'langan -> hammasini refund qilamiz, amountDue = 0.
+          p.refundedAmount = this.round2(
+            Number(p.refundedAmount ?? 0) + amountPaid,
+          ) as any;
+          p.refundedAt = new Date() as any;
+          p.amountDue = 0 as any;
+          p.amountPaid = 0 as any;
+          p.lessonsBillable = 0;
+          p.lessonsExcused = lessonsExcused;
+          p.status = PaymentStatus.PAID; // 0 dan 0 -> to'liq yopilgan
+          toSave.push(p);
+        }
+        continue;
+      }
+
+      // Aks holda: o'tgan darslar bo'yicha qayta prorate + kerak bo'lsa refund.
+      const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
+      let newPaid = amountPaid;
+      let newRefunded = Number(p.refundedAmount ?? 0);
+      let refundedAt: Date | null = p.refundedAt ?? null;
+      if (newPaid > amountDue) {
+        const refund = this.round2(newPaid - amountDue);
+        newRefunded = this.round2(newRefunded + refund);
+        newPaid = amountDue;
+        refundedAt = new Date();
+      }
+
+      let newStatus = p.status;
+      if (newPaid >= amountDue) newStatus = PaymentStatus.PAID;
+      else if (newPaid > 0) newStatus = PaymentStatus.PARTIAL;
+      else newStatus = PaymentStatus.UNPAID;
+
+      p.lessonsPlanned = lessonsPlanned;
+      p.lessonsBillable = lessonsBillable;
+      p.lessonsExcused = lessonsExcused;
+      p.amountDue = amountDue as any;
+      p.amountPaid = newPaid as any;
+      p.refundedAmount = newRefunded as any;
+      p.refundedAt = refundedAt as any;
+      p.status = newStatus;
+      p.dueDate = dueDate as any;
+      p.hardDueDate = hardDueDate as any;
+      toSave.push(p);
+    }
+
+    if (toSave.length) await this.paymentRepo.save(toSave as any);
+    if (toDeleteIds.length) await this.paymentRepo.delete(toDeleteIds);
+
+    for (const p of toSave) {
+      void this.triggerTeacherEarningsRecalcForPayment(p.id).catch(() => {});
+    }
+  }
+
   private computeAmountDue(args: {
     student: Student;
     group: Group;
     lessonsPlanned: number;
     lessonsBillable: number;
     discountPercent: number;
+    manualExcludedAmount?: number;
   }): number {
-    const { student, group, lessonsPlanned, lessonsBillable, discountPercent } =
-      args;
+    const {
+      student,
+      group,
+      lessonsPlanned,
+      lessonsBillable,
+      discountPercent,
+      manualExcludedAmount = 0,
+    } = args;
     // Fee priority:
     // - if student.monthlyFee is set (> 0) -> use it
     // - otherwise fallback to group.monthlyFee
@@ -901,7 +1830,9 @@ export class PaymentsService {
 
     // Apply discount AFTER lesson-based prorating
     const proratedFee = baseMonthlyFee * (lessonsBillable / lessonsPlanned);
-    const finalFee = proratedFee * (1 - discountPercent / 100);
+    const discountedFee = proratedFee * (1 - discountPercent / 100);
+    // Reception qo'lda chiqarib tashlagan summani oxirida ayiramiz.
+    const finalFee = discountedFee - Math.max(0, Number(manualExcludedAmount));
     return this.round2(Math.max(0, finalFee));
   }
 
@@ -918,6 +1849,7 @@ export class PaymentsService {
     opts?: { maxMonthsBack?: number; centerId?: number },
   ) {
     this.discountCache.clear();
+    this.joinedAtCache.clear();
     const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
     const windowStart = dayjs()
       .startOf('month')
@@ -964,6 +1896,7 @@ export class PaymentsService {
           group: p.group,
           forMonth,
           studentActiveEndExclusive: plannedEndExclusive,
+          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
         });
 
       // Keep the system free of useless zero-bill payments:
@@ -1070,6 +2003,7 @@ export class PaymentsService {
     opts?: { maxMonthsBack?: number },
   ) {
     this.discountCache.clear();
+    this.joinedAtCache.clear();
 
     const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
     const windowStart = dayjs()
@@ -1116,6 +2050,7 @@ export class PaymentsService {
           group: p.group,
           forMonth,
           studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
+          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
         });
 
       const amountPaid = Number(p.amountPaid ?? 0);
@@ -1162,6 +2097,7 @@ export class PaymentsService {
     forMonthInput: string, // any date within the month
   ): Promise<void> {
     this.discountCache.clear();
+    this.joinedAtCache.clear();
     const forMonth = dayjs(forMonthInput)
       .startOf('month')
       .format('YYYY-MM-01');
@@ -1217,6 +2153,7 @@ export class PaymentsService {
         group: payment.group,
         forMonth,
         studentActiveEndExclusive: endExclusive,
+        manualExcludedAmount: Number(payment.manualExcludedAmount ?? 0),
       });
 
     const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
@@ -1263,6 +2200,7 @@ export class PaymentsService {
   ) {
     if (!students.length) return;
     this.discountCache.clear();
+    this.joinedAtCache.clear();
 
     const studentIds = students.map((s) => s.id);
     const groupIds = Array.from(
@@ -1281,7 +2219,15 @@ export class PaymentsService {
       .select([
         'payments.studentId as "studentId"',
         'payments.groupId as "groupId"',
-        'payments.forMonth as "forMonth"',
+        // MUHIM: forMonth `date` ustuni bo'lgani uchun pg drayveri uni JS Date
+        // obyekti qilib qaytaradi. Uni to'g'ridan-to'g'ri stringga qo'shsak
+        // ("Wed Jul 01 2026 ...") pastdagi tekshiruv kaliti ("2026-07-01")
+        // bilan hech qachon mos kelmaydi -> mavjud to'lovlar "yo'q" deb
+        // hisoblanadi -> ular qayta yaratishga urinilib, unique constraint
+        // (23505) tufayli butun to'plam (jumladan yangi guruh to'lovlari)
+        // jimgina tashlab yuboriladi. Shuning uchun DB darajasida (TZ'dan
+        // mustaqil) YYYY-MM-01 formatiga keltiramiz.
+        `TO_CHAR(payments.forMonth, 'YYYY-MM-01') as "forMonth"`,
       ])
       .where('payments.studentId IN (:...studentIds)', { studentIds })
       .andWhere('payments.groupId IN (:...groupIds)', { groupIds })
@@ -1672,6 +2618,7 @@ export class PaymentsService {
       group: payment.group,
       forMonth,
       studentActiveEndExclusive: plannedEndExclusive,
+      manualExcludedAmount: Number(payment.manualExcludedAmount ?? 0),
     });
 
     if (lessonsPlanned === 0) {
@@ -1752,6 +2699,7 @@ export class PaymentsService {
         group: payment.group!,
         forMonth,
         studentActiveEndExclusive: plannedEndExclusive,
+        manualExcludedAmount: Number(payment.manualExcludedAmount ?? 0),
       });
 
     // Update payment fields

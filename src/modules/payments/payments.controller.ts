@@ -18,6 +18,11 @@ import {
 } from '@nestjs/common';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
+import { PayStudentDebtDto } from '@/modules/payments/dto/pay-student-debt.dto';
+import {
+  ApplyExclusionDto,
+  PreviewExclusionDto,
+} from '@/modules/payments/dto/payment-exclusion.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -101,6 +106,13 @@ export class PaymentsController {
       properties: {
         comment: { type: 'string', nullable: true },
         paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+        paidAt: {
+          type: 'string',
+          format: 'date',
+          nullable: true,
+          description:
+            "To'lov amalga oshirilgan sana (asosan KARTA uchun). YYYY-MM-DD.",
+        },
       },
     },
     required: false,
@@ -116,8 +128,15 @@ export class PaymentsController {
     @Param('id', ParseIntPipe) id: number,
     @Body('comment') comment?: string,
     @Body('paymentMethod') paymentMethod?: PaymentMethod,
+    @Body('paidAt') paidAt?: string,
   ) {
-    return this.paymentsService.submitFullReceipt(id, req.user, comment, paymentMethod);
+    return this.paymentsService.submitFullReceipt(
+      id,
+      req.user,
+      comment,
+      paymentMethod,
+      paidAt,
+    );
   }
 
   @Put('pay-partial/:id')
@@ -129,6 +148,13 @@ export class PaymentsController {
         amount: { type: 'number' },
         comment: { type: 'string', nullable: true },
         paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+        paidAt: {
+          type: 'string',
+          format: 'date',
+          nullable: true,
+          description:
+            "To'lov amalga oshirilgan sana (asosan KARTA uchun). YYYY-MM-DD.",
+        },
       },
     },
   })
@@ -144,8 +170,16 @@ export class PaymentsController {
     @Body('amount') amount: number,
     @Body('comment') comment?: string,
     @Body('paymentMethod') paymentMethod?: PaymentMethod,
+    @Body('paidAt') paidAt?: string,
   ) {
-    return this.paymentsService.submitReceipt(id, Number(amount), req.user, comment, paymentMethod);
+    return this.paymentsService.submitReceipt(
+      id,
+      Number(amount),
+      req.user,
+      comment,
+      paymentMethod,
+      paidAt,
+    );
   }
 
   @Put('confirm-receipt/:id')
@@ -228,6 +262,300 @@ export class PaymentsController {
     @Body() dto: CalculatePaymentDto,
   ) {
     return this.paymentsService.calculatePayment(id, dto);
+  }
+
+  @Get('student/:studentId/summary')
+  @ApiOperation({
+    summary: 'Get student payment summary (view page)',
+    description:
+      "O'quvchi haqida qisqa ma'lumot + har oy bo'yicha to'lovlar (amountDue, " +
+      "amountPaid, pending, remaining, status) + jami xulosa (totalDue, totalPaid, " +
+      "totalDebt, totalPending, payableNow). Oylar eng yangisidan eskisiga tartiblangan.",
+  })
+  @ApiResponse({
+    schema: {
+      example: {
+        student: {
+          id: 45,
+          firstName: 'Ali',
+          lastName: 'Valiyev',
+          phone: '+998901234567',
+          status: 'active',
+          monthlyFee: 400000,
+        },
+        totals: {
+          totalDue: 800000,
+          totalPaid: 0,
+          totalDebt: 800000,
+          totalPending: 0,
+          payableNow: 800000,
+        },
+        months: [
+          {
+            paymentId: 650,
+            forMonth: '2026-09',
+            groupId: 12,
+            groupName: 'Ingliz tili A1',
+            amountDue: 280000,
+            amountPaid: 0,
+            pendingAmount: 0,
+            remaining: 280000,
+            status: 'unpaid',
+            lessonsPlanned: 10,
+            lessonsBillable: 8,
+            lessonsExcused: 0,
+            effectiveBillable: 8,
+            fullAmount: 350000,
+            isProrated: true,
+          },
+        ],
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async studentSummary(
+    @Req() req: any,
+    @Param('studentId', ParseIntPipe) studentId: number,
+  ) {
+    return this.paymentsService.getStudentPaymentSummary(studentId, req.user);
+  }
+
+  @Put('pay-debt/student/:studentId')
+  @ApiOperation({
+    summary: "Pay student total debt (jami qarzni to'lash)",
+    description:
+      "Bitta summani o'quvchining ochiq (unpaid/partial) oylariga eng eskisidan " +
+      "boshlab taqsimlaydi. `amount` berilmasa — jami qarz to'liq to'lanadi. " +
+      "Misol: 400000/oy dan 2 oy (800000) qarzi bo'lgan o'quvchi 600000 to'lasa, " +
+      "1-oy to'liq yopiladi va 2-oyga 200000 tushib, 200000 qarz qoladi. " +
+      "Admin/super_admin uchun avtomatik tasdiqlanadi; reception/manager uchun " +
+      "PENDING receipt yaratiladi (admin keyin tasdiqlaydi).",
+  })
+  @ApiBody({ type: PayStudentDebtDto })
+  @ApiResponse({
+    schema: {
+      example: {
+        studentId: 45,
+        requestedAmount: 600000,
+        distributedAmount: 600000,
+        unallocated: 0,
+        allocations: [
+          { paymentId: 649, forMonth: '2026-08', groupId: 12, allocated: 400000, pending: false, checkNo: '5', transactionNo: 'TRX-20260906-000123' },
+          { paymentId: 650, forMonth: '2026-09', groupId: 12, allocated: 200000, pending: false, checkNo: '6-A', transactionNo: 'TRX-20260906-000124' },
+        ],
+        summary: { student: {}, totals: {}, months: [] },
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async payStudentDebt(
+    @Req() req: any,
+    @Param('studentId', ParseIntPipe) studentId: number,
+    @Body() dto: PayStudentDebtDto,
+  ) {
+    return this.paymentsService.payStudentDebt(
+      studentId,
+      dto.amount,
+      req.user,
+      dto.comment,
+      dto.paymentMethod,
+      dto.paidAt,
+    );
+  }
+
+  @Get('receipt/:receiptId/check')
+  @ApiOperation({
+    summary: 'Get printable payment check/receipt (chek chiqarish)',
+    description:
+      "Bitta receipt (to'lov) uchun chek ma'lumotlari: chek raqami (1, 1-A, " +
+      "1-A-B...), o'quvchi ism-familiyasi, telefon, guruh, o'qituvchi, to'lovdan " +
+      "oldingi/keyingi qoldiq, to'lov usuli, summa va sana-vaqt. Frontendda " +
+      "chekni chop etish uchun ishlatiladi.",
+  })
+  @ApiResponse({
+    schema: {
+      example: {
+        receiptId: 12,
+        checkNo: '1-A',
+        transactionNo: 'TRX-20260906-000123',
+        invoiceNo: 1,
+        installmentIndex: 1,
+        status: 'confirmed',
+        student: {
+          id: 45,
+          firstName: 'Ali',
+          lastName: 'Valiyev',
+          fullName: 'Ali Valiyev',
+          phone: '+998901234567',
+        },
+        group: { id: 12, name: 'Ingliz tili A1' },
+        teacher: { id: 7, fullName: 'Dilnoza Karimova' },
+        forMonth: '2026-09',
+        amount: 200000,
+        balanceBefore: 400000,
+        balanceAfter: 200000,
+        paymentMethod: 'card',
+        paidAt: '2026-09-06',
+        receivedAt: '2026-09-06T10:15:00.000Z',
+        createdAt: '2026-09-06T10:15:00.000Z',
+        receivedBy: { id: 3, fullName: 'Reception Xodim' },
+        comment: null,
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async getReceiptCheck(@Param('receiptId', ParseIntPipe) receiptId: number) {
+    return this.paymentsService.buildCheckFromReceipt(receiptId);
+  }
+
+  @Get(':paymentId/receipts')
+  @ApiOperation({
+    summary: "Payment uchun to'lovlar tarixi (cheklar ro'yxati)",
+    description:
+      "Bitta payment (o'quvchining bitta oyi) uchun qilingan BARCHA to'lovlarni " +
+      "(receipt'larni) chek ko'rinishida qaytaradi. Har bir element — " +
+      "GET /payments/receipt/:receiptId/check qaytaradigan chek obyektining " +
+      "aynan o'zi (receiptId bilan). Frontend shu bitta so'rov bilan ham tarix " +
+      "jadvalini chizadi, ham chekni chop etadi (qo'shimcha so'rovsiz). Tartib: " +
+      "receivedAt bo'yicha ASC. Rad etilgan (rejected) receipt'lar ham status'i " +
+      "bilan qaytadi.",
+  })
+  @ApiResponse({
+    schema: {
+      example: {
+        data: [
+          {
+            receiptId: 12,
+            checkNo: '1-A',
+            transactionNo: 'TRX-20260906-000123',
+            invoiceNo: 1,
+            installmentIndex: 1,
+            status: 'confirmed',
+            student: {
+              id: 45,
+              firstName: 'Ali',
+              lastName: 'Valiyev',
+              fullName: 'Ali Valiyev',
+              phone: '+998901234567',
+            },
+            group: { id: 12, name: 'Ingliz tili A1' },
+            teacher: { id: 7, fullName: 'Dilnoza Karimova' },
+            forMonth: '2026-09',
+            amount: 200000,
+            balanceBefore: 400000,
+            balanceAfter: 200000,
+            paymentMethod: 'card',
+            paidAt: '2026-09-06',
+            receivedAt: '2026-09-06T10:15:00.000Z',
+            createdAt: '2026-09-06T10:15:00.000Z',
+            receivedBy: { id: 3, fullName: 'Reception Xodim' },
+            comment: null,
+          },
+        ],
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async getPaymentReceipts(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+  ) {
+    return this.paymentsService.getReceiptsForPayment(paymentId);
+  }
+
+  @Put('preview-exclusion/:id')
+  @ApiOperation({
+    summary: 'Preview payment exclusion (chiqarib tashlashni oldindan hisoblash)',
+    description:
+      "Bir oy (payment) uchun excludeLessons (kun) yoki excludeAmount (summa) " +
+      "yuborilganda to'lanadigan yangi summani hisoblab beradi. SAQLAMAYDI — " +
+      "faqat frontendda jonli ko'rsatish uchun. Kun yuborilsa perLessonAmount " +
+      "orqali summaga aylantiriladi.",
+  })
+  @ApiBody({ type: PreviewExclusionDto })
+  @ApiResponse({
+    schema: {
+      example: {
+        paymentId: 649,
+        forMonth: '2026-08',
+        lessonsPlanned: 10,
+        lessonsBillable: 10,
+        perLessonAmount: 35000,
+        baseAmountDue: 350000,
+        currentAmountDue: 350000,
+        amountPaid: 0,
+        excludeLessons: 2,
+        excludedAmount: 70000,
+        newAmountDue: 280000,
+        newRemaining: 280000,
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async previewExclusion(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PreviewExclusionDto,
+  ) {
+    return this.paymentsService.previewExclusion(id, {
+      excludeLessons: dto.excludeLessons,
+      excludeAmount: dto.excludeAmount,
+    });
+  }
+
+  @Put('apply-exclusion/:id')
+  @ApiOperation({
+    summary: 'Apply payment exclusion (chiqarib tashlashni saqlash)',
+    description:
+      "Bir oy (payment) uchun chiqarib tashlashni SAQLAYDI: amountDue kamayadi " +
+      "va sabab (comment) yoziladi. excludeLessons yoki excludeAmount bilan birga " +
+      "comment MAJBURIY. Recalc paytida ham saqlanadi. Saqlangandan keyin frontend " +
+      "pay-partial/pay-debt orqali kamaygan summani qabul qiladi.",
+  })
+  @ApiBody({ type: ApplyExclusionDto })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  async applyExclusion(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ApplyExclusionDto,
+  ) {
+    return this.paymentsService.applyExclusion(
+      id,
+      {
+        excludeLessons: dto.excludeLessons,
+        excludeAmount: dto.excludeAmount,
+        comment: dto.comment,
+      },
+      req.user,
+    );
   }
 
   @Get(':id')

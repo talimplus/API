@@ -88,6 +88,28 @@ export class Payment {
   lessonsExcused: number;
 
   /**
+   * Reception qo'lda chiqarib tashlagan summa (manual exclusion).
+   * amountDue hisoblanganda oxirida ayiriladi:
+   *   amountDue = prorated * (1 - discount/100) - manualExcludedAmount.
+   * Recalc paytida saqlanadi (o'chib ketmaydi).
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  manualExcludedAmount: number;
+
+  /**
+   * Chiqarib tashlangan darslar soni (faqat ma'lumot uchun; summani
+   * manualExcludedAmount belgilaydi).
+   */
+  @Column({ type: 'int', nullable: true })
+  manualExcludedLessons?: number | null;
+
+  /**
+   * Chiqarib tashlash sababi (izoh). manualExcludedAmount > 0 bo'lsa majburiy.
+   */
+  @Column({ type: 'text', nullable: true })
+  manualExcludedReason?: string | null;
+
+  /**
    * Planned study end date for this month (YYYY-MM-DD).
    * If set, student plans to study only until this date (inclusive).
    * Used to calculate prorated payment amount.
@@ -95,6 +117,15 @@ export class Payment {
    */
   @Column({ type: 'date', nullable: true })
   plannedStudyUntilDate?: Date | null;
+
+  /**
+   * Chek/invoice bazaviy raqami (masalan 1, 2, 3...). Har bir markaz (center)
+   * ichida ketma-ket beriladi va shu oy uchun BIRINCHI to'lov (receipt)
+   * qabul qilinganda bir marta biriktiriladi. Keyingi qisman to'lovlar (receipt)
+   * shu raqamdan harf bilan hosil qilinadi: 1 -> 1-A -> 1-A-B ...
+   */
+  @Column({ type: 'int', nullable: true })
+  invoiceNo?: number | null;
 
   @Column({
     type: 'enum',

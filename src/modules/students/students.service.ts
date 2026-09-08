@@ -696,6 +696,40 @@ export class StudentsService {
     });
   }
 
+  /**
+   * Biriktirilgan guruh(lar)ning jadval kunlaridan o'quvchining `studyDays`
+   * qiymatini hisoblaydi (union, hafta tartibida). Guruh bo'lmasa yoki
+   * jadval bo'lmasa `null` qaytaradi.
+   */
+  private async computeStudyDays(
+    groupIds: number[],
+  ): Promise<WeekDay[] | null> {
+    if (!Array.isArray(groupIds) || groupIds.length === 0) return null;
+    const groups = await this.groupRepo.find({
+      where: { id: In(groupIds) },
+      relations: ['schedules'],
+    });
+    const WEEK_ORDER: WeekDay[] = [
+      WeekDay.MONDAY,
+      WeekDay.TUESDAY,
+      WeekDay.WEDNESDAY,
+      WeekDay.THURSDAY,
+      WeekDay.FRIDAY,
+      WeekDay.SATURDAY,
+      WeekDay.SUNDAY,
+    ];
+    const days = new Set<WeekDay>();
+    for (const g of groups) {
+      for (const s of (g as any).schedules ?? []) {
+        if (s?.day) days.add(s.day as WeekDay);
+      }
+    }
+    if (days.size === 0) return null;
+    return Array.from(days).sort(
+      (a, b) => WEEK_ORDER.indexOf(a) - WEEK_ORDER.indexOf(b),
+    );
+  }
+
   async create(
     dto: CreateStudentDto,
     centerId: number,
@@ -755,6 +789,8 @@ export class StudentsService {
         'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
       );
     }
+    // Guruh(lar)ning dars kunlarini o'quvchiga yozib qo'yamiz.
+    const studyDays = await this.computeStudyDays(safeGroupIds);
     const phoneDigits = String(dto.phone ?? '').replace(/\D/g, '');
     const phoneLast4 = phoneDigits.slice(-4) || '0000';
     const formattedBirth = dto.birthDate
@@ -797,6 +833,7 @@ export class StudentsService {
       heardAboutUs: (dto as any).heardAboutUs ?? null,
       preferredTime: (dto as any).preferredTime ?? null,
       preferredDays: (dto as any).preferredDays ?? null,
+      studyDays: studyDays,
       passportSeries: (dto as any).passportSeries ?? null,
       passportNumber: (dto as any).passportNumber ?? null,
       jshshir: (dto as any).jshshir ?? null,
@@ -895,7 +932,25 @@ export class StudentsService {
           'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
         );
       }
+
+      // Olib tashlangan guruhlar: eski biriktirilgan guruhlardan yangi ro'yxatda
+      // yo'q bo'lganlari. Ular uchun to'lovlarni MOSLASHTIRAMIZ (kerak bo'lsa
+      // o'chiramiz/refund qilamiz) — bu many-to-many yozuv o'chishidan (save)
+      // OLDIN bajarilishi shart, aks holda joinedAt yo'qoladi.
+      const oldGroupIds = ((student as any).groups ?? []).map((g: any) => g.id);
+      const removedGroupIds: number[] = oldGroupIds.filter(
+        (gid: number) => !dto.groupIds!.includes(gid),
+      );
+      for (const gid of removedGroupIds) {
+        await this.paymentsService
+          .adjustPaymentsForStudentLeftGroup(id, gid)
+          .catch(() => undefined);
+      }
+
       student.groups = groups;
+      // Guruh(lar) o'zgarganda dars kunlarini qayta hisoblab yozamiz
+      // (guruh olib tashlansa -> null bo'ladi).
+      student.studyDays = await this.computeStudyDays(dto.groupIds);
     }
 
     // Referral update (stored in referrals table, not on student row)
@@ -982,6 +1037,13 @@ export class StudentsService {
       await this.paymentsService.ensurePaymentsForStudent(saved.id, {
         onlyCurrentMonth: true,
       });
+      // Guruh(lar) o'zgargani uchun ochiq (to'lanmagan/qisman) to'lovlarni qayta
+      // hisoblaymiz: yangi guruhga o'quvchi shu oy o'rtasida qo'shilgan bo'lsa,
+      // joriy oy qo'shilgan kundan prorate qilinadi; qo'shilishdan oldingi
+      // oylar uchun billable=0 bo'lib, o'sha (to'lanmagan) to'lovlar o'chiriladi.
+      await this.paymentsService
+        .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
+        .catch(() => undefined);
     }
 
     // Return the same enriched shape as findById so frontend always has ids

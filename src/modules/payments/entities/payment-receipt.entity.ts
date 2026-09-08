@@ -40,6 +40,57 @@ export class PaymentReceipt {
   amount: number;
 
   /**
+   * Chek/invoice bazaviy raqami (payment.invoiceNo dan nusxa). Bir oyning barcha
+   * receiptlari uchun bir xil bo'ladi (masalan 1).
+   */
+  @Column({ type: 'int', nullable: true })
+  invoiceNo?: number | null;
+
+  /**
+   * Shu oy (payment) uchun nechanchi qisman to'lov (1, 2, 3...). Harf suffikslari
+   * shu indeksdan hosil qilinadi: 1 -> A, 2 -> B, ...
+   */
+  @Column({ type: 'int', nullable: true })
+  installmentIndex?: number | null;
+
+  /**
+   * Chekda chiqadigan to'liq raqam. To'liq bir martalik to'lov -> "1".
+   * Qisman to'lovlar -> "1-A", "1-A-B", "1-A-B-C" ...
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  checkNo?: string | null;
+
+  /**
+   * Global yagona tranzaktsiya raqami — har bir to'lov (receipt) uchun ALOHIDA
+   * (checkNo dan farqli, u markaz ichida takrorlanadi). Format:
+   * TRX-YYYYMMDD-NNNNNN (sana + butun tizim bo'yicha ketma-ket raqam). Chek
+   * chop etilganda ko'rsatiladi; chek qaytib kelganda shu raqam orqali aynan
+   * qaysi to'lov ekanini aniqlab olish uchun ishlatiladi.
+   */
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  transactionNo?: string | null;
+
+  /**
+   * To'lovdan oldingi o'quvchi umumiy qoldig'i (qarzi) — chek uchun snapshot.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  balanceBefore?: number | null;
+
+  /**
+   * To'lovdan keyingi o'quvchi umumiy qoldig'i (qarzi) — chek uchun snapshot.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, nullable: true })
+  balanceAfter?: number | null;
+
+  /**
+   * To'lov haqiqatda amalga oshirilgan sana (asosan KARTA uchun — reception
+   * qo'lda kiritadigan sana). Bo'sh bo'lsa receivedAt/createdAt ishlatiladi.
+   */
+  @Column({ type: 'date', nullable: true })
+  paidAt?: Date | null;
+
+  /**
    * Snapshot of receiver commission percent at confirmation time.
    * Applied only for MANAGER/RECEPTION if they have commissionPercentage.
    */

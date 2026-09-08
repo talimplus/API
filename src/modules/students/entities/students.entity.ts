@@ -54,6 +54,14 @@ export class Student {
   @Column({ type: 'text', array: true, nullable: true })
   preferredDays?: WeekDay[] | null;
 
+  /**
+   * O'quvchining haqiqiy dars kunlari — biriktirilgan guruh(lar)ning jadval
+   * kunlaridan avtomatik hisoblanib yoziladi (guruh biriktirilganda/o'zgartirilganda).
+   * `preferredDays` (xohlagan kunlar) dan farqli — bu guruhdan kelib chiqadi.
+   */
+  @Column({ type: 'text', array: true, nullable: true })
+  studyDays?: WeekDay[] | null;
+
   @Column({ nullable: true })
   passportSeries?: string | null;
 
