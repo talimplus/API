@@ -40,20 +40,16 @@ export class Group {
   startDate: Date;
 
   /**
-   * Optional group end boundary in local group timezone (inclusive).
+   * Guruh darslari tugash sanasi (guruh timezone'ida, inclusive).
+   * Yagona manba: darslar ro'yxati, to'lovlar, syllabus rejasi va guruhning
+   * avtomatik yopilishi — hammasi shu sanaga qarab ishlaydi.
+   * null bo'lsa guruh muddatsiz (faqat status bilan boshqariladi).
    */
   @Column({ type: 'date', nullable: true })
   endDate?: Date | null;
 
   @Column({ type: 'enum', enum: GroupStatus, default: GroupStatus.NEW })
   status: GroupStatus;
-
-  /**
-   * Group duration in months, used for auto-finishing (optional).
-   * Example: 5 => 5 months.
-   */
-  @Column({ type: 'int', nullable: true })
-  durationMonths?: number | null;
 
   /**
    * Timestamp when group was marked as STARTED.

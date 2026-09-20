@@ -26,6 +26,7 @@ import {
   ApplyExclusionDto,
   PreviewExclusionDto,
 } from '@/modules/payments/dto/payment-exclusion.dto';
+import { ConfirmReceiptsDto } from '@/modules/payments/dto/confirm-receipts.dto';
 
 @ApiTags('Payments')
 @Controller('payments')
@@ -343,16 +344,38 @@ export class PaymentsController {
   }
 
   @Get('pending-receipts')
-  @ApiOperation({ summary: 'List pending payment receipts' })
+  @ApiOperation({
+    summary: 'List pending payment receipts',
+    description:
+      "Tasdiq kutayotgan to'lovlar. dateFrom/dateTo — pul QABUL QILINGAN sana " +
+      "(receivedAt, bo'sh bo'lsa createdAt) bo'yicha, ikkalasi ham ixtiyoriy. " +
+      "meta.totalAmount — filterga mos BARCHA pending receiptlar summasi " +
+      "(joriy sahifa emas), \"Barchasini oldim\" tugmasida ko'rsatish uchun.",
+  })
   @ApiQuery({ name: 'centerId', required: false, type: Number })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'perPage', required: false, type: Number })
+  @ApiQuery({
+    name: 'dateFrom',
+    required: false,
+    description: "Qabul qilingan sana oralig'i boshi (YYYY-MM-DD).",
+    example: '2026-09-01',
+  })
+  @ApiQuery({
+    name: 'dateTo',
+    required: false,
+    description:
+      "Qabul qilingan sana oralig'i oxiri (YYYY-MM-DD). Shu kun ham kiradi.",
+    example: '2026-09-20',
+  })
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   async pendingReceipts(
     @Req() req: any,
     @Query('centerId') centerId?: number,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     const isAdmin =
       req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
@@ -366,7 +389,116 @@ export class PaymentsController {
       centerId: effectiveCenterId,
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 20,
+      dateFrom,
+      dateTo,
     });
+  }
+
+  @Get('receipts-stats')
+  @ApiOperation({
+    summary: "To'lov cheklari statistikasi — sahifa tepasidagi bloklar uchun",
+    description:
+      "Bitta so'rovda uchala holat: tasdiqlangan / tasdiq kutilmoqda / rad etilgan " +
+      "(har biriga soni va summasi). Filterlar GET /payments/pending-receipts " +
+      "bilan aynan bir xil, sana ham bir xil maydon bo'yicha — pul QABUL QILINGAN " +
+      "sana (receivedAt, bo'sh bo'lsa createdAt). `total` = tasdiqlangan + " +
+      "kutilayotgan (rad etilgan pul kassaga kirmagani uchun qo'shilmaydi).",
+  })
+  @ApiQuery({ name: 'centerId', required: false, type: Number })
+  @ApiQuery({
+    name: 'dateFrom',
+    required: false,
+    description: "Qabul qilingan sana oralig'i boshi (YYYY-MM-DD).",
+    example: '2026-09-01',
+  })
+  @ApiQuery({
+    name: 'dateTo',
+    required: false,
+    description:
+      "Qabul qilingan sana oralig'i oxiri (YYYY-MM-DD). Shu kun ham kiradi.",
+    example: '2026-09-20',
+  })
+  @ApiResponse({
+    schema: {
+      example: {
+        confirmed: { count: 42, amount: 18400000 },
+        pending: { count: 7, amount: 2350000 },
+        rejected: { count: 2, amount: 400000 },
+        total: { count: 49, amount: 20750000 },
+      },
+    },
+  })
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  async receiptsStats(
+    @Req() req: any,
+    @Query('centerId') centerId?: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    return this.paymentsService.getReceiptsStats(req.user.organizationId, {
+      centerId: effectiveCenterId,
+      dateFrom,
+      dateTo,
+    });
+  }
+
+  @Put('confirm-receipts')
+  @ApiOperation({
+    summary: "Bir nechta (yoki barcha) receiptni tasdiqlash — \"oldim\" qilib belgilash",
+    description:
+      "Ikki rejimda ishlaydi:\n" +
+      "1) `receiptIds: [12, 13]` — frontendda checkbox bilan belgilanganlar.\n" +
+      "2) `all: true` — filterga (centerId/dateFrom/dateTo) mos BARCHA pending " +
+      "receiptlar (\"Barchasini oldim\" tugmasi). Filter berilmasa — hammasi.\n\n" +
+      "Har biri yakka tasdiqlash (PUT /payments/confirm-receipt/:id) bilan bir xil " +
+      "o'tadi: pul payment'ga qo'shiladi, komissiya snapshot'i olinadi, chek " +
+      "yasaladi. Bittasi xato bersa qolganlari to'xtamaydi — javobda nima " +
+      "tasdiqlangani, nima o'tkazib yuborilgani va nima xato berganigacha ko'rinadi. " +
+      "Boshqa tashkilot yoki markazning receipti hech qachon tasdiqlanmaydi.",
+  })
+  @ApiBody({ type: ConfirmReceiptsDto })
+  @ApiResponse({
+    schema: {
+      example: {
+        requested: 3,
+        confirmedCount: 2,
+        confirmedAmount: 550000,
+        skippedCount: 1,
+        failedCount: 0,
+        confirmed: [
+          { receiptId: 12, amount: 350000, checkNo: '1-A' },
+          { receiptId: 13, amount: 200000, checkNo: '2' },
+        ],
+        skipped: [14],
+        failed: [],
+      },
+    },
+  })
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  async confirmReceipts(@Req() req: any, @Body() dto: ConfirmReceiptsDto) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+    const effectiveCenterId = isAdmin ? dto.centerId : req.user.centerId;
+
+    return this.paymentsService.confirmReceiptsBulk(
+      req.user.organizationId,
+      req.user,
+      {
+        receiptIds: dto.receiptIds,
+        all: dto.all,
+        centerId: effectiveCenterId,
+        dateFrom: dto.dateFrom,
+        dateTo: dto.dateTo,
+      },
+    );
   }
 
   @Put('calculate/:id')
@@ -411,8 +543,16 @@ export class PaymentsController {
     summary: 'Get student payment summary (view page)',
     description:
       "O'quvchi haqida qisqa ma'lumot + har oy bo'yicha to'lovlar (amountDue, " +
-      "amountPaid, pending, remaining, status) + jami xulosa (totalDue, totalPaid, " +
-      "totalDebt, totalPending, payableNow). Oylar eng yangisidan eskisiga tartiblangan.",
+      "amountPaid, pendingAmount, receivedAmount, remaining, payableNow, status) + " +
+      "jami xulosa (totalDue, totalPaid, totalDebt, totalPending, totalReceived, " +
+      "payableNow). Oylar eng yangisidan eskisiga tartiblangan.\n\n" +
+      "MUHIM — uchta summa farqi:\n" +
+      "- amountPaid/totalPaid: admin TASDIQLAGAN, kassaga tushgan pul.\n" +
+      "- pendingAmount/totalPending: reception olgan, tasdiq kutayotgan pul " +
+      "(pul o'sha xodim zimmasida).\n" +
+      "- receivedAmount/totalReceived = amountPaid + pendingAmount: o'quvchi " +
+      "haqiqatda topshirgan pul. O'quvchidan yana qancha olish kerakligi " +
+      "(payableNow) ayni shundan hisoblanadi, remaining esa kassa qarzi.",
   })
   @ApiResponse({
     schema: {
@@ -429,8 +569,9 @@ export class PaymentsController {
           totalDue: 800000,
           totalPaid: 0,
           totalDebt: 800000,
-          totalPending: 0,
-          payableNow: 800000,
+          totalPending: 200000,
+          totalReceived: 200000,
+          payableNow: 600000,
         },
         months: [
           {
@@ -440,8 +581,10 @@ export class PaymentsController {
             groupName: 'Ingliz tili A1',
             amountDue: 280000,
             amountPaid: 0,
-            pendingAmount: 0,
+            pendingAmount: 200000,
+            receivedAmount: 200000,
             remaining: 280000,
+            payableNow: 80000,
             status: 'unpaid',
             lessonsPlanned: 10,
             lessonsBillable: 8,

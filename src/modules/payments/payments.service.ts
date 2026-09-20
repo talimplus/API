@@ -296,9 +296,26 @@ export class PaymentsService {
     if (remaining <= 0) {
       throw new BadRequestException('Payment is already fully paid');
     }
+
+    // Tasdiq kutayotgan pul allaqachon o'quvchidan olingan — uni qayta olmaymiz.
+    // Aks holda submitReceipt "Maksimal qabul qilish mumkin bo'lgan summa" xatosini
+    // qaytaradi va pending receipt bor oyni umuman to'liq to'lab bo'lmaydi.
+    const pendingSum = await this.receiptRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .where('r.paymentId = :paymentId', { paymentId })
+      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
+      .getRawOne<{ sum: string }>();
+    const payableNow = this.round2(remaining - Number(pendingSum?.sum ?? 0));
+    if (payableNow <= 0) {
+      throw new BadRequestException(
+        "Qolgan summa allaqachon qabul qilingan va admin tasdig'ini kutmoqda",
+      );
+    }
+
     return this.submitReceipt(
       paymentId,
-      remaining,
+      payableNow,
       currentUser,
       comment,
       paymentMethod,
@@ -381,32 +398,203 @@ export class PaymentsService {
     return { receipt: savedReceipt };
   }
 
-  async listPendingReceipts(
-    organizationId: number,
-    args: { centerId?: number; page?: number; perPage?: number },
-  ) {
-    const page = Math.max(1, Number(args.page ?? 1));
-    const perPage = Math.max(1, Math.min(100, Number(args.perPage ?? 20)));
-    const skip = (page - 1) * perPage;
+  /**
+   * Kun bo'yicha oraliqni [from, toExclusive) ko'rinishiga keltiradi.
+   * dateTo ning O'ZI HAM kiradi (shuning uchun oxiri +1 kun).
+   * Ikkalasi ham ixtiyoriy — faqat biri berilsa bir tomonlama filter.
+   */
+  private normalizeDayRange(
+    dateFrom?: string,
+    dateTo?: string,
+  ): { from?: string; toExclusive?: string } {
+    const parseDay = (value: string, label: string) => {
+      const parsed = dayjs(value.trim());
+      if (!parsed.isValid()) {
+        throw new BadRequestException(
+          `${label} noto'g'ri formatda. YYYY-MM-DD kutilmoqda.`,
+        );
+      }
+      return parsed.startOf('day');
+    };
 
-    const qb = this.receiptRepo
-      .createQueryBuilder('r')
-      .leftJoinAndSelect('r.payment', 'p')
-      .leftJoinAndSelect('p.student', 'student')
-      .leftJoinAndSelect('p.group', 'group')
-      .leftJoin('student.center', 'center')
+    const fromDay = dateFrom?.trim()
+      ? parseDay(dateFrom, 'dateFrom')
+      : undefined;
+    const toDay = dateTo?.trim() ? parseDay(dateTo, 'dateTo') : undefined;
+
+    if (fromDay && toDay && fromDay.isAfter(toDay)) {
+      throw new BadRequestException(
+        "dateFrom dateTo dan katta bo'lishi mumkin emas",
+      );
+    }
+
+    return {
+      from: fromDay?.format('YYYY-MM-DD HH:mm:ss'),
+      toExclusive: toDay?.add(1, 'day').format('YYYY-MM-DD HH:mm:ss'),
+    };
+  }
+
+  /**
+   * Receiptlar uchun umumiy query — ro'yxat, "barchasini tasdiqlash" va
+   * statistika shu yerdan filterlaydi (uchtasi hech qachon farq qilmasligi uchun).
+   *
+   * @param opts.withRelations true bo'lsa payment/student/group ham SELECT
+   *   qilinadi (ro'yxat uchun). Aggregate (COUNT/SUM) query'lar uchun false —
+   *   ortiqcha ustunlar GROUP BY bilan to'qnashmasligi uchun.
+   */
+  private buildReceiptsQuery(
+    organizationId: number,
+    args: {
+      centerId?: number;
+      dateFrom?: string;
+      dateTo?: string;
+      status?: PaymentReceiptStatus;
+    },
+    opts: { withRelations?: boolean } = {},
+  ) {
+    const qb = this.receiptRepo.createQueryBuilder('r');
+
+    if (opts.withRelations) {
+      qb.leftJoinAndSelect('r.payment', 'p')
+        .leftJoinAndSelect('p.student', 'student')
+        .leftJoinAndSelect('p.group', 'group');
+    } else {
+      qb.leftJoin('r.payment', 'p').leftJoin('p.student', 'student');
+    }
+
+    qb.leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
-      .where('organization.id = :organizationId', { organizationId })
-      .andWhere('r.status = :status', { status: PaymentReceiptStatus.PENDING })
-      .orderBy('r.createdAt', 'DESC')
-      .skip(skip)
-      .take(perPage);
+      .where('organization.id = :organizationId', { organizationId });
+
+    if (args.status) {
+      qb.andWhere('r.status = :status', { status: args.status });
+    }
 
     if (args.centerId) {
       qb.andWhere('center.id = :centerId', { centerId: args.centerId });
     }
 
-    const [data, total] = await qb.getManyAndCount();
+    // Sana bo'yicha filter: pul qachon QABUL QILINGAN (receivedAt).
+    // receivedAt bo'sh bo'lsa createdAt ishlatiladi.
+    const { from, toExclusive } = this.normalizeDayRange(
+      args.dateFrom,
+      args.dateTo,
+    );
+
+    if (from) {
+      qb.andWhere('COALESCE(r.receivedAt, r.createdAt) >= :receivedFrom', {
+        receivedFrom: from,
+      });
+    }
+
+    if (toExclusive) {
+      qb.andWhere('COALESCE(r.receivedAt, r.createdAt) < :receivedTo', {
+        receivedTo: toExclusive,
+      });
+    }
+
+    return qb;
+  }
+
+  /**
+   * Pending receiptlar query'si — ro'yxat ham, "barchasini tasdiqlash" ham
+   * shu yerdan filterlaydi.
+   */
+  private buildPendingReceiptsQuery(
+    organizationId: number,
+    args: { centerId?: number; dateFrom?: string; dateTo?: string },
+  ) {
+    return this.buildReceiptsQuery(
+      organizationId,
+      { ...args, status: PaymentReceiptStatus.PENDING },
+      { withRelations: true },
+    );
+  }
+
+  /**
+   * 📊 Receiptlar statistikasi — sahifa tepasidagi bloklar uchun.
+   *
+   * Bitta so'rovda uchala holat: tasdiqlangan / tasdiq kutilmoqda / rad etilgan.
+   * Filterlar GET /payments/pending-receipts bilan AYNAN bir xil (centerId,
+   * dateFrom, dateTo) va sana ham bir xil maydon bo'yicha — pul QABUL QILINGAN
+   * sana (receivedAt, bo'sh bo'lsa createdAt). Ya'ni: "shu oraliqda qabul
+   * qilingan pullarning holati bo'yicha taqsimoti".
+   */
+  async getReceiptsStats(
+    organizationId: number,
+    args: { centerId?: number; dateFrom?: string; dateTo?: string },
+  ) {
+    const rows = await this.buildReceiptsQuery(organizationId, args)
+      .select('r.status', 'status')
+      .addSelect('COUNT(r.id)', 'count')
+      .addSelect('COALESCE(SUM(r.amount), 0)', 'sum')
+      .groupBy('r.status')
+      .getRawMany<{ status: string; count: string; sum: string }>();
+
+    const empty = () => ({ count: 0, amount: 0 });
+    const stats: Record<PaymentReceiptStatus, { count: number; amount: number }> =
+      {
+        [PaymentReceiptStatus.CONFIRMED]: empty(),
+        [PaymentReceiptStatus.PENDING]: empty(),
+        [PaymentReceiptStatus.REJECTED]: empty(),
+      };
+
+    for (const row of rows) {
+      const key = row.status as PaymentReceiptStatus;
+      if (stats[key]) {
+        stats[key] = {
+          count: Number(row.count ?? 0),
+          amount: this.round2(Number(row.sum ?? 0)),
+        };
+      }
+    }
+
+    // Rad etilgan pul kassaga kirmagan, shuning uchun "total" ga QO'SHILMAYDI.
+    const totalAmount = this.round2(
+      stats[PaymentReceiptStatus.CONFIRMED].amount +
+        stats[PaymentReceiptStatus.PENDING].amount,
+    );
+    const totalCount =
+      stats[PaymentReceiptStatus.CONFIRMED].count +
+      stats[PaymentReceiptStatus.PENDING].count;
+
+    return {
+      confirmed: stats[PaymentReceiptStatus.CONFIRMED],
+      pending: stats[PaymentReceiptStatus.PENDING],
+      rejected: stats[PaymentReceiptStatus.REJECTED],
+      // tasdiqlangan + kutilayotgan (rad etilgansiz)
+      total: { count: totalCount, amount: totalAmount },
+    };
+  }
+
+  async listPendingReceipts(
+    organizationId: number,
+    args: {
+      centerId?: number;
+      page?: number;
+      perPage?: number;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ) {
+    const page = Math.max(1, Number(args.page ?? 1));
+    const perPage = Math.max(1, Math.min(100, Number(args.perPage ?? 20)));
+    const skip = (page - 1) * perPage;
+
+    const qb = this.buildPendingReceiptsQuery(organizationId, args);
+
+    // "Barchasini oldim" tugmasi uchun jami summa (joriy sahifa emas, BUTUN filter)
+    const totalsRaw = await qb
+      .clone()
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .getRawOne<{ sum: string }>();
+
+    const [data, total] = await qb
+      .orderBy('r.createdAt', 'DESC')
+      .skip(skip)
+      .take(perPage)
+      .getManyAndCount();
+
     return {
       data,
       meta: {
@@ -414,7 +602,109 @@ export class PaymentsService {
         page,
         perPage,
         totalPages: Math.ceil(total / perPage),
+        // filterga mos BARCHA pending receiptlar summasi
+        totalAmount: Number(totalsRaw?.sum ?? 0),
       },
+    };
+  }
+
+  /**
+   * ✅ Bir nechta (yoki filterga mos barcha) pending receiptni tasdiqlaydi.
+   *
+   * - `receiptIds` berilsa — faqat o'shalar (frontendda belgilanganlar).
+   * - `all: true` berilsa — filterga (centerId/dateFrom/dateTo) mos BARCHASI.
+   *
+   * Har bir receipt alohida confirmReceipt() orqali o'tadi, ya'ni yakka
+   * tasdiqlash bilan bir xil: pul payment'ga qo'shiladi, komissiya snapshot'i
+   * olinadi, chek yasaladi. Bittasi xato bersa qolganlari to'xtamaydi —
+   * natijada nima bo'lgani ro'yxat bilan qaytadi.
+   */
+  async confirmReceiptsBulk(
+    organizationId: number,
+    currentUser: CurrentUser,
+    args: {
+      receiptIds?: number[];
+      all?: boolean;
+      centerId?: number;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ) {
+    const isAdmin =
+      currentUser.role === UserRole.ADMIN ||
+      currentUser.role === UserRole.SUPER_ADMIN;
+    if (!isAdmin) {
+      throw new BadRequestException('Only admin can confirm receipts');
+    }
+
+    const hasIds = !!args.receiptIds?.length;
+    if (!hasIds && !args.all) {
+      throw new BadRequestException(
+        "receiptIds bering yoki barchasini tasdiqlash uchun all: true yuboring",
+      );
+    }
+
+    const effectiveCenterId = isAdmin ? args.centerId : currentUser.centerId;
+
+    // Tanlanganlar ham, "barchasi" ham shu query orqali o'tadi —
+    // ya'ni boshqa tashkilot/markazning receipti hech qachon tasdiqlanmaydi.
+    const qb = this.buildPendingReceiptsQuery(organizationId, {
+      centerId: effectiveCenterId,
+      dateFrom: hasIds ? undefined : args.dateFrom,
+      dateTo: hasIds ? undefined : args.dateTo,
+    });
+
+    if (hasIds) {
+      qb.andWhere('r.id IN (:...receiptIds)', {
+        receiptIds: [...new Set(args.receiptIds)],
+      });
+    }
+
+    const targets = await qb
+      .orderBy('r.createdAt', 'ASC')
+      .select('r.id', 'id')
+      .getRawMany<{ id: number }>();
+
+    const targetIds = targets.map((r) => Number(r.id));
+
+    const confirmed: Array<{ receiptId: number; amount: number; checkNo?: string | null }> = [];
+    const failed: Array<{ receiptId: number; reason: string }> = [];
+
+    for (const receiptId of targetIds) {
+      try {
+        const result = await this.confirmReceipt(receiptId, currentUser);
+        confirmed.push({
+          receiptId,
+          amount: Number(result.receipt?.amount ?? 0),
+          checkNo: (result as any).check?.checkNo ?? result.receipt?.checkNo ?? null,
+        });
+      } catch (e: any) {
+        this.logger.error(
+          `Bulk confirm failed for receipt ${receiptId}: ${e?.message}`,
+        );
+        failed.push({ receiptId, reason: e?.message ?? 'Unknown error' });
+      }
+    }
+
+    // Belgilangan, lekin topilmagan id'lar (allaqachon tasdiqlangan / rad etilgan /
+    // boshqa markazniki / umuman yo'q)
+    const skipped = hasIds
+      ? [...new Set(args.receiptIds)]
+          .map(Number)
+          .filter((id) => !targetIds.includes(id))
+      : [];
+
+    return {
+      requested: hasIds ? [...new Set(args.receiptIds)].length : targetIds.length,
+      confirmedCount: confirmed.length,
+      confirmedAmount: this.round2(
+        confirmed.reduce((acc, c) => acc + c.amount, 0),
+      ),
+      skippedCount: skipped.length,
+      failedCount: failed.length,
+      confirmed,
+      skipped,
+      failed,
     };
   }
 
@@ -470,6 +760,10 @@ export class PaymentsService {
         const amountPaid = Number(p.amountPaid ?? 0);
         const pendingAmount = this.round2(pendingMap.get(p.id) ?? 0);
         const remaining = this.round2(Math.max(0, amountDue - amountPaid));
+        // O'quvchi topshirgan pul (tasdiqlangan + tasdiq kutayotgan).
+        const receivedAmount = this.round2(amountPaid + pendingAmount);
+        // Shu oy uchun o'quvchidan hali olinishi kerak bo'lgan summa.
+        const payableNow = this.round2(Math.max(0, amountDue - receivedAmount));
 
         // Proratsiyani tushuntirish uchun dars sanoqlari (Payment'da saqlangan).
         const lessonsPlanned = p.lessonsPlanned ?? null;
@@ -516,9 +810,11 @@ export class PaymentsService {
           groupId: p.groupId,
           groupName: p.group?.name ?? null,
           amountDue,
-          amountPaid,
+          amountPaid, // admin tasdiqlagan, kassaga tushgan pul
           pendingAmount, // tasdiqlash kutayotgan receiptlar summasi
-          remaining, // shu oy uchun qolgan qarz
+          receivedAmount, // amountPaid + pendingAmount (o'quvchi topshirgan)
+          remaining, // shu oy uchun kassa qarzi (amountDue - amountPaid)
+          payableNow, // shu oy uchun o'quvchidan olinishi kerak
           status: p.status,
           // ↓ proratsiyani tushuntirish uchun
           lessonsPlanned, // guruhda shu oyda jami rejalashtirilgan darslar
@@ -543,8 +839,11 @@ export class PaymentsService {
     const totalPaid = sum((m) => m.amountPaid);
     const totalDebt = sum((m) => m.remaining);
     const totalPending = sum((m) => m.pendingAmount);
-    // Hozir yig'ish mumkin bo'lgan summa (qarzdan tasdiqlash kutayotgani ayirilgan).
-    const payableNow = this.round2(Math.max(0, totalDebt - totalPending));
+    // O'quvchi topshirgan jami pul (tasdiqlangan + tasdiq kutayotgan).
+    const totalReceived = sum((m) => m.receivedAmount);
+    // O'quvchidan olinishi kerak bo'lgan summa — oylar bo'yicha yig'indi
+    // (qarzdan tasdiqlash kutayotgani ayirilgan).
+    const payableNow = sum((m) => m.payableNow);
 
     // Distinct schedule days across all of the student's groups (week order).
     const WEEK_ORDER = [
@@ -609,10 +908,11 @@ export class PaymentsService {
       },
       totals: {
         totalDue,
-        totalPaid,
-        totalDebt,
-        totalPending,
-        payableNow,
+        totalPaid, // admin tasdiqlagan, kassaga tushgan
+        totalDebt, // kassa qarzi (totalDue - totalPaid)
+        totalPending, // reception olgan, tasdiq kutayotgan
+        totalReceived, // totalPaid + totalPending
+        payableNow, // o'quvchidan olinishi kerak
       },
       months,
     };
@@ -1374,35 +1674,30 @@ export class PaymentsService {
     // IMPORTANT: parse first, then apply timezone
     const monthStart = dayjs(forMonth).tz(timezone).startOf('month');
     const monthEnd = monthStart.endOf('month');
+    const monthStartStr = monthStart.format('YYYY-MM-DD');
+    const monthEndStr = monthEnd.format('YYYY-MM-DD');
 
     /**
      * BUSINESS RULE:
-     * - group.monthlyFee represents a full-month price (independent of when the group was created during the month).
-     * Therefore:
-     * - lessonsPlanned = schedule-matching lesson count for the FULL calendar month (monthStart..monthEnd),
-     *   ignoring group.startDate.
-     * - lessonsBillable = lessons the student must pay for, based on studentActiveStart (which already accounts for
-     *   group.startDate and student.activatedAt/createdAt).
+     * - group.monthlyFee — TO'LIQ oy narxi.
+     * - lessonsPlanned — to'liq kalendar oydagi jadval bo'yicha darslar soni,
+     *   guruhning boshlanish/tugash sanasidan QAT'I NAZAR.
+     * - lessonsBillable — shu darslardan o'quvchi to'laydiganlari: guruh
+     *   chegarasi [startDate..endDate] va o'quvchining faol oynasi kesishmasi.
+     *
+     * Shuning uchun guruh oyning 10-sanasida tugasa, o'quvchi butun oy emas,
+     * faqat o'sha 10 kundagi darslar uchun to'laydi (lessonsBillable /
+     * lessonsPlanned nisbati).
      */
-
-    // Planned lessons for the full month (ignore group boundaries)
-    // Use group.startDate and group.endDate for group boundaries, but calculate lessons for full month
-    const groupStartDate = group.startDate
-      ? dayjs(group.startDate).tz(timezone).format('YYYY-MM-DD')
-      : monthStart.format('YYYY-MM-DD');
-    const groupEndDate = group.endDate
-      ? dayjs(group.endDate).tz(timezone).format('YYYY-MM-DD')
-      : null;
-
     const plannedDates = computeLessonDates({
       timezone,
-      groupStartDate,
-      groupEndDate,
+      groupStartDate: monthStartStr,
+      groupEndDate: null,
       schedules: group.schedules ?? [],
       window: {
         mode: 'range',
-        from: monthStart.format('YYYY-MM-DD'),
-        to: monthEnd.format('YYYY-MM-DD'),
+        from: monthStartStr,
+        to: monthEndStr,
       },
     });
 
@@ -1410,9 +1705,17 @@ export class PaymentsService {
     if (!lessonsPlanned)
       return { lessonsPlanned: 0, lessonsBillable: 0, billableDates: [] };
 
-    // Billable lessons: subset of the full month schedule starting from studentActiveStart
-    // and optionally ending before studentActiveEndExclusive (used for STOPPED refunds).
+    // Guruh chegaralari (inclusive). endDate o'zgarsa shu yerda darhol aks etadi.
+    const groupStartDate = group.startDate
+      ? dayjs(group.startDate).format('YYYY-MM-DD')
+      : null;
+    const groupEndDate = group.endDate
+      ? dayjs(group.endDate).format('YYYY-MM-DD')
+      : null;
+
     const billableDates = plannedDates.filter((d) => {
+      if (groupStartDate && d < groupStartDate) return false;
+      if (groupEndDate && d > groupEndDate) return false;
       if (d < studentActiveStart) return false;
       if (studentActiveEndExclusive && d >= studentActiveEndExclusive)
         return false;
@@ -1652,19 +1955,19 @@ export class PaymentsService {
       const timezone = p.group.timezone || 'Asia/Tashkent';
       const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
 
-      const studentActiveEndExclusive =
-        this.computeStudentActiveEndExclusiveForMonth({
-          student: p.student,
-          group: p.group,
-          forMonth,
-        });
+      const studentActiveEndExclusive = this.resolveActiveEndExclusive({
+        student: p.student,
+        group: p.group,
+        forMonth,
+        plannedStudyUntilDate: p.plannedStudyUntilDate,
+      });
 
       const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
         await this.computeMonthBilling({
           student: p.student,
           group: p.group,
           forMonth,
-          studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
+          studentActiveEndExclusive,
           manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
         });
 
@@ -1862,44 +2165,42 @@ export class PaymentsService {
   }
 
   /**
-   * Recalculate open payments (UNPAID/PARTIAL) when pricing inputs change:
-   * - student.monthlyFee / group.monthlyFee
-   * - student.discountPercent
-   *
-   * Bound to a small window for safety (default: last 3 months).
-   * PAID payments are never changed.
+   * Oy ichida to'lov hisoblanadigan chegara (exclusive): o'quvchi to'xtatilgan
+   * sana (stoppedAt) va "shu sanagacha o'qiyman" (plannedStudyUntilDate) —
+   * qaysi biri erta bo'lsa o'sha. Ikkalasi ham bo'lmasa undefined.
    */
-  private async recalculateOpenPaymentsForOrganization(
-    organizationId: number,
-    opts?: { maxMonthsBack?: number; centerId?: number },
-  ) {
-    this.discountCache.clear();
-    this.joinedAtCache.clear();
-    const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
-    const windowStart = dayjs()
-      .startOf('month')
-      .subtract(maxMonthsBack - 1, 'month')
-      .format('YYYY-MM-01');
-    const windowEnd = dayjs().startOf('month').format('YYYY-MM-01');
+  private resolveActiveEndExclusive(args: {
+    student: Student;
+    group: Group;
+    forMonth: string;
+    plannedStudyUntilDate?: Date | string | null;
+  }): string | undefined {
+    const { student, group, forMonth, plannedStudyUntilDate } = args;
 
-    const payments = await this.paymentRepo
-      .createQueryBuilder('payments')
-      .leftJoinAndSelect('payments.student', 'student')
-      .leftJoinAndSelect('payments.group', 'group')
-      .leftJoinAndSelect('group.schedules', 'schedule')
-      .leftJoin('student.center', 'center')
-      .leftJoin('center.organization', 'organization')
-      .where('organization.id = :organizationId', { organizationId })
-      .andWhere(opts?.centerId ? 'center.id = :centerId' : '1=1', {
-        centerId: opts?.centerId,
-      })
-      .andWhere('payments.status != :paid', { paid: PaymentStatus.PAID })
-      .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
-        windowStart,
-        windowEnd,
-      })
-      .getMany();
+    const stoppedBoundary = this.computeStudentActiveEndExclusiveForMonth({
+      student,
+      group,
+      forMonth,
+    });
+    const plannedBoundary = plannedStudyUntilDate
+      ? dayjs(plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
+      : null;
 
+    const candidates = [stoppedBoundary, plannedBoundary].filter(
+      (v): v is string => Boolean(v),
+    );
+    if (!candidates.length) return undefined;
+    return candidates.sort()[0];
+  }
+
+  /**
+   * Ochiq (UNPAID/PARTIAL) to'lovlarni qayta hisoblaydi.
+   * - dars qolmagan oylar (guruh tugagan, o'quvchi chiqib ketgan) o'chiriladi,
+   *   agar ular bo'yicha pul tushmagan bo'lsa;
+   * - qolganlari joriy sana/jadval/narx/chegirma bo'yicha yangilanadi.
+   * To'liq to'langan (PAID) to'lovlarga tegilmaydi.
+   */
+  private async recalcOpenPaymentRows(payments: Payment[]) {
     if (!payments.length) return;
 
     const toSave: Payment[] = [];
@@ -1912,15 +2213,19 @@ export class PaymentsService {
       const timezone = p.group.timezone || 'Asia/Tashkent';
       const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
 
-      const plannedEndExclusive = p.plannedStudyUntilDate
-        ? dayjs(p.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
-        : undefined;
+      const studentActiveEndExclusive = this.resolveActiveEndExclusive({
+        student: p.student,
+        group: p.group,
+        forMonth,
+        plannedStudyUntilDate: p.plannedStudyUntilDate,
+      });
+
       const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
         await this.computeMonthBilling({
           student: p.student,
           group: p.group,
           forMonth,
-          studentActiveEndExclusive: plannedEndExclusive,
+          studentActiveEndExclusive,
           manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
         });
 
@@ -1936,8 +2241,8 @@ export class PaymentsService {
 
       const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
 
-      // If discount/fee changed and now due is below already-paid amount,
-      // clamp amountPaid to amountDue and mark PAID.
+      // If discount/fee/end date changed and now due is below already-paid
+      // amount, clamp amountPaid to amountDue and mark PAID.
       let newAmountPaid = amountPaid;
       let newStatus = p.status;
       if (newAmountPaid > amountDue) {
@@ -1965,6 +2270,83 @@ export class PaymentsService {
     if (toSave.length) {
       await this.paymentRepo.save(toSave);
     }
+  }
+
+  /** Qayta hisoblash uchun ochiq to'lovlar oynasi (oxirgi N oy). */
+  private openPaymentsWindow(maxMonthsBack?: number): {
+    windowStart: string;
+    windowEnd: string;
+  } {
+    const months = Math.max(1, maxMonthsBack ?? 3);
+    return {
+      windowStart: dayjs()
+        .startOf('month')
+        .subtract(months - 1, 'month')
+        .format('YYYY-MM-01'),
+      windowEnd: dayjs().startOf('month').format('YYYY-MM-01'),
+    };
+  }
+
+  private openPaymentsQuery(maxMonthsBack?: number) {
+    const { windowStart, windowEnd } = this.openPaymentsWindow(maxMonthsBack);
+    return this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .where('payments.status != :paid', { paid: PaymentStatus.PAID })
+      .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
+        windowStart,
+        windowEnd,
+      });
+  }
+
+  /**
+   * Recalculate open payments (UNPAID/PARTIAL) when pricing/date inputs change:
+   * - student.monthlyFee / group.monthlyFee
+   * - student.discountPercent
+   * - guruh tugash sanasi / jadvali
+   *
+   * Bound to a small window for safety (default: last 3 months).
+   * PAID payments are never changed.
+   */
+  private async recalculateOpenPaymentsForOrganization(
+    organizationId: number,
+    opts?: { maxMonthsBack?: number; centerId?: number },
+  ) {
+    this.discountCache.clear();
+    this.joinedAtCache.clear();
+
+    const payments = await this.openPaymentsQuery(opts?.maxMonthsBack)
+      .leftJoin('student.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .andWhere('organization.id = :organizationId', { organizationId })
+      .andWhere(opts?.centerId ? 'center.id = :centerId' : '1=1', {
+        centerId: opts?.centerId,
+      })
+      .getMany();
+
+    await this.recalcOpenPaymentRows(payments);
+  }
+
+  /**
+   * Guruhning ochiq to'lovlarini qayta hisoblaydi. Guruh tugash sanasi,
+   * jadvali yoki narxi o'zgarganda chaqiriladi: tugash sanasidan keyingi
+   * oylarning to'lanmagan to'lovlari o'chadi, guruh oy o'rtasida tugagan
+   * bo'lsa o'sha oy faqat haqiqiy dars kunlari bo'yicha hisoblanadi.
+   */
+  async recalculateOpenPaymentsForGroup(
+    groupId: number,
+    opts?: { maxMonthsBack?: number },
+  ) {
+    this.discountCache.clear();
+    this.joinedAtCache.clear();
+
+    const payments = await this.openPaymentsQuery(opts?.maxMonthsBack)
+      .andWhere('payments.groupId = :groupId', { groupId })
+      .getMany();
+
+    await this.recalcOpenPaymentRows(payments);
   }
 
   /**
@@ -2020,8 +2402,8 @@ export class PaymentsService {
   }
 
   /**
-   * Recalculate open payments for a specific student (used when discount periods change).
-   * PAID payments are never modified.
+   * Recalculate open payments for a specific student (used when discount
+   * periods or the student's groups change). PAID payments are never modified.
    */
   async recalculateOpenPaymentsForStudent(
     studentId: number,
@@ -2030,83 +2412,11 @@ export class PaymentsService {
     this.discountCache.clear();
     this.joinedAtCache.clear();
 
-    const maxMonthsBack = Math.max(1, opts?.maxMonthsBack ?? 3);
-    const windowStart = dayjs()
-      .startOf('month')
-      .subtract(maxMonthsBack - 1, 'month')
-      .format('YYYY-MM-01');
-    const windowEnd = dayjs().startOf('month').format('YYYY-MM-01');
-
-    const payments = await this.paymentRepo
-      .createQueryBuilder('payments')
-      .leftJoinAndSelect('payments.student', 'student')
-      .leftJoinAndSelect('payments.group', 'group')
-      .leftJoinAndSelect('group.schedules', 'schedule')
-      .where('payments.studentId = :studentId', { studentId })
-      .andWhere('payments.status != :paid', { paid: PaymentStatus.PAID })
-      .andWhere('payments.forMonth BETWEEN :windowStart AND :windowEnd', {
-        windowStart,
-        windowEnd,
-      })
+    const payments = await this.openPaymentsQuery(opts?.maxMonthsBack)
+      .andWhere('payments.studentId = :studentId', { studentId })
       .getMany();
 
-    if (!payments.length) return;
-
-    const toSave: Payment[] = [];
-    const toDeleteIds: number[] = [];
-
-    for (const p of payments as any[]) {
-      if (!p.group || !p.student) continue;
-      if (!p.group.schedules?.length) continue;
-
-      const timezone = p.group.timezone || 'Asia/Tashkent';
-      const forMonth = dayjs(p.forMonth).startOf('month').format('YYYY-MM-01');
-
-      const studentActiveEndExclusive =
-        this.computeStudentActiveEndExclusiveForMonth({
-          student: p.student,
-          group: p.group,
-          forMonth,
-        });
-
-      const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
-        await this.computeMonthBilling({
-          student: p.student,
-          group: p.group,
-          forMonth,
-          studentActiveEndExclusive: studentActiveEndExclusive ?? undefined,
-          manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
-        });
-
-      const amountPaid = Number(p.amountPaid ?? 0);
-      if (!lessonsPlanned || !lessonsBillable) {
-        if (amountPaid === 0) toDeleteIds.push(p.id);
-        continue;
-      }
-
-      const { dueDate, hardDueDate } = this.computeDueDates(forMonth, timezone);
-
-      let newAmountPaid = amountPaid;
-      let newStatus = p.status;
-      if (newAmountPaid > amountDue) newAmountPaid = amountDue;
-      if (newAmountPaid === amountDue) newStatus = PaymentStatus.PAID;
-      else if (newAmountPaid > 0) newStatus = PaymentStatus.PARTIAL;
-      else newStatus = PaymentStatus.UNPAID;
-
-      p.lessonsPlanned = lessonsPlanned;
-      p.lessonsBillable = lessonsBillable;
-      p.lessonsExcused = lessonsExcused;
-      p.amountDue = amountDue as any;
-      p.amountPaid = newAmountPaid as any;
-      p.status = newStatus;
-      p.dueDate = dueDate as any;
-      p.hardDueDate = hardDueDate as any;
-
-      toSave.push(p);
-    }
-
-    if (toDeleteIds.length) await this.paymentRepo.delete(toDeleteIds);
-    if (toSave.length) await this.paymentRepo.save(toSave);
+    await this.recalcOpenPaymentRows(payments);
   }
 
   /**
@@ -2159,18 +2469,12 @@ export class PaymentsService {
 
     // Prorate boundary: respect plannedStudyUntilDate and STOPPED date, take the
     // earlier of the two so billing stays correct in every case.
-    const plannedEndExclusive = payment.plannedStudyUntilDate
-      ? dayjs(payment.plannedStudyUntilDate).add(1, 'day').format('YYYY-MM-DD')
-      : null;
-    const stoppedEndExclusive = this.computeStudentActiveEndExclusiveForMonth({
+    const endExclusive = this.resolveActiveEndExclusive({
       student: payment.student,
       group: payment.group,
       forMonth,
+      plannedStudyUntilDate: payment.plannedStudyUntilDate,
     });
-    const endExclusive =
-      [plannedEndExclusive, stoppedEndExclusive]
-        .filter((d): d is string => !!d)
-        .sort()[0] ?? undefined;
 
     const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
       await this.computeMonthBilling({
@@ -2424,6 +2728,12 @@ export class PaymentsService {
         maxMonthsBack: 3,
         centerId: effectiveCenterId,
       });
+      // Mavjud ochiq to'lovlarni ham yangilaymiz: guruh tugash sanasi,
+      // jadvali yoki narxi o'zgargan bo'lsa summalar eskirib qolmasin.
+      await this.recalculateOpenPaymentsForOrganization(organizationId, {
+        maxMonthsBack: 3,
+        centerId: effectiveCenterId,
+      });
     } catch (e) {
       if (
         e instanceof QueryFailedError &&
@@ -2618,14 +2928,19 @@ export class PaymentsService {
         const isOverdue =
           !!hardDue && today > hardDue && p.status !== PaymentStatus.PAID;
 
-        const amountDue = Number(p.amountDue ?? 0);
-        const amountPaid = Number(p.amountPaid ?? 0);
-        const remainingAmount = this.round2(amountDue - amountPaid);
-
         const pending = pendingByPaymentId.get(Number(p.id)) ?? {
           pendingAmount: 0,
           pendingReceiptsCount: 0,
         };
+
+        const amountDue = Number(p.amountDue ?? 0);
+        const amountPaid = Number(p.amountPaid ?? 0);
+        // Kassa qarzi: faqat TASDIQLANGAN pul ayiriladi.
+        const remainingAmount = this.round2(amountDue - amountPaid);
+        // O'quvchi haqiqatda topshirgan pul (tasdiqlangan + reception qo'lidagi).
+        const receivedAmount = this.round2(amountPaid + pending.pendingAmount);
+        // O'quvchidan hali olinishi kerak bo'lgan summa.
+        const payableNow = this.round2(Math.max(0, amountDue - receivedAmount));
 
         const paymentForMonth = p.forMonth
           ? dayjs(p.forMonth).startOf('month').format('YYYY-MM-01')
@@ -2648,6 +2963,8 @@ export class PaymentsService {
             : null,
           isOverdue,
           remainingAmount,
+          receivedAmount,
+          payableNow,
           refundedAmount: Number((p as any).refundedAmount ?? 0),
           pendingAmount: pending.pendingAmount,
           hasPendingReceipt: pending.pendingReceiptsCount > 0,
@@ -3128,6 +3445,9 @@ export class PaymentsService {
 
     const pendingAmount = Number(pendingRaw?.pendingAmount ?? 0);
     const pendingReceiptsCount = Number(pendingRaw?.pendingReceiptsCount ?? 0);
+    // O'quvchi topshirgan pul (tasdiqlangan + tasdiq kutayotgan) va qolgan qarzi.
+    const receivedAmount = this.round2(amountPaid + pendingAmount);
+    const payableNow = this.round2(Math.max(0, amountDue - receivedAmount));
 
     const forMonth = (payment as any).forMonth
       ? dayjs((payment as any).forMonth)
@@ -3158,6 +3478,8 @@ export class PaymentsService {
         : null,
       isOverdue,
       remainingAmount,
+      receivedAmount,
+      payableNow,
       refundedAmount: Number((payment as any).refundedAmount ?? 0),
       pendingAmount,
       hasPendingReceipt: pendingReceiptsCount > 0,

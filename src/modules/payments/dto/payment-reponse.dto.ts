@@ -62,9 +62,26 @@ export class PaymentResponseDto {
 
   @ApiProperty({
     example: 100000.0,
-    description: 'amountDue - amountPaid',
+    description:
+      'amountDue - amountPaid. Kassa qarzi: faqat admin TASDIQLAGAN pul ayiriladi.',
   })
   remainingAmount: number;
+
+  @ApiProperty({
+    example: 270000.0,
+    description:
+      "amountPaid + pendingAmount. O'quvchi haqiqatda topshirgan pul: tasdiqlangan " +
+      "summa + reception olgan, lekin hali tasdiqlanmagan summa.",
+  })
+  receivedAmount: number;
+
+  @ApiProperty({
+    example: 0,
+    description:
+      "amountDue - receivedAmount. O'quvchidan hali OLINISHI KERAK bo'lgan summa " +
+      '(tasdiq kutayotgan pul ham hisobga olinadi, chunki uni o\'quvchi allaqachon topshirgan).',
+  })
+  payableNow: number;
 
   @ApiProperty({ example: '2026-01-10', description: 'Soft due date (DATE)' })
   dueDate: string;

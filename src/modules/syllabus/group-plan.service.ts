@@ -122,16 +122,11 @@ export class GroupPlanService {
   }
 
   /**
-   * Guruh darslari uchun ufq (oxirgi sana): endDate, bo'lmasa
-   * startDate + durationMonths. Ikkalasi ham bo'lmasa null.
+   * Guruh darslari uchun ufq (oxirgi sana) — guruhning tugash sanasi.
+   * Belgilanmagan bo'lsa null (darslar faqat bugungacha hisoblanadi).
    */
   private getHorizonDate(group: Group): string | null {
     if (group.endDate) return dayjs(group.endDate).format('YYYY-MM-DD');
-    if (group.durationMonths) {
-      return dayjs(group.startDate)
-        .add(group.durationMonths, 'month')
-        .format('YYYY-MM-DD');
-    }
     return null;
   }
 
@@ -219,7 +214,6 @@ export class GroupPlanService {
         endDate: group.endDate
           ? dayjs(group.endDate).format('YYYY-MM-DD')
           : null,
-        durationMonths: group.durationMonths ?? null,
         subject: group.subject
           ? { id: group.subject.id, name: group.subject.name }
           : null,
@@ -239,7 +233,7 @@ export class GroupPlanService {
       today,
       totalLessons,
       /**
-       * Ufq aniqlanmagan bo'lsa (endDate ham, durationMonths ham yo'q),
+       * Ufq aniqlanmagan bo'lsa (guruhda tugash sanasi yo'q),
        * darslar faqat bugungacha hisoblanadi.
        */
       horizonDate: horizon,
@@ -358,7 +352,7 @@ export class GroupPlanService {
       const horizon = this.getHorizonDate(group);
       if (!horizon) {
         throw new BadRequestException(
-          "Jami darslar sonini aniqlab bo'lmadi: guruhda endDate yoki durationMonths yo'q. totalLessons yuboring",
+          "Jami darslar sonini aniqlab bo'lmadi: guruhda tugash sanasi (endDate) yo'q. totalLessons yuboring",
         );
       }
       const dates = await this.effectiveLessonDates(group, horizon);

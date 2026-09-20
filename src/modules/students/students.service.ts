@@ -5,6 +5,7 @@ import { ReferralsService } from '@/modules/referrals/referrals.service';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { CentersService } from '@/modules/centers/centers.service';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { UsersService } from '@/modules/users/users.service';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { Student } from './entities/students.entity';
@@ -949,8 +950,19 @@ export class StudentsService {
 
       student.groups = groups;
       // Guruh(lar) o'zgarganda dars kunlarini qayta hisoblab yozamiz
-      // (guruh olib tashlansa -> null bo'ladi).
+      // (guruh olib tashlansa -> null bo'ldi).
       student.studyDays = await this.computeStudyDays(dto.groupIds);
+
+      // Guruhi tugagani uchun avtomatik `finished` bo'lgan o'quvchi yangi
+      // (davom etayotgan) guruhga biriktirilsa — qayta faollashadi.
+      const hasOngoingGroup = groups.some(
+        (g) => g.status !== GroupStatus.FINISHED,
+      );
+      if (student.status === StudentStatus.FINISHED && hasOngoingGroup) {
+        student.status = StudentStatus.ACTIVE;
+        student.activatedAt = student.activatedAt ?? new Date();
+        student.stoppedAt = null;
+      }
     }
 
     // Referral update (stored in referrals table, not on student row)
@@ -1055,7 +1067,8 @@ export class StudentsService {
     [StudentStatus.ACTIVE]: [StudentStatus.STOPPED, StudentStatus.FINISHED],
     [StudentStatus.STOPPED]: [StudentStatus.ACTIVE, StudentStatus.FINISHED],
     [StudentStatus.IGNORED]: [StudentStatus.NEW, StudentStatus.ACTIVE],
-    [StudentStatus.FINISHED]: [],
+    // Guruhi qayta ochilsa yoki yangi guruhga yozilsa — qaytarish mumkin.
+    [StudentStatus.FINISHED]: [StudentStatus.ACTIVE],
   };
 
   async changeStatus(

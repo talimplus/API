@@ -1,6 +1,9 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,12 +20,17 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
+import { Student } from '@/modules/students/entities/students.entity';
+import { StudentStatus } from '@/common/enums/students-status.enums';
+import { PaymentsService } from '@/modules/payments/payments.service';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
 import { MoreThan } from 'typeorm';
 
 @Injectable()
 export class GroupsService {
+  private readonly logger = new Logger(GroupsService.name);
+
   constructor(
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
@@ -38,11 +46,20 @@ export class GroupsService {
     private readonly scheduleRepo: Repository<GroupSchedule>,
     @InjectRepository(AttendanceLessonOverride)
     private readonly overrideRepo: Repository<AttendanceLessonOverride>,
+    @InjectRepository(Student)
+    private readonly studentRepo: Repository<Student>,
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService: PaymentsService,
   ) {}
 
+  /**
+   * Muddati o'tgan guruhlarni yopadi (tez, idempotent, to'g'ridan-to'g'ri DB'da).
+   * Faqat shu organization (va ixtiyoriy center) guruhlariga ta'sir qiladi.
+   *
+   * Yagona mezon — endDate (guruh timezone'ida, inclusive). Yopilgan guruhlar
+   * bo'lsa, ularning o'quvchilari statusi ham qayta hisoblanadi.
+   */
   private async finishExpiredGroups(organizationId: number, centerId?: number) {
-    // Update in DB directly (fast, idempotent).
-    // Only affects groups within the organization (and optional center).
     const params: any[] = [organizationId];
     let centerFilterSql = '';
     if (centerId) {
@@ -50,22 +67,140 @@ export class GroupsService {
       centerFilterSql = ` AND g."centerId" = $2`;
     }
 
-    await this.groupRepo.query(
+    const finished: { id: number }[] = await this.groupRepo.query(
       `
       UPDATE "groups" g
       SET "status" = $${params.length + 1}
       WHERE g."status" = $${params.length + 2}
-        AND g."durationMonths" IS NOT NULL
-        AND g."startedAt" IS NOT NULL
-        AND (g."startedAt" + (g."durationMonths" || ' months')::interval) <= NOW()
+        AND g."endDate" IS NOT NULL
+        AND g."endDate" < (NOW() AT TIME ZONE COALESCE(g."timezone", 'Asia/Tashkent'))::date
         AND g."centerId" IN (
           SELECT c."id" FROM "centers" c
           WHERE c."organizationId" = $1
         )
         ${centerFilterSql}
+      RETURNING g."id"
     `,
       [...params, GroupStatus.FINISHED, GroupStatus.STARTED],
     );
+
+    if (finished?.length) {
+      await this.syncStudentStatusesForGroups(finished.map((r) => r.id));
+    }
+  }
+
+  /**
+   * Guruh statusi o'zgargandan keyin o'sha guruh o'quvchilarining statusini
+   * moslaydi:
+   * - barcha guruhlari tugagan ACTIVE o'quvchi -> FINISHED;
+   * - kamida bitta davom etayotgan guruhi bor FINISHED o'quvchi -> ACTIVE.
+   *
+   * Ya'ni o'quvchi ikkita fanda o'qiyotgan bo'lsa va faqat bittasi tugasa,
+   * uning statusi o'zgarmaydi (ikkinchi guruhda darsi davom etadi).
+   */
+  async syncStudentStatusesForGroups(groupIds: number[]) {
+    const ids = Array.from(
+      new Set((groupIds ?? []).filter((id) => Number.isFinite(id))),
+    );
+    if (!ids.length) return;
+
+    // 1) Hamma guruhi tugagan o'quvchilarni yopamiz.
+    await this.studentRepo.query(
+      `
+      UPDATE "students" s
+      SET "status" = $2
+      WHERE s."status" = $1
+        AND EXISTS (
+          SELECT 1 FROM "students_groups_groups" sg
+          WHERE sg."studentsId" = s."id" AND sg."groupsId" = ANY($3::int[])
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "students_groups_groups" sg
+          JOIN "groups" g ON g."id" = sg."groupsId"
+          WHERE sg."studentsId" = s."id" AND g."status" <> $4
+        )
+      `,
+      [StudentStatus.ACTIVE, StudentStatus.FINISHED, ids, GroupStatus.FINISHED],
+    );
+
+    // 2) Guruhi qayta ochilgan (yoki yangi guruhga biriktirilgan) o'quvchilarni
+    //    qaytaramiz.
+    await this.studentRepo.query(
+      `
+      UPDATE "students" s
+      SET "status" = $1
+      WHERE s."status" = $2
+        AND EXISTS (
+          SELECT 1 FROM "students_groups_groups" sg
+          WHERE sg."studentsId" = s."id" AND sg."groupsId" = ANY($3::int[])
+        )
+        AND EXISTS (
+          SELECT 1 FROM "students_groups_groups" sg
+          JOIN "groups" g ON g."id" = sg."groupsId"
+          WHERE sg."studentsId" = s."id" AND g."status" <> $4
+        )
+      `,
+      [StudentStatus.ACTIVE, StudentStatus.FINISHED, ids, GroupStatus.FINISHED],
+    );
+  }
+
+  /** DATE qiymatini 'YYYY-MM-DD' ga keltiradi (timezone siljishisiz). */
+  private toDateOnly(value?: Date | string | null): string | null {
+    if (!value) return null;
+    return dayjs(value).format('YYYY-MM-DD');
+  }
+
+  /** Guruh timezone'idagi bugungi sana. */
+  private todayInGroupTz(group: Group): string {
+    return dayjs()
+      .tz(group.timezone || 'Asia/Tashkent')
+      .format('YYYY-MM-DD');
+  }
+
+  /**
+   * endDate <-> status mosligi:
+   * - tugash sanasi o'tib ketgan `started` guruh -> `finished`;
+   * - tugash sanasi kelajakka surilgan `finished` guruh -> qayta `started`.
+   * `new` guruh esa hech qachon avtomatik yopilmaydi (hali boshlanmagan).
+   */
+  private applyEndDateStatusRules(group: Group): boolean {
+    const endDate = this.toDateOnly(group.endDate);
+    const today = this.todayInGroupTz(group);
+
+    if (endDate && endDate < today) {
+      if (group.status === GroupStatus.STARTED) {
+        group.status = GroupStatus.FINISHED;
+        return true;
+      }
+      return false;
+    }
+
+    if (group.status === GroupStatus.FINISHED) {
+      group.status = GroupStatus.STARTED;
+      if (!group.startedAt) group.startedAt = new Date();
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Guruh sanasi/jadvali/narxi o'zgargach shu guruhning ochiq to'lovlarini
+   * qayta hisoblaydi: tugash sanasidan keyingi oylar o'chadi, guruh oy
+   * o'rtasida tugasa o'sha oy faqat haqiqiy dars kunlari uchun hisoblanadi.
+   */
+  private async recalcGroupPayments(groupId: number) {
+    try {
+      await this.paymentsService.recalculateOpenPaymentsForGroup(groupId, {
+        maxMonthsBack: 3,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Guruh ${groupId} to'lovlarini qayta hisoblashda xato: ${
+          (e as any)?.message ?? e
+        }`,
+      );
+    }
   }
 
   /** Normalize 'HH:mm' or 'HH:mm:ss' to 'HH:mm:ss' for reliable comparison. */
@@ -173,6 +308,18 @@ export class GroupsService {
       days: dto.days,
     });
 
+    const startDate = dto.startDate
+      ? dayjs(dto.startDate).format('YYYY-MM-DD')
+      : null;
+    const endDate = dto.endDate
+      ? dayjs(dto.endDate).format('YYYY-MM-DD')
+      : null;
+    if (startDate && endDate && endDate < startDate) {
+      throw new ValidationException({
+        endDate: `Tugash sanasi boshlanish sanasidan (${startDate}) oldin bo'lishi mumkin emas`,
+      });
+    }
+
     const group = this.groupRepo.create({
       name: dto.name,
       monthlyFee: dto.monthlyFee,
@@ -181,10 +328,10 @@ export class GroupsService {
       teacher,
       room,
       timezone: dto.timezone,
-      startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-      endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+      // DATE ustunlariga string yoziladi — timezone siljishining oldini oladi.
+      startDate: (startDate ?? undefined) as unknown as Date,
+      endDate: (endDate ?? null) as unknown as Date | null,
       status: GroupStatus.NEW,
-      durationMonths: dto.durationMonths ?? null,
       startedAt: null,
     });
 
@@ -204,24 +351,52 @@ export class GroupsService {
     return savedGroup;
   }
 
-  async update(id: number, dto: UpdateGroupDto) {
+  /**
+   * Guruhni tahrirlash.
+   *
+   * Tugash sanasi (endDate) shu yerda o'zgaradi — alohida API yo'q. Sana
+   * o'zgarsa: guruh statusi moslanadi (o'tgan sana -> finished, kelajakka
+   * surilsa -> qayta started) va shu guruhning ochiq to'lovlari qayta
+   * hisoblanadi.
+   */
+  async update(
+    id: number,
+    dto: UpdateGroupDto,
+    organizationId: number,
+    centerId?: number,
+  ) {
     const group = await this.groupRepo.findOne({
       where: { id },
-      relations: ['room', 'schedules'],
+      relations: ['room', 'schedules', 'center'],
     });
 
     if (!group) throw new NotFoundException('Group not found');
+    if (group.center?.organizationId !== organizationId) {
+      throw new NotFoundException('Group not found');
+    }
+    if (centerId && group.center?.id !== centerId) {
+      throw new NotFoundException('Group not found');
+    }
+
+    const prevStartDate = this.toDateOnly(group.startDate);
+    const prevEndDate = this.toDateOnly(group.endDate);
+    const prevStatus = group.status;
+    const prevMonthlyFee = Number(group.monthlyFee ?? 0);
 
     if (dto.name) group.name = dto.name;
     if (dto.timezone) group.timezone = dto.timezone;
-    if (dto.startDate) group.startDate = new Date(dto.startDate);
+    if (dto.startDate) {
+      group.startDate = dayjs(dto.startDate).format(
+        'YYYY-MM-DD',
+      ) as unknown as Date;
+    }
     if (dto.endDate !== undefined) {
-      group.endDate = dto.endDate ? new Date(dto.endDate) : null;
+      group.endDate = dto.endDate
+        ? (dayjs(dto.endDate).format('YYYY-MM-DD') as unknown as Date)
+        : null;
     }
-    // Status should be changed via changeStatus API to enforce transition rules.
-    if (dto.durationMonths !== undefined) {
-      group.durationMonths = dto.durationMonths;
-    }
+    // Statusni to'g'ridan-to'g'ri o'zgartirish uchun changeStatus API ishlatiladi;
+    // bu yerda status faqat endDate'ga qarab moslanadi.
     if (dto.monthlyFee !== undefined) group.monthlyFee = dto.monthlyFee;
     if (dto.subjectId) {
       group.subject = await this.subjectRepo.findOneBy({
@@ -230,8 +405,10 @@ export class GroupsService {
       if (!group.subject) throw new NotFoundException('Subject not found');
     }
     if (dto.centerId) {
+      // Guruhni faqat shu organization ichidagi markazga ko'chirish mumkin.
       group.center = await this.centerRepo.findOneBy({
         id: dto.centerId,
+        organizationId,
       });
       if (!group.center) throw new NotFoundException('Center not found');
     }
@@ -246,6 +423,19 @@ export class GroupsService {
         id: dto.teacherId,
       });
       if (!group.teacher) throw new NotFoundException('Teacher not found');
+    }
+
+    const nextStartDate = this.toDateOnly(group.startDate);
+    const nextEndDate = this.toDateOnly(group.endDate);
+    if (nextEndDate && nextStartDate && nextEndDate < nextStartDate) {
+      throw new ValidationException({
+        endDate: `Tugash sanasi boshlanish sanasidan (${nextStartDate}) oldin bo'lishi mumkin emas`,
+      });
+    }
+
+    const endDateChanged = nextEndDate !== prevEndDate;
+    if (endDateChanged) {
+      this.applyEndDateStatusRules(group);
     }
 
     // Re-check room availability against the effective room + schedule.
@@ -282,9 +472,38 @@ export class GroupsService {
       });
     }
 
+    // Status o'zgargan bo'lsa — o'quvchilar statusini ham moslaymiz.
+    if (group.status !== prevStatus) {
+      await this.syncStudentStatusesForGroups([id]);
+    }
+
+    // Sana / jadval / narx o'zgarsa — to'lovlarni qayta hisoblaymiz.
+    const daysChanged = Boolean(dto.days && dto.days.length);
+    const feeChanged =
+      dto.monthlyFee !== undefined && Number(dto.monthlyFee) !== prevMonthlyFee;
+    if (
+      endDateChanged ||
+      daysChanged ||
+      feeChanged ||
+      nextStartDate !== prevStartDate
+    ) {
+      await this.recalcGroupPayments(id);
+    }
+
     return savedGroup;
   }
 
+  /**
+   * Guruh statusini o'zgartirish.
+   *
+   * Tugash sanasi (endDate) bu yerda MAJBURIY: status va sana doim mos
+   * bo'lishi kerak, aks holda darslar/to'lovlar cheksiz hisoblanadi.
+   * - `started` qilish uchun tugash sanasi o'tmagan bo'lishi kerak;
+   * - `finished` qilinganda tugash sanasi bugundan keyin bo'lsa, bugunga
+   *   tortiladi — shunda bugundan keyingi darslarga to'lov hisoblanmaydi;
+   * - tugagan guruhni qayta boshlash faqat tugash sanasi kelajakka
+   *   surilgandan keyin mumkin.
+   */
   async changeStatus(
     organizationId: number,
     id: number,
@@ -306,7 +525,10 @@ export class GroupsService {
       relations: ['center'],
     });
     if (!group) throw new NotFoundException('Group not found');
-    if ((group as any)?.center?.organizationId !== organizationId) {
+    if (group.center?.organizationId !== organizationId) {
+      throw new NotFoundException('Group not found');
+    }
+    if (centerId && group.center?.id !== centerId) {
       throw new NotFoundException('Group not found');
     }
 
@@ -321,13 +543,30 @@ export class GroupsService {
       );
     }
 
-    // Disallow changing finished groups (keep simple & safe)
-    if (current === GroupStatus.FINISHED) {
-      throw new BadRequestException('Finished gurux statusini o‘zgartirib bo‘lmaydi');
+    if (!group.endDate) {
+      throw new ValidationException({
+        endDate:
+          "Statusni o'zgartirishdan oldin guruh darslari tugash sanasini kiriting",
+      });
     }
 
+    const endDate = this.toDateOnly(group.endDate) as string;
+    const today = this.todayInGroupTz(group);
+
     if (nextStatus === GroupStatus.STARTED) {
-      group.startedAt = new Date();
+      if (endDate < today) {
+        throw new ValidationException({
+          endDate: `Darslar tugash sanasi (${endDate}) o'tib ketgan — avval yangi sanani kiriting`,
+        });
+      }
+      // Qayta boshlanganda dastlabki boshlanish vaqti saqlanadi.
+      if (!group.startedAt) group.startedAt = new Date();
+    }
+
+    if (nextStatus === GroupStatus.FINISHED && endDate > today) {
+      // Guruh bugun yopiladi: darslar ham, to'lovlar ham bugundan keyin
+      // hisoblanmasligi uchun tugash sanasini bugunga tortamiz.
+      group.endDate = today as unknown as Date;
     }
 
     if (nextStatus === GroupStatus.NEW) {
@@ -339,7 +578,12 @@ export class GroupsService {
     }
 
     group.status = nextStatus;
-    return this.groupRepo.save(group);
+    const saved = await this.groupRepo.save(group);
+
+    await this.syncStudentStatusesForGroups([id]);
+    await this.recalcGroupPayments(id);
+
+    return saved;
   }
 
   async findAll(
@@ -465,7 +709,14 @@ export class GroupsService {
         id,
         center: { organization: { id: organizationId } },
       },
-      relations: ['center', 'teacher', 'subject', 'students', 'room', 'schedules'],
+      relations: [
+        'center',
+        'teacher',
+        'subject',
+        'students',
+        'room',
+        'schedules',
+      ],
     });
   }
 

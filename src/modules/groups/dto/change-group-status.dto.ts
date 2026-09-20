@@ -7,4 +7,3 @@ export class ChangeGroupStatusDto {
   @IsEnum(GroupStatus)
   status: GroupStatus;
 }
-

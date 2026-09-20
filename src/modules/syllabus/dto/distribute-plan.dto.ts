@@ -5,7 +5,7 @@ export class DistributePlanDto {
   @ApiProperty({
     example: 36,
     description:
-      "Jami darslar soni. Berilmasa guruhning endDate yoki durationMonths qiymatidan hisoblanadi",
+      "Jami darslar soni. Berilmasa guruhning tugash sanasi (endDate) bo'yicha hisoblanadi",
     required: false,
   })
   @IsOptional()

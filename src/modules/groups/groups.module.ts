@@ -11,6 +11,7 @@ import { User } from '@/modules/users/entities/user.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { GroupScheduleModule } from '@/modules/group_schedule/group_schedule.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
+import { PaymentsModule } from '@/modules/payments/payments.module';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
@@ -29,6 +30,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     ]),
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
+    forwardRef(() => PaymentsModule),
   ],
   controllers: [GroupsController, GroupAliasController],
   providers: [GroupsService, GroupsLifecycleService],

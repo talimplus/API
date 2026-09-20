@@ -48,10 +48,29 @@ export class GroupsController {
     UserRole.MANAGER,
     UserRole.RECEPTION,
   )
-  @ApiOperation({ summary: 'Update group' })
+  @ApiOperation({
+    summary: 'Update group',
+    description:
+      "Guruh darslari tugash sanasi (`endDate`) shu API orqali o'zgartiriladi: " +
+      "sana o'zgarsa guruh statusi va shu guruhning ochiq to'lovlari avtomatik " +
+      'qayta hisoblanadi.',
+  })
   @ApiResponse({ type: GroupResponseDto })
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateGroupDto) {
-    return this.groupsService.update(id, dto);
+  update(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateGroupDto,
+  ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
+
+    return this.groupsService.update(
+      id,
+      dto,
+      req.user.organizationId,
+      isAdmin ? undefined : req.user.centerId,
+    );
   }
 
   @Put('change-status/:id')
@@ -81,7 +100,13 @@ export class GroupsController {
   }
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+    UserRole.TEACHER,
+  )
   @ApiOperation({ summary: 'Get all groups' })
   @ApiResponse({ type: PaginatedGroupResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -100,7 +125,8 @@ export class GroupsController {
     @Query('perPage') perPage?: number,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId
@@ -131,7 +157,8 @@ export class GroupsController {
     name: 'teacherId',
     required: false,
     type: Number,
-    description: 'Filter groups by teacher. Ignored for TEACHER role (always scoped to self).',
+    description:
+      'Filter groups by teacher. Ignored for TEACHER role (always scoped to self).',
   })
   async getAllGroups(
     @Req() req: any,
@@ -139,7 +166,8 @@ export class GroupsController {
     @Query('teacherId') teacherId?: number,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId

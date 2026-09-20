@@ -10,7 +10,6 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ScheduleDayDto } from '@/modules/group_schedule/dto/schedule-day.dto';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
-import { IsInt, Min } from 'class-validator';
 
 export class UpdateGroupDto {
   @ApiProperty({
@@ -42,7 +41,9 @@ export class UpdateGroupDto {
   @ApiProperty({
     example: '2026-06-01',
     required: false,
-    description: 'Gurux endDate (DATE)',
+    description:
+      "Guruh darslari tugash sanasi (inclusive). Darslar, to'lovlar va " +
+      'guruh statusi shu sanaga qarab hisoblanadi. null yuborilsa muddat olib tashlanadi.',
   })
   @IsOptional()
   @IsDateString()
@@ -57,17 +58,6 @@ export class UpdateGroupDto {
   })
   @IsOptional()
   status?: GroupStatus;
-
-  @ApiProperty({
-    example: 5,
-    required: false,
-    description: "Gurux davomiyligi (oylarda). Masalan 5 bo'lsa 5 oy.",
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  durationMonths?: number;
 
   @IsOptional()
   @ApiProperty({
