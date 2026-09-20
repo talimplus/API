@@ -18,6 +18,27 @@ export class AttendanceByDateDto {
   rows: AttendanceRowDto[];
 }
 
+export class GroupStudentDto {
+  @ApiProperty({ example: 123 })
+  id: number;
+
+  @ApiProperty({ example: 'Ali' })
+  firstName: string;
+
+  @ApiProperty({ example: 'Valiyev' })
+  lastName: string;
+
+  @ApiProperty({
+    example: '2026-01-15',
+    nullable: true,
+    description:
+      "O'quvchi SHU guruhga qo'shilgan sana (guruh timezone'ida, YYYY-MM-DD). " +
+      "Shu sanadan oldingi dars kunlariga davomat yozib bo'lmaydi — server ham " +
+      "bunday so'rovni 400 bilan rad etadi. null bo'lsa sana noma'lum (cheklov yo'q).",
+  })
+  joinedAt: string | null;
+}
+
 export class LessonDatesViewDto {
   @ApiProperty({
     example: 'Asia/Tashkent',
@@ -30,6 +51,15 @@ export class LessonDatesViewDto {
     description: 'Today date in group timezone (YYYY-MM-DD).',
   })
   today: string;
+
+  @ApiProperty({
+    type: [GroupStudentDto],
+    description:
+      "Guruhdagi hozirgi o'quvchilar va ularning guruhga qo'shilgan sanasi. " +
+      "Davomat jadvalining qatorlari shu ro'yxatdan quriladi: joinedAt dan " +
+      'oldingi kataklar tahrirlanmasligi kerak.',
+  })
+  students: GroupStudentDto[];
 
   @ApiProperty({
     example: ['2026-01-01', '2026-01-03', '2026-01-06'],

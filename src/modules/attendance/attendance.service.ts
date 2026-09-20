@@ -84,6 +84,41 @@ export class AttendanceService {
     return dayjs.utc(input).format('YYYY-MM-DD');
   }
 
+  /**
+   * Guruhdagi har bir o'quvchining SHU GURUHGA qo'shilgan sanasi
+   * (students_groups_groups.joinedAt), guruh timezone'ida YYYY-MM-DD.
+   *
+   * Nega kerak: o'quvchi darslar boshlanganidan keyin qo'shilgan bo'lsa,
+   * qo'shilishidan OLDINGI darslar uning darslari emas — ularga davomat
+   * yozilmasligi kerak. Bu to'lov bilan bir xil chegara: payments proratsiyasi
+   * ham aynan shu joinedAt dan boshlanadi (getEnrollmentJoinedAt).
+   *
+   * joinedAt ustuni hali bo'lmasa (migratsiya ishlamagan) bo'sh map qaytaramiz —
+   * ya'ni eski (cheklovsiz) xatti-harakat saqlanadi.
+   */
+  private async getJoinDatesByStudent(
+    groupId: number,
+    timezone: string,
+  ): Promise<Map<number, string>> {
+    const map = new Map<number, string>();
+    try {
+      const rows = await this.groupRepo.manager.query(
+        `SELECT "studentsId" AS "studentId", "joinedAt"
+           FROM "students_groups_groups"
+          WHERE "groupsId" = $1`,
+        [groupId],
+      );
+      for (const r of rows ?? []) {
+        if (!r?.joinedAt) continue;
+        const d = dayjs(new Date(r.joinedAt)).tz(timezone);
+        if (d.isValid()) map.set(Number(r.studentId), d.format('YYYY-MM-DD'));
+      }
+    } catch {
+      // ustun yo'q / so'rov bajarilmadi — cheklov qo'llanmaydi
+    }
+    return map;
+  }
+
   private async findOverridesForDate(groupId: number, lessonDate: string) {
     return this.overrideRepo.find({
       where: [
@@ -160,6 +195,22 @@ export class AttendanceService {
     const timezone = group.timezone || 'Asia/Tashkent';
     const today = dayjs().tz(timezone).format('YYYY-MM-DD');
 
+    // Har bir o'quvchi qachon guruhga qo'shilgani — front shu sanadan oldingi
+    // kataklarni tahrirlanmaydigan qilib ko'rsatadi.
+    const joinDates = await this.getJoinDatesByStudent(groupId, timezone);
+    const students = (group.students ?? [])
+      .map((s) => ({
+        id: s.id,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        joinedAt: joinDates.get(s.id) ?? null,
+      }))
+      .sort((a, b) =>
+        `${a.firstName} ${a.lastName}`.localeCompare(
+          `${b.firstName} ${b.lastName}`,
+        ),
+      );
+
     const lessonDates = this.computeLessonDatesForGroup(group, query);
     if (!lessonDates.length) {
       if (query.mode === 'range' && (query.from || query.to)) {
@@ -198,6 +249,7 @@ export class AttendanceService {
         return {
           timezone,
           today,
+          students,
           lessonDates: uniqueDates,
           overridesByDate,
           attendanceByDate,
@@ -207,6 +259,7 @@ export class AttendanceService {
       return {
         timezone,
         today,
+        students,
         lessonDates: [],
         attendanceByDate: {},
       };
@@ -286,6 +339,7 @@ export class AttendanceService {
     return {
       timezone,
       today,
+      students,
       lessonDates: combinedDates,
       overridesByDate,
       attendanceByDate: byDate,
@@ -376,6 +430,35 @@ export class AttendanceService {
         `Some students are not in this group: ${unknown
           .map((i) => i.studentId)
           .join(', ')}`,
+      );
+    }
+
+    // O'quvchi guruhga qo'shilgan sanadan OLDINGI darslarga davomat yozilmaydi:
+    // u darslarda o'quvchi hali guruhda bo'lmagan. Chegara to'lov bilan bir xil
+    // (payments proratsiyasi ham joinedAt dan boshlanadi), shuning uchun davomat
+    // hisoboti va to'lov bir-biriga mos bo'ladi.
+    const joinDates = await this.getJoinDatesByStudent(groupId, timezone);
+    const beforeJoin = dto.items.filter((i) => {
+      const joined = joinDates.get(i.studentId);
+      return !!joined && dto.lessonDate < joined;
+    });
+    if (beforeJoin.length) {
+      const nameById = new Map(
+        (group.students ?? []).map((s) => [
+          s.id,
+          `${s.firstName} ${s.lastName}`,
+        ]),
+      );
+      throw new BadRequestException(
+        `Bu o'quvchilar guruhga keyinroq qo'shilgan, ${dto.lessonDate} sanasidagi darsga davomat yozib bo'lmaydi: ` +
+          beforeJoin
+            .map(
+              (i) =>
+                `${nameById.get(i.studentId) ?? i.studentId} (${joinDates.get(
+                  i.studentId,
+                )} dan)`,
+            )
+            .join(', '),
       );
     }
 
