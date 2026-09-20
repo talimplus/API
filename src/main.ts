@@ -9,7 +9,8 @@ async function bootstrap() {
 
   app.useGlobalPipes(new CustomValidationPipe());
   app.useGlobalFilters(new TypeOrmExceptionFilter());
-  app.enableCors();
+  // Content-Disposition — frontend excel export fayl nomini o'qiy olishi uchun
+  app.enableCors({ exposedHeaders: ['Content-Disposition'] });
 
   const config = new DocumentBuilder()
     .setTitle('Learning Center CRM')

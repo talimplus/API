@@ -185,6 +185,39 @@ export class UsersService {
     };
   }
 
+  /**
+   * 👩‍🏫 O'qituvchilar ro'yxati (paginatsiyasiz) — filter/select uchun.
+   */
+  async getAllTeachers(
+    organizationId: number,
+    { centerId, name }: { centerId?: number; name?: string } = {},
+  ) {
+    const query = this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.center', 'center')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', { organizationId })
+      .andWhere('user.role = :role', { role: UserRole.TEACHER });
+
+    if (centerId) {
+      query.andWhere('center.id = :centerId', { centerId });
+    }
+
+    if (name) {
+      query.andWhere(
+        '(user.firstName ILIKE :name OR user.lastName ILIKE :name)',
+        { name: `%${name}%` },
+      );
+    }
+
+    const data = await query
+      .orderBy('user.firstName', 'ASC')
+      .addOrderBy('user.lastName', 'ASC')
+      .getMany();
+
+    return instanceToPlain(data);
+  }
+
   async getMe(userId: number) {
     const user = await this.userRepo
       .createQueryBuilder('user')

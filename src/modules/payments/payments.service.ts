@@ -33,6 +33,31 @@ import {
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
+import * as ExcelJS from 'exceljs';
+
+/**
+ * GET /payments va GET /payments/export bir xil filterlarni qabul qiladi.
+ */
+export interface PaymentListFilters {
+  centerId?: number;
+  status?: PaymentStatus;
+  forMonth?: string; // YYYY-MM
+  overdueOnly?: boolean;
+  studentId?: number;
+  groupId?: number;
+  teacherId?: number;
+  search?: string;
+  /** Oraliq boshi (YYYY-MM-DD yoki YYYY-MM). Faqat o'zi ham berilishi mumkin. */
+  dateFrom?: string;
+  /** Oraliq oxiri (YYYY-MM-DD yoki YYYY-MM). Faqat o'zi ham berilishi mumkin. */
+  dateTo?: string;
+}
+
+const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
+  [PaymentStatus.PAID]: "To'langan",
+  [PaymentStatus.UNPAID]: "To'lanmagan",
+  [PaymentStatus.PARTIAL]: "Qisman to'langan",
+};
 
 @Injectable()
 export class PaymentsService {
@@ -2371,38 +2396,29 @@ export class PaymentsService {
     return this.paymentRepo.save(payment);
   }
 
-  async findAll(
-    organizationId: number,
-    {
-      centerId,
-      page,
-      perPage,
-      status,
-      forMonth,
-      overdueOnly,
-      studentId,
-      groupId,
-      search,
-    }: {
-      centerId?: number;
-      page: number;
-      perPage: number;
-      status?: PaymentStatus;
-      forMonth?: string; // YYYY-MM
-      overdueOnly?: boolean;
-      studentId?: number;
-      groupId?: number;
-      search?: string;
-    },
+  private resolvePaymentsScope(
+    centerId: number | undefined,
     currentUser: CurrentUser,
-  ) {
+  ): { isAdmin: boolean; effectiveCenterId?: number } {
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
 
-    const effectiveCenterId =
-      centerId ?? (!isAdmin ? currentUser.centerId : undefined);
+    return {
+      isAdmin,
+      effectiveCenterId:
+        centerId ?? (!isAdmin ? currentUser.centerId : undefined),
+    };
+  }
 
+  /**
+   * ACTIVE o'quvchilar uchun yetishmayotgan oylik to'lovlarni yaratadi
+   * (ro'yxat ham, excel export ham shu holatdan o'qiydi).
+   */
+  private async ensurePaymentsBeforeListing(
+    organizationId: number,
+    effectiveCenterId?: number,
+  ) {
     try {
       await this.ensurePaymentsForOrganization(organizationId, {
         maxMonthsBack: 3,
@@ -2420,12 +2436,71 @@ export class PaymentsService {
       }
       throw e;
     }
+  }
 
-    const skip = (page - 1) * perPage;
+  /**
+   * dateFrom/dateTo ni to'lov oyi (forMonth) bilan solishtirish uchun
+   * oy boshiga keltiradi. Ikkalasi ham ixtiyoriy — faqat biri berilsa
+   * bir tomonlama (>= yoki <=) filter bo'ladi.
+   */
+  private normalizePeriodRange(
+    dateFrom?: string,
+    dateTo?: string,
+  ): { from?: string; to?: string } {
+    const toMonthStart = (value: string, label: string) => {
+      const trimmed = value.trim();
+      // YYYY-MM ham, YYYY-MM-DD ham qabul qilinadi
+      const parsed = /^\d{4}-\d{2}$/.test(trimmed)
+        ? dayjs(`${trimmed}-01`)
+        : dayjs(trimmed);
+
+      if (!parsed.isValid()) {
+        throw new BadRequestException(
+          `${label} noto'g'ri formatda. YYYY-MM-DD yoki YYYY-MM kutilmoqda.`,
+        );
+      }
+
+      return parsed.startOf('month').format('YYYY-MM-01');
+    };
+
+    const from = dateFrom?.trim()
+      ? toMonthStart(dateFrom, 'dateFrom')
+      : undefined;
+    const to = dateTo?.trim() ? toMonthStart(dateTo, 'dateTo') : undefined;
+
+    if (from && to && from > to) {
+      throw new BadRequestException(
+        "dateFrom dateTo dan katta bo'lishi mumkin emas",
+      );
+    }
+
+    return { from, to };
+  }
+
+  /**
+   * GET /payments va GET /payments/export uchun umumiy filter query'si.
+   * Ikkalasi bir xil natijani ko'rishi uchun faqat shu yerda quriladi.
+   */
+  private buildPaymentsListQuery(
+    organizationId: number,
+    {
+      status,
+      forMonth,
+      overdueOnly,
+      studentId,
+      groupId,
+      teacherId,
+      search,
+      dateFrom,
+      dateTo,
+    }: PaymentListFilters,
+    { isAdmin, effectiveCenterId }: { isAdmin: boolean; effectiveCenterId?: number },
+  ) {
     const query = this.paymentRepo
       .createQueryBuilder('payments')
       .leftJoinAndSelect('payments.student', 'student')
       .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.teacher', 'teacher')
       .leftJoin('student.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
@@ -2447,6 +2522,10 @@ export class PaymentsService {
 
     if (groupId) {
       query.andWhere('payments.groupId = :groupId', { groupId });
+    }
+
+    if (teacherId) {
+      query.andWhere('teacher.id = :teacherId', { teacherId });
     }
 
     if (search && search.trim()) {
@@ -2474,12 +2553,27 @@ export class PaymentsService {
       query.andWhere('payments.hardDueDate < CURRENT_DATE');
     }
 
-    const [data, total] = await query
-      .orderBy('payments.createdAt', 'DESC')
-      .skip(skip)
-      .take(perPage)
-      .getManyAndCount();
+    // Oraliq bo'yicha filter: to'lov OYI (forMonth) oraliqqa tushsa oladi.
+    // Sana oy o'rtasi bo'lsa ham o'sha oy to'liq kiradi
+    // (masalan dateFrom=2026-01-15 => yanvar oyi ham chiqadi).
+    const { from, to } = this.normalizePeriodRange(dateFrom, dateTo);
 
+    if (from) {
+      query.andWhere('payments.forMonth >= :periodFrom', { periodFrom: from });
+    }
+
+    if (to) {
+      query.andWhere('payments.forMonth <= :periodTo', { periodTo: to });
+    }
+
+    return query.orderBy('payments.createdAt', 'DESC');
+  }
+
+  /**
+   * Ro'yxatdagi to'lovlarga hisoblangan maydonlarni qo'shadi
+   * (overdue, remaining, pending receipts, discount breakdown).
+   */
+  private async enrichPayments(data: Payment[]) {
     // Pending receipts aggregation (so UI can show "awaiting approval")
     const paymentIds = data.map((p: any) => Number(p.id)).filter(Boolean);
     const pendingByPaymentId = new Map<
@@ -2514,7 +2608,7 @@ export class PaymentsService {
     }
 
     // enrich response with computed fields (overdue, remaining, discount breakdown)
-    const enriched = await Promise.all(
+    return Promise.all(
       data.map(async (p: any) => {
         const timezone = p.group?.timezone || 'Asia/Tashkent';
         const today = dayjs().tz(timezone).format('YYYY-MM-DD');
@@ -2566,6 +2660,38 @@ export class PaymentsService {
         };
       }),
     );
+  }
+
+  async findAll(
+    organizationId: number,
+    {
+      page,
+      perPage,
+      ...filters
+    }: PaymentListFilters & {
+      page: number;
+      perPage: number;
+    },
+    currentUser: CurrentUser,
+  ) {
+    const scope = this.resolvePaymentsScope(filters.centerId, currentUser);
+
+    await this.ensurePaymentsBeforeListing(
+      organizationId,
+      scope.effectiveCenterId,
+    );
+
+    const skip = (page - 1) * perPage;
+    const [data, total] = await this.buildPaymentsListQuery(
+      organizationId,
+      filters,
+      scope,
+    )
+      .skip(skip)
+      .take(perPage)
+      .getManyAndCount();
+
+    const enriched = await this.enrichPayments(data);
 
     return {
       data: enriched,
@@ -2576,6 +2702,247 @@ export class PaymentsService {
         totalPages: Math.ceil(total / perPage),
       },
     };
+  }
+
+  /**
+   * 📊 Filterlangan to'lovlarni Excel (.xlsx) fayl sifatida qaytaradi.
+   * Filterlar GET /payments bilan bir xil, ya'ni frontend qanday ko'rsatsa,
+   * export ham aynan shu ro'yxatni beradi (paginatsiyasiz — barcha natijalar).
+   */
+  async exportToExcel(
+    organizationId: number,
+    filters: PaymentListFilters,
+    currentUser: CurrentUser,
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    const scope = this.resolvePaymentsScope(filters.centerId, currentUser);
+
+    await this.ensurePaymentsBeforeListing(
+      organizationId,
+      scope.effectiveCenterId,
+    );
+
+    const data = await this.buildPaymentsListQuery(
+      organizationId,
+      filters,
+      scope,
+    ).getMany();
+
+    const rows = await this.enrichPayments(data);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet("To'lovlar", {
+      views: [{ state: 'frozen', ySplit: 3 }],
+    });
+
+    const columns = [
+      { header: '№', key: 'no', width: 6 },
+      { header: "O'quvchi", key: 'student', width: 28 },
+      { header: 'Telefon', key: 'phone', width: 16 },
+      { header: 'Guruh', key: 'group', width: 24 },
+      { header: "O'qituvchi", key: 'teacher', width: 24 },
+      { header: 'Oy', key: 'forMonth', width: 10 },
+      { header: 'Chegirma %', key: 'discount', width: 12 },
+      { header: "To'lanishi kerak", key: 'amountDue', width: 18 },
+      { header: "To'langan", key: 'amountPaid', width: 16 },
+      { header: 'Tasdiq kutilmoqda', key: 'pendingAmount', width: 18 },
+      { header: 'Qaytarilgan', key: 'refundedAmount', width: 16 },
+      { header: 'Qoldiq', key: 'remainingAmount', width: 16 },
+      { header: 'Holat', key: 'status', width: 18 },
+      { header: "To'lov muddati", key: 'hardDueDate', width: 16 },
+      { header: 'Kechikkan', key: 'isOverdue', width: 12 },
+    ];
+    sheet.columns = columns;
+
+    // 1-qator: sarlavha, 2-qator: qo'llanilgan filterlar
+    sheet.spliceRows(1, 0, [], []);
+
+    const titleRow = sheet.getRow(1);
+    titleRow.getCell(1).value = "To'lovlar ro'yxati";
+    titleRow.getCell(1).font = { bold: true, size: 14 };
+    sheet.mergeCells(1, 1, 1, columns.length);
+
+    const filterRow = sheet.getRow(2);
+    filterRow.getCell(1).value = this.describePaymentFilters(filters, rows);
+    filterRow.getCell(1).font = { italic: true, size: 10, color: { argb: 'FF666666' } };
+    sheet.mergeCells(2, 1, 2, columns.length);
+
+    const headerRow = sheet.getRow(3);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEFEFEF' },
+      };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFBFBFBF' } } };
+    });
+
+    rows.forEach((p: any, index: number) => {
+      sheet.addRow({
+        no: index + 1,
+        student: [p.student?.firstName, p.student?.lastName]
+          .filter(Boolean)
+          .join(' '),
+        phone: p.student?.phone ?? '',
+        group: p.group?.name ?? '',
+        teacher: p.group?.teacher
+          ? [p.group.teacher.firstName, p.group.teacher.lastName]
+              .filter(Boolean)
+              .join(' ')
+          : '',
+        forMonth: p.forMonth ? dayjs(p.forMonth).format('YYYY-MM') : '',
+        discount: Number(p.discountPercentApplied ?? 0),
+        amountDue: Number(p.amountDue ?? 0),
+        amountPaid: Number(p.amountPaid ?? 0),
+        pendingAmount: Number(p.pendingAmount ?? 0),
+        refundedAmount: Number(p.refundedAmount ?? 0),
+        remainingAmount: Number(p.remainingAmount ?? 0),
+        status: PAYMENT_STATUS_LABELS[p.status as PaymentStatus] ?? p.status,
+        hardDueDate: p.hardDueDate ?? '',
+        isOverdue: p.isOverdue ? 'Ha' : "Yo'q",
+      });
+    });
+
+    // Jami qatori
+    const totalRow = sheet.addRow({
+      student: 'JAMI',
+      amountDue: rows.reduce((a: number, p: any) => a + Number(p.amountDue ?? 0), 0),
+      amountPaid: rows.reduce((a: number, p: any) => a + Number(p.amountPaid ?? 0), 0),
+      pendingAmount: rows.reduce(
+        (a: number, p: any) => a + Number(p.pendingAmount ?? 0),
+        0,
+      ),
+      refundedAmount: rows.reduce(
+        (a: number, p: any) => a + Number(p.refundedAmount ?? 0),
+        0,
+      ),
+      remainingAmount: rows.reduce(
+        (a: number, p: any) => a + Number(p.remainingAmount ?? 0),
+        0,
+      ),
+    });
+    totalRow.font = { bold: true };
+    totalRow.eachCell((cell) => {
+      cell.border = { top: { style: 'thin', color: { argb: 'FFBFBFBF' } } };
+    });
+
+    // Pul ustunlariga format
+    for (const key of [
+      'amountDue',
+      'amountPaid',
+      'pendingAmount',
+      'refundedAmount',
+      'remainingAmount',
+    ]) {
+      sheet.getColumn(key).numFmt = '#,##0';
+    }
+
+    const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+
+    return {
+      buffer: Buffer.from(buffer),
+      fileName: this.buildPaymentsExportFileName(filters),
+    };
+  }
+
+  /**
+   * Excel'ning 2-qatoriga yoziladigan "qo'llanilgan filterlar" matni.
+   */
+  private describePaymentFilters(
+    filters: PaymentListFilters,
+    rows: any[],
+  ): string {
+    const parts: string[] = [];
+
+    if (filters.forMonth) parts.push(`Oy: ${filters.forMonth}`);
+
+    if (filters.dateFrom || filters.dateTo) {
+      const { from, to } = this.normalizePeriodRange(
+        filters.dateFrom,
+        filters.dateTo,
+      );
+      const fromLabel = from ? dayjs(from).format('YYYY-MM') : null;
+      const toLabel = to ? dayjs(to).format('YYYY-MM') : null;
+
+      if (fromLabel && toLabel) {
+        parts.push(`Oraliq: ${fromLabel} — ${toLabel}`);
+      } else if (fromLabel) {
+        parts.push(`Oraliq: ${fromLabel} dan boshlab`);
+      } else {
+        parts.push(`Oraliq: ${toLabel} gacha`);
+      }
+    }
+
+    if (filters.teacherId) {
+      const teacher = rows.find(
+        (p: any) => Number(p.group?.teacher?.id) === Number(filters.teacherId),
+      )?.group?.teacher;
+      parts.push(
+        `O'qituvchi: ${
+          teacher
+            ? [teacher.firstName, teacher.lastName].filter(Boolean).join(' ')
+            : `#${filters.teacherId}`
+        }`,
+      );
+    }
+
+    if (filters.groupId) {
+      const group = rows.find(
+        (p: any) => Number(p.group?.id) === Number(filters.groupId),
+      )?.group;
+      parts.push(`Guruh: ${group?.name ?? `#${filters.groupId}`}`);
+    }
+
+    if (filters.studentId) {
+      const student = rows.find(
+        (p: any) => Number(p.student?.id) === Number(filters.studentId),
+      )?.student;
+      parts.push(
+        `O'quvchi: ${
+          student
+            ? [student.firstName, student.lastName].filter(Boolean).join(' ')
+            : `#${filters.studentId}`
+        }`,
+      );
+    }
+
+    if (filters.status) {
+      parts.push(`Holat: ${PAYMENT_STATUS_LABELS[filters.status] ?? filters.status}`);
+    }
+
+    if (filters.overdueOnly) parts.push('Faqat kechikkanlar');
+    if (filters.search?.trim()) parts.push(`Qidiruv: "${filters.search.trim()}"`);
+
+    const applied = parts.length ? parts.join(' | ') : 'Filtersiz (barchasi)';
+
+    return `${applied} — ${rows.length} ta yozuv, yuklandi: ${dayjs().format('YYYY-MM-DD HH:mm')}`;
+  }
+
+  private buildPaymentsExportFileName(filters: PaymentListFilters): string {
+    const parts = ['tolovlar'];
+    if (filters.forMonth) parts.push(filters.forMonth);
+
+    if (filters.dateFrom || filters.dateTo) {
+      const { from, to } = this.normalizePeriodRange(
+        filters.dateFrom,
+        filters.dateTo,
+      );
+      parts.push(
+        `${from ? dayjs(from).format('YYYY-MM') : 'boshidan'}-dan_${
+          to ? dayjs(to).format('YYYY-MM') : 'oxirigacha'
+        }-gacha`,
+      );
+    }
+    if (filters.teacherId) parts.push(`teacher-${filters.teacherId}`);
+    if (filters.groupId) parts.push(`group-${filters.groupId}`);
+    if (filters.studentId) parts.push(`student-${filters.studentId}`);
+    if (filters.status) parts.push(filters.status);
+    if (filters.overdueOnly) parts.push('overdue');
+    parts.push(dayjs().format('YYYY-MM-DD'));
+
+    return `${parts.join('_')}.xlsx`;
   }
 
   async calculatePayment(id: number, dto: CalculatePaymentDto) {

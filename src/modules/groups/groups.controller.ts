@@ -86,7 +86,7 @@ export class GroupsController {
   @ApiResponse({ type: PaginatedGroupResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
   @ApiQuery({ name: 'name', required: false })
-  @ApiQuery({ name: 'teacherId', required: false })
+  @ApiQuery({ name: 'teacherId', required: false, type: Number })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
   findAll(
@@ -127,7 +127,17 @@ export class GroupsController {
   @ApiOperation({ summary: 'Get all groups (no pagination)' })
   @ApiResponse({ type: [GroupResponseDto] })
   @ApiQuery({ name: 'centerId', required: false })
-  async getAllGroups(@Req() req: any, @Query('centerId') centerId?: number) {
+  @ApiQuery({
+    name: 'teacherId',
+    required: false,
+    type: Number,
+    description: 'Filter groups by teacher. Ignored for TEACHER role (always scoped to self).',
+  })
+  async getAllGroups(
+    @Req() req: any,
+    @Query('centerId') centerId?: number,
+    @Query('teacherId') teacherId?: number,
+  ) {
     const isAdmin =
       req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
 
@@ -137,13 +147,24 @@ export class GroupsController {
         : undefined
       : req.user.centerId;
 
+    const effectiveTeacherId =
+      req.user.role === UserRole.TEACHER
+        ? req.user.userId
+        : teacherId
+          ? +teacherId
+          : undefined;
+
     if (!effectiveCenterId) {
-      return this.groupsService.getAllByOrganization(req.user.organizationId);
+      return this.groupsService.getAllByOrganization(
+        req.user.organizationId,
+        effectiveTeacherId,
+      );
     }
 
     return this.groupsService.getAllByOrganizationAndCenter(
       req.user.organizationId,
       effectiveCenterId,
+      effectiveTeacherId,
     );
   }
 

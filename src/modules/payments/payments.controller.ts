@@ -9,13 +9,16 @@ import { Roles } from '@/decorators/roles.decorator';
 import {
   Controller,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   Put,
   Query,
   Req,
+  Res,
   Body,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { PayStudentDebtDto } from '@/modules/payments/dto/pay-student-debt.dto';
@@ -55,6 +58,28 @@ export class PaymentsController {
   @ApiQuery({ name: 'studentId', required: false, type: Number })
   @ApiQuery({ name: 'groupId', required: false, type: Number })
   @ApiQuery({
+    name: 'teacherId',
+    required: false,
+    type: Number,
+    description: "Filter by the teacher of the payment's group.",
+  })
+  @ApiQuery({
+    name: 'dateFrom',
+    required: false,
+    description:
+      "Oraliq boshi (YYYY-MM-DD yoki YYYY-MM). To'lov OYI (forMonth) bo'yicha " +
+      'filterlanadi; sana oy o\'rtasi bo\'lsa ham o\'sha oy to\'liq kiradi. ' +
+      "dateTo'siz ham berilishi mumkin.",
+    example: '2026-01-01',
+  })
+  @ApiQuery({
+    name: 'dateTo',
+    required: false,
+    description:
+      "Oraliq oxiri (YYYY-MM-DD yoki YYYY-MM). dateFrom'siz ham berilishi mumkin.",
+    example: '2026-03-31',
+  })
+  @ApiQuery({
     name: 'search',
     required: false,
     description:
@@ -71,6 +96,9 @@ export class PaymentsController {
     @Query('overdueOnly') overdueOnly?: string, // 'true' | 'false'
     @Query('studentId') studentId?: number,
     @Query('groupId') groupId?: number,
+    @Query('teacherId') teacherId?: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
     @Query('search') search?: string,
   ) {
     const isAdmin =
@@ -93,10 +121,124 @@ export class PaymentsController {
         overdueOnly: overdueOnly === 'true',
         studentId: studentId ? +studentId : undefined,
         groupId: groupId ? +groupId : undefined,
+        teacherId: teacherId ? +teacherId : undefined,
+        dateFrom,
+        dateTo,
         search,
       },
       req.user,
     );
+  }
+
+  @Get('export')
+  @ApiOperation({
+    summary: "Export payments to Excel (filterlangan ko'rinishda)",
+    description:
+      "GET /payments bilan AYNAN bir xil filterlarni qabul qiladi va natijani " +
+      ".xlsx fayl sifatida qaytaradi (paginatsiyasiz — filterga mos barcha " +
+      "yozuvlar). Masalan o'qituvchi yoki guruh bo'yicha filter qilingan bo'lsa, " +
+      "faqat shu o'qituvchi/guruhning to'lovlari yuklanadi. dateFrom/dateTo " +
+      "bilan oraliq ham berilishi mumkin (ikkalasi ham ixtiyoriy, faqat biri " +
+      "berilsa bir tomonlama filter bo'ladi).",
+  })
+  @ApiQuery({ name: 'centerId', required: false, type: Number })
+  @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
+  @ApiQuery({
+    name: 'forMonth',
+    required: false,
+    description: 'Filter by month (YYYY-MM)',
+    example: '2026-01',
+  })
+  @ApiQuery({ name: 'overdueOnly', required: false, example: 'true' })
+  @ApiQuery({ name: 'studentId', required: false, type: Number })
+  @ApiQuery({ name: 'groupId', required: false, type: Number })
+  @ApiQuery({ name: 'teacherId', required: false, type: Number })
+  @ApiQuery({
+    name: 'dateFrom',
+    required: false,
+    description:
+      "Oraliq boshi (YYYY-MM-DD yoki YYYY-MM). To'lov OYI (forMonth) bo'yicha " +
+      'filterlanadi; sana oy o\'rtasi bo\'lsa ham o\'sha oy to\'liq kiradi. ' +
+      "dateTo'siz ham berilishi mumkin.",
+    example: '2026-01-01',
+  })
+  @ApiQuery({
+    name: 'dateTo',
+    required: false,
+    description:
+      "Oraliq oxiri (YYYY-MM-DD yoki YYYY-MM). dateFrom'siz ham berilishi mumkin.",
+    example: '2026-03-31',
+  })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiResponse({
+    status: 200,
+    description: 'Excel fayl (.xlsx)',
+    content: {
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+        schema: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @Roles(
+    UserRole.RECEPTION,
+    UserRole.MANAGER,
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+  )
+  @Header(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  )
+  async exportExcel(
+    @Req() req: any,
+    @Res() res: Response,
+    @Query('centerId') centerId?: string,
+    @Query('status') status?: PaymentStatus,
+    @Query('forMonth') forMonth?: string,
+    @Query('overdueOnly') overdueOnly?: string,
+    @Query('studentId') studentId?: string,
+    @Query('groupId') groupId?: string,
+    @Query('teacherId') teacherId?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
+  ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    const { buffer, fileName } = await this.paymentsService.exportToExcel(
+      req.user.organizationId,
+      {
+        centerId: effectiveCenterId,
+        status,
+        forMonth,
+        overdueOnly: overdueOnly === 'true',
+        studentId: studentId ? +studentId : undefined,
+        groupId: groupId ? +groupId : undefined,
+        teacherId: teacherId ? +teacherId : undefined,
+        dateFrom,
+        dateTo,
+        search,
+      },
+      req.user,
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    res.setHeader('Content-Length', buffer.length);
+    res.end(buffer);
   }
 
   @Put('mark-as-paid/:id')

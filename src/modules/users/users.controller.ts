@@ -115,6 +115,40 @@ export class UsersController {
     });
   }
 
+  /**
+   * 👩‍🏫 O'qituvchilar ro'yxati (paginatsiyasiz) — filter/select uchun
+   */
+  @Get('teachers')
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.RECEPTION,
+  )
+  @ApiOperation({ summary: 'Get all teachers (no pagination)' })
+  @ApiResponse({ type: [UserResponseDto] })
+  @ApiQuery({ name: 'centerId', required: false, type: Number })
+  @ApiQuery({ name: 'name', required: false })
+  async findAllTeachers(
+    @Req() req: any,
+    @Query('centerId') centerId?: number,
+    @Query('name') name?: string,
+  ) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+
+    const effectiveCenterId = isAdmin
+      ? centerId
+        ? +centerId
+        : undefined
+      : req.user.centerId;
+
+    return this.usersService.getAllTeachers(req.user.organizationId, {
+      centerId: effectiveCenterId,
+      name,
+    });
+  }
+
   @Get('me')
   @ApiOperation({ summary: 'Get my profile' })
   @ApiResponse({ type: UserResponseDto })

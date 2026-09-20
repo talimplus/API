@@ -416,6 +416,7 @@ export class GroupsService {
   async getAllByOrganizationAndCenter(
     organizationId: number,
     centerId: number,
+    teacherId?: number,
   ): Promise<Group[]> {
     await this.finishExpiredGroups(organizationId, centerId);
     return this.groupRepo.find({
@@ -426,6 +427,7 @@ export class GroupsService {
             id: organizationId,
           },
         },
+        ...(teacherId ? { teacher: { id: teacherId } } : {}),
       },
       relations: ['center', 'teacher', 'subject', 'room', 'schedules'],
       order: {
@@ -434,9 +436,12 @@ export class GroupsService {
     });
   }
 
-  async getAllByOrganization(organizationId: number): Promise<Group[]> {
+  async getAllByOrganization(
+    organizationId: number,
+    teacherId?: number,
+  ): Promise<Group[]> {
     await this.finishExpiredGroups(organizationId);
-    return this.groupRepo
+    const query = this.groupRepo
       .createQueryBuilder('group')
       .leftJoinAndSelect('group.center', 'center')
       .leftJoinAndSelect('group.subject', 'subject')
@@ -444,9 +449,13 @@ export class GroupsService {
       .leftJoinAndSelect('group.room', 'room')
       .leftJoinAndSelect('group.schedules', 'schedule')
       .leftJoin('center.organization', 'organization')
-      .where('organization.id = :organizationId', { organizationId })
-      .orderBy('group.createdAt', 'DESC')
-      .getMany();
+      .where('organization.id = :organizationId', { organizationId });
+
+    if (teacherId) {
+      query.andWhere('teacher.id = :teacherId', { teacherId });
+    }
+
+    return query.orderBy('group.createdAt', 'DESC').getMany();
   }
 
   async findOne(id: number, organizationId: number) {
