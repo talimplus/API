@@ -12,6 +12,7 @@ import { Referral } from '@/modules/referrals/entities/referal.entity';
 import { PaymentReceipt } from '@/modules/payments/entities/payment-receipt.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
+import { GroupFeeModule } from '@/modules/groups/group-fee.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { Attendance } from '@/modules/attendance/entities/attendance.entity';
       User,
       Attendance,
     ]),
+    GroupFeeModule,
     forwardRef(() => StudentsModule),
     forwardRef(() => TeacherEarningsModule),
   ],

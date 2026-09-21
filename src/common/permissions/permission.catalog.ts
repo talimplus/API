@@ -311,6 +311,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
         label: { uz: 'Oylik to‘lash', ru: 'Выплата зарплаты' },
       },
       {
+        key: 'payroll.deduct',
+        label: {
+          uz: 'Oylikdan ushlab qolish (jarima)',
+          ru: 'Удержание из зарплаты (штраф)',
+        },
+      },
+      {
         key: 'payroll.calculate',
         label: {
           uz: 'O‘qituvchi daromadini hisoblash',
@@ -368,6 +375,53 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       {
         key: 'subjects.manage',
         label: { uz: 'Fanlarni boshqarish', ru: 'Управление предметами' },
+      },
+    ],
+  },
+  {
+    key: 'staffPerformance',
+    label: { uz: 'Xodim faoliyati', ru: 'Работа сотрудника' },
+    permissions: [
+      {
+        key: 'staffPerformance.view',
+        label: {
+          uz: 'Xodim sahifasini ko‘rish (davomat, qarz, jarimalar)',
+          ru: 'Просмотр страницы сотрудника (посещаемость, долги, штрафы)',
+        },
+      },
+    ],
+  },
+  {
+    key: 'staffAttendance',
+    label: { uz: 'Xodimlar davomati', ru: 'Посещаемость сотрудников' },
+    permissions: [
+      {
+        key: 'staffAttendance.checkIn',
+        label: {
+          uz: '“Keldim” belgilash',
+          ru: 'Отметка «Пришёл»',
+        },
+      },
+      {
+        key: 'staffAttendance.viewOwn',
+        label: {
+          uz: 'O‘z davomatini ko‘rish',
+          ru: 'Просмотр своей посещаемости',
+        },
+      },
+      {
+        key: 'staffAttendance.view',
+        label: {
+          uz: 'Barcha xodimlar davomatini ko‘rish',
+          ru: 'Просмотр посещаемости всех сотрудников',
+        },
+      },
+      {
+        key: 'staffAttendance.manage',
+        label: {
+          uz: 'Davomatni tasdiqlash va qo‘lda kiritish',
+          ru: 'Подтверждение и ручной ввод посещаемости',
+        },
       },
     ],
   },

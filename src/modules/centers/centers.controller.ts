@@ -77,6 +77,18 @@ export class CentersController {
     return this.centersService.update(id, dto);
   }
 
+  @Post(':id/capture-ip')
+  @RequirePermissions('centers.manage')
+  @ApiOperation({
+    summary: 'Markaz Wi-Fi’sining tashqi IP’sini so‘rovdan olib saqlash',
+    description:
+      'Markazda turib, markaz Wi-Fi’siga ulangan holda bosiladi. Xodim davomatida ' +
+      'eng ishonchli langar shu: bu tarmoqqa faqat bino ichidan ulanib bo‘ladi.',
+  })
+  captureIp(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.centersService.captureIp(id, req.user.organizationId, req);
+  }
+
   @Delete(':id')
   @RequirePermissions('centers.manage')
   @ApiOperation({ summary: 'Delete center by id' })

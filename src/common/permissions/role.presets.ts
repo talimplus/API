@@ -53,6 +53,11 @@ const MANAGER_PERMISSIONS = [
   'rooms.manage',
   'subjects.view',
   'subjects.manage',
+  'staffAttendance.checkIn',
+  'staffAttendance.viewOwn',
+  'staffAttendance.view',
+  'staffAttendance.manage',
+  'staffPerformance.view',
 ];
 
 const RECEPTION_PERMISSIONS = [
@@ -79,6 +84,10 @@ const RECEPTION_PERMISSIONS = [
   'payments.exclusion',
   'rooms.view',
   'subjects.view',
+  'staffAttendance.checkIn',
+  'staffAttendance.viewOwn',
+  'staffAttendance.view',
+  'staffAttendance.manage',
 ];
 
 const TEACHER_PERMISSIONS = [
@@ -92,6 +101,8 @@ const TEACHER_PERMISSIONS = [
   'syllabus.view',
   'groupPlan.view',
   'groupPlan.manage',
+  'staffAttendance.checkIn',
+  'staffAttendance.viewOwn',
 ];
 
 export const SYSTEM_ROLE_PRESETS: SystemRolePreset[] = [
@@ -127,7 +138,11 @@ export const SYSTEM_ROLE_PRESETS: SystemRolePreset[] = [
     key: 'other',
     name: { uz: 'Boshqa', ru: 'Другое' },
     baseRole: UserRole.OTHER,
-    permissions: ['groups.view'],
+    permissions: [
+      'groups.view',
+      'staffAttendance.checkIn',
+      'staffAttendance.viewOwn',
+    ],
     locked: false,
   },
 ];

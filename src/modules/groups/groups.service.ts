@@ -23,6 +23,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
 import { Student } from '@/modules/students/entities/students.entity';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { PaymentsService } from '@/modules/payments/payments.service';
+import { GroupFeeService } from '@/modules/groups/group-fee.service';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
 import { MoreThan } from 'typeorm';
@@ -50,6 +51,7 @@ export class GroupsService {
     private readonly studentRepo: Repository<Student>,
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
+    private readonly groupFeeService: GroupFeeService,
   ) {}
 
   /**
@@ -348,6 +350,9 @@ export class GroupsService {
       await this.scheduleRepo.save(schedules);
     }
 
+    // Narx tarixining birinchi qatori — keyingi barcha hisob-kitob shundan.
+    await this.groupFeeService.initFeeForGroup(savedGroup);
+
     return savedGroup;
   }
 
@@ -381,7 +386,6 @@ export class GroupsService {
     const prevStartDate = this.toDateOnly(group.startDate);
     const prevEndDate = this.toDateOnly(group.endDate);
     const prevStatus = group.status;
-    const prevMonthlyFee = Number(group.monthlyFee ?? 0);
 
     if (dto.name) group.name = dto.name;
     if (dto.timezone) group.timezone = dto.timezone;
@@ -397,7 +401,10 @@ export class GroupsService {
     }
     // Statusni to'g'ridan-to'g'ri o'zgartirish uchun changeStatus API ishlatiladi;
     // bu yerda status faqat endDate'ga qarab moslanadi.
-    if (dto.monthlyFee !== undefined) group.monthlyFee = dto.monthlyFee;
+    //
+    // DIQQAT: `monthlyFee` bu yerda o'zgartirilmaydi. Narx oyga bog'langan
+    // (`group_fee_periods`) va guruh saqlangandan keyin `GroupFeeService`
+    // orqali yoziladi — default holatda KEYINGI OYDAN kuchga kiradi.
     if (dto.subjectId) {
       group.subject = await this.subjectRepo.findOneBy({
         id: dto.subjectId,
@@ -477,18 +484,36 @@ export class GroupsService {
       await this.syncStudentStatusesForGroups([id]);
     }
 
+    // Narx: oyga bog'langan tarixga yoziladi.
+    // - default (`next_month`) — keyingi oydan kuchga kiradi, joriy oy
+    //   to'lovlari (to'langan ham, to'lanmagan ham) tegilmaydi;
+    // - `current_month` — xatoni tuzatish uchun, shu oydan kuchga kiradi va
+    //   joriy oyning ochiq to'lovlari qayta hisoblanadi.
+    let feeAppliedNow = false;
+    let feeEffectiveFrom: string | null = null;
+    if (dto.monthlyFee !== undefined) {
+      const res = await this.groupFeeService.setFee(
+        savedGroup,
+        Number(dto.monthlyFee),
+        dto.applyFeeFrom ?? 'next_month',
+      );
+      feeAppliedNow = res.appliedNow;
+      feeEffectiveFrom = res.effectiveFrom;
+    }
+
     // Sana / jadval / narx o'zgarsa — to'lovlarni qayta hisoblaymiz.
     const daysChanged = Boolean(dto.days && dto.days.length);
-    const feeChanged =
-      dto.monthlyFee !== undefined && Number(dto.monthlyFee) !== prevMonthlyFee;
     if (
       endDateChanged ||
       daysChanged ||
-      feeChanged ||
+      feeAppliedNow ||
       nextStartDate !== prevStartDate
     ) {
       await this.recalcGroupPayments(id);
     }
+
+    await this.groupFeeService.attachFeeInfo([savedGroup]);
+    (savedGroup as any).feeEffectiveFrom = feeEffectiveFrom;
 
     return savedGroup;
   }
@@ -646,6 +671,8 @@ export class GroupsService {
       .take(itemsPerPage)
       .getManyAndCount();
 
+    await this.groupFeeService.attachFeeInfo(data);
+
     return {
       data,
       meta: {
@@ -663,7 +690,7 @@ export class GroupsService {
     teacherId?: number,
   ): Promise<Group[]> {
     await this.finishExpiredGroups(organizationId, centerId);
-    return this.groupRepo.find({
+    const groups = await this.groupRepo.find({
       where: {
         center: {
           id: centerId,
@@ -678,6 +705,7 @@ export class GroupsService {
         createdAt: 'DESC',
       },
     });
+    return this.groupFeeService.attachFeeInfo(groups);
   }
 
   async getAllByOrganization(
@@ -699,12 +727,13 @@ export class GroupsService {
       query.andWhere('teacher.id = :teacherId', { teacherId });
     }
 
-    return query.orderBy('group.createdAt', 'DESC').getMany();
+    const groups = await query.orderBy('group.createdAt', 'DESC').getMany();
+    return this.groupFeeService.attachFeeInfo(groups);
   }
 
   async findOne(id: number, organizationId: number) {
     await this.finishExpiredGroups(organizationId);
-    return this.groupRepo.findOne({
+    const group = await this.groupRepo.findOne({
       where: {
         id,
         center: { organization: { id: organizationId } },
@@ -718,6 +747,8 @@ export class GroupsService {
         'schedules',
       ],
     });
+    if (group) await this.groupFeeService.attachFeeInfo([group]);
+    return group;
   }
 
   async remove(id: number) {

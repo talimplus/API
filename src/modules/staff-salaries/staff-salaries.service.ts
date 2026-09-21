@@ -18,6 +18,7 @@ import {
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
 import { CurrentUser } from '@/common/types/current.user';
+import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
 
 @Injectable()
 export class StaffSalariesService {
@@ -31,6 +32,7 @@ export class StaffSalariesService {
     @InjectRepository(PaymentReceipt)
     private readonly receiptRepo: Repository<PaymentReceipt>,
     private readonly teacherEarningsService: TeacherEarningsService,
+    private readonly deductionsService: StaffDeductionsService,
   ) {}
 
   private normalizeForMonth(forMonth?: string): string {
@@ -52,6 +54,36 @@ export class StaffSalariesService {
 
   private round2(n: number): number {
     return Math.round((n + Number.EPSILON) * 100) / 100;
+  }
+
+  /** Jarimalar ushlab qolingandan keyin qo'lga tegadigan summa */
+  private netSalary(salary: StaffSalary): number {
+    return this.round2(
+      Math.max(
+        0,
+        Number(salary.baseSalary ?? 0) - Number(salary.deductionAmount ?? 0),
+      ),
+    );
+  }
+
+  /**
+   * Holatni `netSalary` ga qarab qo'yadi. Jarima oylikni to'liq yeb qo'ysa
+   * (`netSalary = 0`) — beriladigan narsa qolmadi, ya'ni "to'langan".
+   */
+  private applyStatus(salary: StaffSalary): void {
+    const net = this.netSalary(salary);
+    const paid = Number(salary.paidAmount ?? 0);
+
+    if (paid >= net) {
+      salary.status = StaffSalaryStatus.PAID;
+      salary.paidAt = salary.paidAt ?? new Date();
+    } else if (paid > 0) {
+      salary.status = StaffSalaryStatus.PARTIAL;
+      salary.paidAt = null;
+    } else {
+      salary.status = StaffSalaryStatus.UNPAID;
+      salary.paidAt = null;
+    }
   }
 
   async ensureSalariesForMonth(
@@ -237,6 +269,22 @@ export class StaffSalariesService {
       .startOf('month')
       .format('YYYY-MM');
 
+    // Ochiq jarimalarni shu oy oyligiga qo'llaymiz (o'tgan oylardan qolgani ham).
+    // Idempotent — faqat sig'adigan va hali ushlanmagan qism qo'llanadi.
+    for (const row of rows) {
+      if (row.status === StaffSalaryStatus.PAID) continue;
+      await this.deductionsService.applyOutstanding(row);
+      this.applyStatus(row);
+      await this.staffSalaryRepo.update(
+        { id: row.id },
+        { status: row.status, paidAt: row.paidAt ?? null },
+      );
+    }
+
+    const outstandingByUser = await this.deductionsService.getOutstandingMap(
+      rows.map((r) => r.userId),
+    );
+
     const teacherEarningById = new Map<number, any>();
     const teacherUserIds = rows
       .filter((r) => r.user?.role === UserRole.TEACHER)
@@ -254,6 +302,8 @@ export class StaffSalariesService {
     return rows.map((r: any) => {
       const baseSalary = Number(r.baseSalary ?? 0);
       const paidAmount = Number(r.paidAmount ?? 0);
+      const deductionAmount = Number(r.deductionAmount ?? 0);
+      const netSalary = this.round2(Math.max(0, baseSalary - deductionAmount));
       const paymentHistory = paymentHistoryMap.get(r.id) || [];
       const out: any = {
         ...r,
@@ -264,6 +314,11 @@ export class StaffSalariesService {
           : null,
         baseSalary,
         paidAmount,
+        deductionAmount,
+        netSalary,
+        remaining: this.round2(Math.max(0, netSalary - paidAmount)),
+        /** Hali ushlanmagan jarima — keyingi oyliklardan ushlanadi */
+        deductionOutstanding: outstandingByUser.get(r.userId) ?? 0,
         paymentHistory: paymentHistory.map((p) => ({
           id: p.id,
           amount: Number(p.amount ?? 0),
@@ -308,37 +363,62 @@ export class StaffSalariesService {
     });
     if (!salary) throw new NotFoundException('Salary record not found');
 
-    if (salary.status === StaffSalaryStatus.PAID) {
+    const payAmount = this.round2(Number(dto.amount ?? 0));
+    if (payAmount <= 0 && !dto.deduction) {
+      throw new BadRequestException(
+        "To'lov summasi yoki jarima ko'rsatilishi kerak",
+      );
+    }
+
+    // Jarima avval yoziladi — qo'lga beriladigan summa shundan keyin hisoblanadi
+    if (dto.deduction) {
+      await this.deductionsService.create(
+        {
+          userId: salary.userId,
+          amount: dto.deduction.amount,
+          reason: dto.deduction.reason,
+          type: dto.deduction.type,
+          forMonth: dayjs(salary.forMonth).format('YYYY-MM'),
+        },
+        {
+          userId: currentUser?.userId,
+          organizationId: currentUser?.organizationId,
+        },
+      );
+      // Jarima qo'llangandan keyingi holatni qayta o'qiymiz
+      const refreshed = await this.staffSalaryRepo.findOne({ where: { id } });
+      salary.deductionAmount = (refreshed?.deductionAmount ?? 0) as any;
+    }
+
+    // Oylikdan ushlab qolingandan keyin qoladigan summa
+    const netSalary = this.netSalary(salary);
+    const currentPaid = Number(salary.paidAmount ?? 0);
+
+    if (payAmount > 0 && currentPaid >= netSalary) {
       throw new BadRequestException("Maosh allaqachon to'liq to'langan");
     }
 
-    const baseSalary = Number(salary.baseSalary ?? 0);
-    const currentPaid = Number(salary.paidAmount ?? 0);
-    const nextPaid = this.round2(currentPaid + Number(dto.amount));
-
-    salary.paidAmount = Math.min(nextPaid, baseSalary) as any;
-
-    if (salary.paidAmount >= baseSalary) {
-      salary.status = StaffSalaryStatus.PAID;
-      salary.paidAt = salary.paidAt ?? new Date();
-    } else if (salary.paidAmount > 0) {
-      salary.status = StaffSalaryStatus.PARTIAL;
-      salary.paidAt = null;
-    } else {
-      salary.status = StaffSalaryStatus.UNPAID;
-      salary.paidAt = null;
+    if (payAmount > 0) {
+      salary.paidAmount = Math.min(
+        this.round2(currentPaid + payAmount),
+        netSalary,
+      ) as any;
     }
+
+    this.applyStatus(salary);
 
     const saved = await this.staffSalaryRepo.save(salary);
 
     // Create payment history record
-    const paymentRecord = this.salaryPaymentRepo.create({
-      staffSalaryId: saved.id,
-      amount: this.round2(Number(dto.amount)) as any,
-      comment: dto.comment ?? null,
-      paidById: currentUser?.userId ?? null,
-    });
-    await this.salaryPaymentRepo.save(paymentRecord);
+    if (payAmount > 0) {
+      const paymentRecord = this.salaryPaymentRepo.create({
+        staffSalaryId: saved.id,
+        amount: payAmount as any,
+        comment: dto.comment ?? null,
+        paidById: currentUser?.userId ?? null,
+      });
+      await this.salaryPaymentRepo.save(paymentRecord);
+    }
 
     // Load payment history
     const paymentHistory = await this.salaryPaymentRepo.find({
@@ -358,6 +438,14 @@ export class StaffSalariesService {
         : null,
       baseSalary: Number(saved.baseSalary ?? 0),
       paidAmount: Number(saved.paidAmount ?? 0),
+      deductionAmount: Number(saved.deductionAmount ?? 0),
+      netSalary: this.netSalary(saved),
+      remaining: this.round2(
+        Math.max(0, this.netSalary(saved) - Number(saved.paidAmount ?? 0)),
+      ),
+      deductionOutstanding: await this.deductionsService.getOutstanding(
+        saved.userId,
+      ),
       paymentHistory: paymentHistory.map((p) => ({
         id: p.id,
         amount: Number(p.amount ?? 0),

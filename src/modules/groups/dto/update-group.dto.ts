@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -87,13 +88,33 @@ export class UpdateGroupDto {
 
   @ApiProperty({
     example: 400000,
-    description: "Bu guruxdagi o'quvchilarning default oylik to'lovi",
+    description:
+      "Bu guruxdagi o'quvchilarning default oylik to'lovi. " +
+      "DIQQAT: narx o'zgartirilsa u DEFAULT holatda KEYINGI OYDAN kuchga " +
+      "kiradi — joriy va o'tgan oylar to'lovlari (to'langan ham, to'lanmagan " +
+      "ham) eski narxda qoladi. Shu oydan qo'llash uchun `applyFeeFrom` " +
+      "ni 'current_month' qilib yuboring. O'quvchining shaxsiy narxi " +
+      "(students.monthlyFee > 0) bo'lsa, unga guruh narxi umuman ta'sir qilmaydi.",
     required: false,
   })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   monthlyFee?: number;
+
+  @ApiProperty({
+    example: 'next_month',
+    enum: ['next_month', 'current_month'],
+    required: false,
+    description:
+      "Yangi narx qachondan kuchga kirsin. Default — 'next_month'. " +
+      "'current_month' faqat xato kiritilgan narxni tuzatish uchun: shu oyning " +
+      "ochiq (to'lanmagan/qisman) to'lovlari qayta hisoblanadi, to'langanlari " +
+      'baribir tegilmaydi.',
+  })
+  @IsOptional()
+  @IsIn(['next_month', 'current_month'])
+  applyFeeFrom?: 'next_month' | 'current_month';
 
   @ApiProperty({
     description: 'Group schedule',

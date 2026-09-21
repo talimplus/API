@@ -33,8 +33,34 @@ export class GroupResponseDto {
   })
   startedAt?: string | null;
 
-  @ApiProperty({ example: 400000 })
+  @ApiProperty({
+    example: 400000,
+    description:
+      "JORIY oyda amal qilayotgan oylik narx. Narx o'zgartirilganda u " +
+      "keyingi oydan kuchga kirgani uchun bu maydon darhol o'zgarmaydi — " +
+      "rejalashtirilgan narx `upcomingMonthlyFee` da ko'rinadi.",
+  })
   monthlyFee: number;
+
+  @ApiProperty({
+    example: 500000,
+    required: false,
+    nullable: true,
+    description:
+      "Keyingi oydan kuchga kiradigan yangi narx. Rejalashtirilgan o'zgarish " +
+      'bo‘lmasa null.',
+  })
+  upcomingMonthlyFee?: number | null;
+
+  @ApiProperty({
+    example: '2026-10-01',
+    required: false,
+    nullable: true,
+    description:
+      '`upcomingMonthlyFee` kuchga kiradigan oy (oyning 1-sanasi). ' +
+      "Rejalashtirilgan o'zgarish bo‘lmasa null.",
+  })
+  upcomingFeeFromMonth?: string | null;
 
   @ApiProperty({ type: () => SubjectResponseDto, nullable: true })
   subject: SubjectResponseDto;

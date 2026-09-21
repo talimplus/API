@@ -1,5 +1,16 @@
-import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsInt,
+  IsLatitude,
+  IsLongitude,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class UpdateCenterDto {
@@ -27,4 +38,62 @@ export class UpdateCenterDto {
   })
   @IsBoolean()
   isDefault?: boolean;
+
+  // ── Xodim davomati sozlamalari ─────────────────────────────
+
+  @ApiProperty({
+    example: 41.311081,
+    required: false,
+    description:
+      'Markaz binosining kengligi (xaritadan belgilanadi). null — tozalash',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Type(() => Number)
+  @IsLatitude()
+  latitude?: number | null;
+
+  @ApiProperty({ example: 69.240562, required: false })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Type(() => Number)
+  @IsLongitude()
+  longitude?: number | null;
+
+  @ApiProperty({
+    example: 150,
+    required: false,
+    description:
+      'Shu radius (metr) ichidan bosilgan “Keldim” joylashuv bo‘yicha to‘g‘ri hisoblanadi',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(20)
+  @Max(5000)
+  checkInRadiusMeters?: number;
+
+  @ApiProperty({
+    example: '84.54.72.10',
+    required: false,
+    description:
+      'Markaz Wi-Fi’sining tashqi IP manzili. Odatda qo‘lda yozilmaydi — ' +
+      '`POST /centers/:id/capture-ip` markazdan turib avtomatik yozadi. null — tozalash',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(64)
+  publicIp?: string | null;
+
+  @ApiProperty({
+    example: 'Asia/Tashkent',
+    required: false,
+    description:
+      'Markaz timezone’i — “bugun” va ish kuni shunga qarab aniqlanadi',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  timezone?: string;
 }

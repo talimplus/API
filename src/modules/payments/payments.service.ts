@@ -30,6 +30,7 @@ import {
   PaymentReceipt,
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
+import { GroupFeeService } from '@/modules/groups/group-fee.service';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
@@ -79,6 +80,7 @@ export class PaymentsService {
     private readonly attendanceRepo: Repository<Attendance>,
     @Inject(forwardRef(() => TeacherEarningsService))
     private readonly teacherEarningsService: TeacherEarningsService,
+    private readonly groupFeeService: GroupFeeService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -795,7 +797,13 @@ export class PaymentsService {
 
         // fullAmount = proratsiyasiz to'liq oylik (chegirma bilan, manual
         // exclusionsiz). amountDue = fullAmount * (billable/planned) - manualExcluded.
-        const groupFee = Number((p as any).group?.monthlyFee ?? 0);
+        // Guruh narxi oyga bog'langan — shu oyda amal qilgan narxni olamiz.
+        const groupFee = (p as any).group
+          ? await this.resolveGroupFeeForMonth(
+              (p as any).group,
+              dayjs(p.forMonth).format('YYYY-MM-01'),
+            )
+          : 0;
         const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
         let fullAmount: number | null = null;
         if (baseMonthlyFee > 0) {
@@ -1216,6 +1224,29 @@ export class PaymentsService {
     string,
     { percent: number; breakdown: Array<{ percent: number; reason: string }> }
   >();
+
+  /**
+   * Shu oy uchun guruh narxi.
+   *
+   * Narx oyga bog'langan (`group_fee_periods`): guruh narxi oy o'rtasida
+   * o'zgartirilsa, u faqat keyingi oydan kuchga kiradi. Shuning uchun bu yerda
+   * `group.monthlyFee` emas, aynan `forMonth` uchun amaldagi narx olinadi.
+   * Tarix topilmasa — `group.monthlyFee` ga qaytamiz (eski ma'lumot uchun).
+   *
+   * Tarix `GroupFeeService` ichida qisqa muddatli keshda — massiv qayta
+   * hisoblashda har bir to'lov uchun DB'ga borilmaydi.
+   */
+  private async resolveGroupFeeForMonth(
+    group: Group,
+    forMonth: string,
+  ): Promise<number> {
+    if (!group?.id) return Number(group?.monthlyFee ?? 0);
+    return this.groupFeeService.resolveFeeForMonth(
+      group.id,
+      forMonth,
+      Number(group.monthlyFee ?? 0),
+    );
+  }
 
   private async applyMonthlyDiscountIncrement(args: {
     studentId: number;
@@ -1833,9 +1864,12 @@ export class PaymentsService {
       forMonth,
     });
 
+    // Guruh narxi oyga bog'langan: o'tgan/joriy oylar eski narxda qoladi.
+    const groupFee = await this.resolveGroupFeeForMonth(group, forMonth);
+
     const amountDue = this.computeAmountDue({
       student,
-      group,
+      groupFee,
       lessonsPlanned,
       lessonsBillable, // excused ayirilmaydi
       discountPercent,
@@ -2162,7 +2196,8 @@ export class PaymentsService {
 
   private computeAmountDue(args: {
     student: Student;
-    group: Group;
+    /** Shu oy uchun amaldagi GURUH narxi (`resolveGroupFeeForMonth`). */
+    groupFee: number;
     lessonsPlanned: number;
     lessonsBillable: number;
     discountPercent: number;
@@ -2170,18 +2205,18 @@ export class PaymentsService {
   }): number {
     const {
       student,
-      group,
+      groupFee,
       lessonsPlanned,
       lessonsBillable,
       discountPercent,
       manualExcludedAmount = 0,
     } = args;
-    // Fee priority:
-    // - if student.monthlyFee is set (> 0) -> use it
-    // - otherwise fallback to group.monthlyFee
+    // Narx ustunligi:
+    // - o'quvchining shaxsiy narxi bo'lsa (> 0) -> o'sha ishlatiladi va
+    //   guruh narxi o'zgarsa ham bu o'quvchiga umuman ta'sir qilmaydi;
+    // - aks holda -> shu OY uchun amaldagi guruh narxi.
     const studentFee = Number(student.monthlyFee ?? 0);
-    const groupFee = Number(group.monthlyFee ?? 0);
-    const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
+    const baseMonthlyFee = studentFee > 0 ? studentFee : Number(groupFee ?? 0);
     if (!lessonsPlanned) return 0;
 
     // Apply discount AFTER lesson-based prorating

@@ -35,6 +35,14 @@ export class StaffSalary {
   @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
   paidAmount: number;
 
+  /**
+   * Shu oy oyligidan ushlab qolingan jarimalar yig'indisi
+   * (`staff_salary_deductions` ning denormalizatsiyasi — ro'yxatni tez chizish uchun).
+   * To'lanishi kerak bo'lgan summa: `baseSalary - deductionAmount`.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  deductionAmount: number;
+
   @Column({
     type: 'enum',
     enum: StaffSalaryStatus,

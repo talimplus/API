@@ -9,6 +9,11 @@ import { Center } from './entities/centers.entity';
 import { CreateCenterDto } from './dto/create-center.dto';
 import { UpdateCenterDto } from './dto/update-center.dto';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
+import {
+  getClientIp,
+  isPrivateIp,
+  normalizeIp,
+} from '@/shared/utils/request-ip';
 
 @Injectable()
 export class CentersService {
@@ -160,9 +165,60 @@ export class CentersService {
       }
 
       if (dto.name !== undefined) center.name = dto.name;
+      if (dto.timezone !== undefined) center.timezone = dto.timezone;
+
+      // Xodim davomati sozlamalari. `null` — qiymatni tozalash.
+      if (dto.latitude !== undefined) {
+        center.latitude = dto.latitude === null ? null : Number(dto.latitude);
+      }
+      if (dto.longitude !== undefined) {
+        center.longitude =
+          dto.longitude === null ? null : Number(dto.longitude);
+      }
+      if (dto.checkInRadiusMeters !== undefined) {
+        center.checkInRadiusMeters = Number(dto.checkInRadiusMeters);
+      }
+      if (dto.publicIp !== undefined) {
+        center.publicIp = dto.publicIp ? normalizeIp(dto.publicIp) : null;
+      }
 
       return centerRepo.save(center);
     });
+  }
+
+  /**
+   * Markaz Wi-Fi'sining tashqi IP'sini so'rovning o'zidan oladi.
+   *
+   * Admin markazda turib, markaz Wi-Fi'siga ulangan holda bir marta bosadi.
+   * Bu — xodim davomatidagi eng ishonchli langar, chunki bu tarmoqqa faqat
+   * bino ichidan ulanib bo'ladi.
+   */
+  async captureIp(id: number, organizationId: number, req: any) {
+    const center = await this.centerRepo.findOne({ where: { id } });
+    if (!center) throw new NotFoundException('Filial topilmadi');
+    if ((center as any).organizationId !== organizationId) {
+      throw new BadRequestException(
+        'Bu filial sizning tashkilotingizga tegishli emas',
+      );
+    }
+
+    const ip = getClientIp(req);
+    if (!ip) {
+      throw new BadRequestException('IP manzilni aniqlab bo‘lmadi');
+    }
+    // Lokal tarmoq IP'si markazni ajratib turmaydi — bunday qiymat foydasiz
+    if (isPrivateIp(ip)) {
+      throw new BadRequestException(
+        'Aniqlangan IP ichki tarmoqniki (' +
+          ip +
+          '). Server reverse proxy ortida bo‘lsa TRUST_PROXY=true qilinishi kerak.',
+      );
+    }
+
+    center.publicIp = ip;
+    await this.centerRepo.save(center);
+
+    return { publicIp: ip };
   }
 
   async remove(id: number) {
