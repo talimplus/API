@@ -3,9 +3,15 @@ import { AppModule } from '@/app.module';
 import { CustomValidationPipe } from './common/pipes/custom-validation.pipe';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { TypeOrmExceptionFilter } from '@/common/filters/typeorm-exception.filter';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Express standarti 100kb — tashkilot logotipi/favicon'i data URL bo'lib
+  // kelgani uchun yetmaydi (413 qaytardi). 2mb hamma joyga yetadi.
+  app.use(json({ limit: '2mb' }));
+  app.use(urlencoded({ limit: '2mb', extended: true }));
 
   app.useGlobalPipes(new CustomValidationPipe());
   app.useGlobalFilters(new TypeOrmExceptionFilter());

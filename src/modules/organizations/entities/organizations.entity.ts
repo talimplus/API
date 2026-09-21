@@ -21,6 +21,20 @@ export class Organization {
   @Column({ default: false })
   isVip: boolean;
 
+  /**
+   * Kabinet logotipi — `data:image/...;base64,...` yoki `https://...`.
+   * Bo'sh bo'lsa front standart TalimPlus logosini ko'rsatadi.
+   */
+  @Column({ type: 'text', nullable: true })
+  logoUrl?: string | null;
+
+  /** Brauzer tab belgisi (favicon) — logo bilan bir xil format */
+  @Column({ type: 'text', nullable: true })
+  faviconUrl?: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  brandingUpdatedAt?: Date | null;
+
   @OneToMany(() => Center, (center) => center.organization)
   centers: Center[];
 

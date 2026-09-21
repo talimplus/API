@@ -49,15 +49,20 @@ export class StatisticsService {
     return `${ym}-01`;
   }
 
+  /**
+   * Filialni aniqlaydi. `null` — **"Barcha filiallar"**: front `centerId`
+   * yubormaganda (va xodim biror filialga biriktirilmaganda) statistika butun
+   * tashkilot bo'yicha hisoblanadi. Bu qolgan endpointlar bilan bir xil
+   * qoida — avval bu yerda 400 ("centerId is required") qaytardi va admin
+   * "Barcha filiallar" da dashboardni umuman ocholmasdi.
+   */
   private async resolveCenterId(
     organizationId: number,
     reqCenterId: number | undefined,
     queryCenterId?: number,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const centerId = queryCenterId ?? reqCenterId;
-    if (!centerId) {
-      throw new BadRequestException('centerId is required');
-    }
+    if (!centerId) return null;
 
     const center = await this.centerRepo
       .createQueryBuilder('center')
@@ -73,6 +78,24 @@ export class StatisticsService {
     }
 
     return centerId;
+  }
+
+  /**
+   * Filial chegarasi: filial tanlangan bo'lsa o'sha, aks holda butun tashkilot.
+   * Ikkala holatda ham `organizationId` chegarasi saqlanadi (IDOR oldini olish).
+   * `alias` — `centers` jadvaliga qilingan join aliasi.
+   */
+  private centerScope(
+    alias: string,
+    centerId: number | null,
+    organizationId: number,
+  ): { clause: string; params: Record<string, number> } {
+    return centerId
+      ? { clause: `${alias}.id = :centerId`, params: { centerId } }
+      : {
+          clause: `${alias}.organizationId = :organizationId`,
+          params: { organizationId },
+        };
   }
 
   async getDashboard(
@@ -101,6 +124,10 @@ export class StatisticsService {
       throw new BadRequestException('toMonth must be >= fromMonth');
     }
 
+    // O'quvchi/xarajat filialiga qo'yiladigan shart (yoki butun tashkilot)
+    const studentScope = this.centerScope('sc', centerId, organizationId);
+    const expenseScope = this.centerScope('ec', centerId, organizationId);
+
     const paymentsAggQb = this.paymentRepo
       .createQueryBuilder('p')
       .select([
@@ -114,7 +141,8 @@ export class StatisticsService {
         `SUM(CASE WHEN p.status = '${PaymentStatus.UNPAID}' THEN 1 ELSE 0 END) as "unpaidCount"`,
       ])
       .leftJoin('p.student', 's')
-      .where('s.centerId = :centerId', { centerId })
+      .leftJoin('s.center', 'sc')
+      .where(studentScope.clause, studentScope.params)
       .andWhere('p.forMonth >= :fromMonthStart', { fromMonthStart })
       .andWhere('p.forMonth < :endExclusive', { endExclusive });
 
@@ -124,7 +152,8 @@ export class StatisticsService {
         'COALESCE(SUM(e.amount), 0) as "totalAmount"',
         'COUNT(e.id) as "totalCount"',
       ])
-      .where('e.centerId = :centerId', { centerId })
+      .leftJoin('e.center', 'ec')
+      .where(expenseScope.clause, expenseScope.params)
       .andWhere('e.forMonth >= :fromMonthStart', { fromMonthStart })
       .andWhere('e.forMonth < :endExclusive', { endExclusive });
 
@@ -143,9 +172,15 @@ export class StatisticsService {
       .leftJoin('u.organization', 'org')
       .where('org.id = :organizationId', { organizationId })
       .leftJoin('u.center', 'uc')
-      .andWhere('uc.id = :centerId', { centerId })
       .andWhere('ss.forMonth >= :fromMonthStart', { fromMonthStart })
       .andWhere('ss.forMonth < :endExclusive', { endExclusive });
+
+    // Filial tanlangan bo'lsa xodimlarni ham shu filial bo'yicha chegaralaymiz.
+    // "Barcha filiallar" da esa filialga biriktirilmagan xodim (masalan
+    // markaz egasi) ham hisobga kirsin — shuning uchun shart qo'shilmaydi.
+    if (centerId) {
+      payrollAggQb.andWhere('uc.id = :centerId', { centerId });
+    }
 
     const studentsAggQb = this.studentRepo
       .createQueryBuilder('st')
@@ -155,7 +190,8 @@ export class StatisticsService {
         'SUM(CASE WHEN st.createdAt >= :fromTs AND st.createdAt < :toTs THEN 1 ELSE 0 END) as "addedCount"',
         'SUM(CASE WHEN st.stoppedAt IS NOT NULL AND st.stoppedAt >= :fromTs AND st.stoppedAt < :toTs THEN 1 ELSE 0 END) as "stoppedCount"',
       ])
-      .where('st.centerId = :centerId', { centerId })
+      .leftJoin('st.center', 'sc')
+      .where(studentScope.clause, studentScope.params)
       .setParameters({ fromTs: fromMonthStart, toTs: endExclusive });
 
     const [paymentsRaw, expensesRaw, payrollRaw, studentsRaw] =
@@ -219,7 +255,8 @@ export class StatisticsService {
       ])
       .leftJoin('r.payment', 'p')
       .leftJoin('p.student', 'rs')
-      .where('rs.centerId = :centerId', { centerId })
+      .leftJoin('rs.center', 'sc')
+      .where(studentScope.clause, studentScope.params)
       .andWhere('r.status = :confirmed', {
         confirmed: PaymentReceiptStatus.CONFIRMED,
       })

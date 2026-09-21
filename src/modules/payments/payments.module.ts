@@ -14,6 +14,7 @@ import { User } from '@/modules/users/entities/user.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { GroupFeeModule } from '@/modules/groups/group-fee.module';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
+import { TelegramModule } from '@/modules/telegram/telegram.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
     ]),
     GroupFeeModule,
     EnrollmentsModule,
+    TelegramModule,
     forwardRef(() => StudentsModule),
     forwardRef(() => TeacherEarningsModule),
   ],

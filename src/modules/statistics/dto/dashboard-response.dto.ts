@@ -71,7 +71,7 @@ class ExpensesDashboardDto {
 
 export class DashboardResponseDto {
   @ApiProperty({ example: 1 })
-  centerId: number;
+  centerId: number | null;
 
   @ApiProperty({ example: '2026-01' })
   fromMonth: string;

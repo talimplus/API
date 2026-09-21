@@ -22,6 +22,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { PaymentsService } from '@/modules/payments/payments.service';
+import { TelegramNotifierService } from '@/modules/telegram/telegram-notifier.service';
 
 @Injectable()
 export class AttendanceService {
@@ -42,6 +43,8 @@ export class AttendanceService {
 
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
+
+    private readonly telegramNotifier: TelegramNotifierService,
   ) {}
 
   private isAdminRole(role: UserRole): boolean {
@@ -607,6 +610,21 @@ export class AttendanceService {
       );
     }
 
+    // Ota-onaga xabar faqat status O'ZGARGANDA ketadi: jurnal bir kunda bir
+    // necha marta saqlanishi mumkin (o'qituvchi izoh qo'shadi, xatoni
+    // tuzatadi), har saqlashda qayta xabar yuborilsa — spam bo'ladi.
+    const previousStatuses = new Map<number, AttendanceStatus>();
+    const existingRows = await this.attendanceRepo.find({
+      where: {
+        groupId,
+        lessonDate: dto.lessonDate as any,
+        studentId: In(dto.items.map((i) => i.studentId)),
+      },
+    });
+    for (const row of existingRows) {
+      previousStatuses.set(row.studentId, row.status);
+    }
+
     const now = new Date();
     const upsertRows = dto.items.map((i) => ({
       groupId,
@@ -645,6 +663,29 @@ export class AttendanceService {
           }`,
         );
       }
+    }
+
+    // Kelmagan / kechikkanlar bo'yicha ota-onaga xabar (sozlamada yoqilgan
+    // bo'lsa). "O't va unut" — Telegram ishlamasa davomat baribir saqlangan.
+    const absenceItems = dto.items
+      .filter((i) => {
+        const status = i.status ?? AttendanceStatus.PRESENT;
+        if (
+          status !== AttendanceStatus.ABSENT &&
+          status !== AttendanceStatus.LATE
+        ) {
+          return false;
+        }
+        return previousStatuses.get(i.studentId) !== status;
+      })
+      .map((i) => ({
+        studentId: i.studentId,
+        late: i.status === AttendanceStatus.LATE,
+      }));
+    if (absenceItems.length) {
+      void this.telegramNotifier
+        .notifyAbsences(groupId, dto.lessonDate, absenceItems)
+        .catch(() => undefined);
     }
 
     // return persisted rows for that date

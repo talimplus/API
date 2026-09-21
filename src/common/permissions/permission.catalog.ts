@@ -360,6 +360,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     label: { uz: 'Sozlamalar', ru: 'Настройки' },
     permissions: [
       {
+        key: 'organization.settings',
+        label: {
+          uz: 'O‘quv markazi brendi (nom, logo, favicon)',
+          ru: 'Бренд учебного центра (название, логотип, favicon)',
+        },
+      },
+      {
         key: 'centers.view',
         label: { uz: 'Filiallarni ko‘rish', ru: 'Просмотр филиалов' },
       },
@@ -382,6 +389,19 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
       {
         key: 'subjects.manage',
         label: { uz: 'Fanlarni boshqarish', ru: 'Управление предметами' },
+      },
+    ],
+  },
+  {
+    key: 'telegram',
+    label: { uz: 'Telegram bot', ru: 'Telegram-бот' },
+    permissions: [
+      {
+        key: 'telegram.settings',
+        label: {
+          uz: 'Ota-onalar boti sozlamalari',
+          ru: 'Настройки бота для родителей',
+        },
       },
     ],
   },

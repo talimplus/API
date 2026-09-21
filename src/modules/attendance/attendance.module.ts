@@ -9,6 +9,7 @@ import { GroupsModule } from '@/modules/groups/groups.module';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { PaymentsModule } from '@/modules/payments/payments.module';
+import { TelegramModule } from '@/modules/telegram/telegram.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { PaymentsModule } from '@/modules/payments/payments.module';
     forwardRef(() => StudentsModule),
     forwardRef(() => GroupsModule),
     forwardRef(() => PaymentsModule),
+    TelegramModule,
   ],
   controllers: [GroupAttendanceController],
   providers: [AttendanceService],

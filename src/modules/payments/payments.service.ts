@@ -35,6 +35,7 @@ import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
+import { TelegramNotifierService } from '@/modules/telegram/telegram-notifier.service';
 import * as ExcelJS from 'exceljs';
 
 /**
@@ -83,8 +84,23 @@ export class PaymentsService {
     private readonly teacherEarningsService: TeacherEarningsService,
     private readonly groupFeeService: GroupFeeService,
     private readonly enrollmentsService: EnrollmentsService,
+    private readonly telegramNotifier: TelegramNotifierService,
     private readonly dataSource: DataSource,
   ) {}
+
+  /**
+   * Ota-onaga Telegram xabari — "o't va unut" (fire-and-forget).
+   * Bot ikkinchi darajali kanal: u ishlamasa ham pul qabul qilish to'xtamaydi,
+   * shuning uchun javobni kutmaymiz va xatoni yutamiz.
+   */
+  private notifyParents(
+    receiptId: number,
+    kind: 'received' | 'confirmed' | 'rejected',
+  ) {
+    void this.telegramNotifier
+      .notifyReceipt(receiptId, kind)
+      .catch(() => undefined);
+  }
 
   private async computeReceiverCommissionSnapshot(args: {
     receivedById?: number | null;
@@ -282,9 +298,12 @@ export class PaymentsService {
         addAmount: amt,
         confirmedById: currentUser.userId,
       });
+      // Pul qabul qilindi (admin bo'lgani uchun darhol tasdiqlangan ham).
+      this.notifyParents(savedReceipt.id, 'received');
       return { receipt: savedReceipt, payment: updated, pending: false, check };
     }
 
+    this.notifyParents(savedReceipt.id, 'received');
     return { receipt: savedReceipt, pending: true, check };
   }
 
@@ -378,6 +397,8 @@ export class PaymentsService {
     const savedReceipt = await this.receiptRepo.save(receipt);
     const check = await this.buildCheckFromReceipt(savedReceipt.id);
 
+    this.notifyParents(savedReceipt.id, 'confirmed');
+
     return { receipt: savedReceipt, payment: updatedPayment, check };
   }
 
@@ -409,6 +430,10 @@ export class PaymentsService {
     receipt.status = PaymentReceiptStatus.REJECTED;
     (receipt as any).rejectedReason = reason ?? null;
     const savedReceipt = await this.receiptRepo.save(receipt);
+
+    // Ota-onaga "pul qabul qilindi" xabari ketgan bo'lishi mumkin — tuzatib
+    // qo'yamiz, aks holda u to'lovni amalga oshgan deb biladi.
+    this.notifyParents(savedReceipt.id, 'rejected');
 
     return { receipt: savedReceipt };
   }

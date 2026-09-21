@@ -25,13 +25,16 @@ npm run migration:generate -- db/migrations/<Name>
 - Env: `.env` (`DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME`, `PORT`, JWT, OpenAI).
   `TRUST_PROXY=true` — server nginx/traefik ortida turganda (xodim davomatida
   mijoz IP'sini to'g'ri aniqlash uchun; batafsil 6.8).
+  ⚠️ Telegram bot tokeni env'da **emas** — har bir tashkilot o'z botini
+  kabinetdan ulaydi (`telegram_bot_settings.botToken`, batafsil 6.10).
 - Import alias: `@/` → `src/`. `db/` papkasi alias'siz (`db/data-source`).
 - `dist/` kompilyatsiya natijasi: `dist/src/...` va `dist/db/...`.
 
 ## 2. So'rov yo'li (global konfiguratsiya)
 
 `main.ts`: `CustomValidationPipe` (global) + `TypeOrmExceptionFilter` (global) + CORS
-(`Content-Disposition` ochilgan — Excel eksporti uchun) + Swagger `/api` (bearer auth).
+(`Content-Disposition` ochilgan — Excel eksporti uchun) + Swagger `/api` (bearer auth)
++ body limiti **2mb** (standart 100kb yetmasdi: tashkilot logotipi data URL bo'lib keladi).
 
 Global guard'lar (`app.module.ts`, shu tartibda):
 
@@ -104,6 +107,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `expenses` | `/expenses` | xarajatlar |
 | `referrals` | `/referrals` | do'st taklif qilish chegirmasi |
 | `syllabus` | `/syllabuses`, `/groups/:id/plan`, `/teachers/me` | kurs rejasi, AI yordamchi (OpenAI), o'qituvchining bugungi darslari |
+| `telegram` | `/telegram` | **ota-onalar boti** — QR ulanish, to'lov/davomat/qarz xabarlari |
 | `statistics` | `/statistics/dashboard` | dashboard ko'rsatkichlari |
 | `lessons`, `student-history` | — | **bo'sh stub modullar** (entity bor, logika yo'q) |
 
@@ -396,6 +400,76 @@ Davr bo'yicha cheklanmaydi — qarz yopilmaguncha ko'rinib turadi.
   mumkin — avval jarima yoziladi, keyin qolgan summadan to'lov o'tadi.
   `amount: 0` yuborilsa faqat jarima yoziladi (to'lov tarixiga qator qo'shilmaydi).
 - Ruxsatlar: `staffPerformance.view` (ko'rish), `payroll.deduct` (jarima yozish/o'chirish).
+
+### 6.10 Ota-onalar uchun Telegram bot (`telegram`)
+
+**Har bir tashkilotning o'z boti** (loyiha SaaS — markaz ota-onaga o'z nomi
+bilan yozadi). Token env'da emas, `telegram_bot_settings.botToken` da:
+markaz @BotFather'dan bot ochib, tokenini kabinetga kiritadi.
+
+| Jadval | Ma'no |
+|---|---|
+| `telegram_link_tokens` | o'quvchining QR kalitiga mos tasodifiy token (har o'quvchiga bitta) |
+| `telegram_parent_links` | chat ↔ o'quvchi ulanishi (+ `organizationId` nusxasi) |
+| `telegram_bot_settings` | tashkilotning boti (token, username) va xabar kalitlari |
+
+- **Token kiritiladi, username emas.** `PUT /telegram/bot-token` avval
+  `getMe()` bilan tokenni tekshiradi va `botUsername` ni o'sha javobdan yozadi.
+  Muvaffaqiyatli bo'lsa bot **darhol** ishga tushadi (`TelegramBotService
+  .applyToken`), qayta deploy kerak emas. Token frontga hech qachon
+  qaytarilmaydi — faqat `botConfigured` va niqob (`botTokenMasked`).
+- Bitta token ikki tashkilotda bo'lolmaydi: partial unique index +
+  servisda oldindan tekshiruv (aks holda Telegram 409 beradi va ikkala
+  markazning ham boti tutilib qoladi).
+- **QR ichida `studentId` YO'Q** — tasodifiy token turadi, aks holda begona
+  odam `?start=123` yozib istalgan o'quvchiga ulanardi. Havola:
+  `https://t.me/<bot>?start=<token>`. QR rasmi backendda (`qrcode`) PNG data
+  URL bo'lib yasaladi, front faqat ko'rsatadi.
+- **Tashkilot chegarasi:** `/start` da o'quvchining `center.organizationId`
+  botning tashkiloti bilan solishtiriladi — A markazning QR kodi B markazning
+  botiga ulanmaydi (foydalanuvchiga shunchaki "yaroqsiz QR" deyiladi).
+  `/status` va `/stop` ham faqat shu tashkilot ichida ishlaydi.
+- Ulanish uzilganda qator **o'chmaydi**: `isActive = false` (+ `blockedAt`
+  botni bloklaganlar uchun). QR yangilansa (`.../regenerate`) eski QR o'ladi,
+  lekin allaqachon ulanganlar uzilmaydi.
+- **Xabar kalitlari** (default): `notifyPaymentReceived` ✅, qolgani ❌ —
+  `notifyPaymentConfirmed`, `notifyAbsence`, `notifyDebt` (+ `debtReminderDay`,
+  default 10). `isEnabled` — umumiy kalit.
+- Chaqiruv nuqtalari: `submitReceipt` → `received`, `confirmReceipt` →
+  `confirmed`, `rejectReceipt` → `rejected` (tuzatish xabari, faqat
+  `notifyPaymentReceived` yoqilgan bo'lsa); `submitAttendance` → `absent/late`
+  **status o'zgargan** o'quvchilar uchun; kunlik cron (09:00 Toshkent) → qarz.
+- **Hech qachon xato tashlamaydi.** `TelegramNotifierService` ning barcha
+  metodlari try/catch ichida, chaqiruvchilar `void ...catch(() => undefined)`
+  bilan chaqiradi: bot yiqilsa ham to'lov/davomat oqimi to'xtamaydi.
+- Modul **hech kimga bog'lanmaydi**, faqat repozitoriylarni o'qiydi —
+  shuning uchun `PaymentsModule`/`AttendanceModule` uni `forwardRef`siz
+  import qiladi.
+- Bot buyruqlari: `/start <token>`, `/status` (ulangan o'quvchilar + qarz),
+  `/stop`, `/help`. Til Telegram profilidan (`language_code`): `ru` → ruscha,
+  qolganda o'zbekcha (`telegram.messages.ts`).
+- Polling rejimi, har tashkilotga bitta instance. ⚠️ Bitta tokenli **ikkita
+  server** (lokal + prod) bir vaqtda ishlasa Telegram 409 beradi — log'da
+  `polling_error` bo'lib ko'rinadi, ilova yiqilmaydi.
+- Ruxsat: QR ko'rish — `students.view`, QR yangilash/uzish — `students.update`,
+  bot va sozlamalar — `telegram.settings`.
+
+### 6.11 Tashkilot brendi (`organizations`)
+
+Domen bitta (`talimplus`), lekin kabinet har bir markazning o'z nomi va
+logotipini ko'rsatadi: `organizations.name` + `logoUrl` + `faviconUrl`.
+
+- `GET /organizations/branding` — **ruxsatsiz** (har bir tizimga kirgan xodimga
+  kerak: sidebar logosi va tab sarlavhasi shundan). `:id` qoidasidan **oldin**
+  e'lon qilingan, aks holda `branding` id deb o'qilardi.
+- `PUT /organizations/branding` — `organization.settings`.
+- Rasm `data:image/...;base64,...` yoki `https://...` bo'lishi mumkin. Loyihada
+  fayl yuklash infratuzilmasi (disk/S3/statik serving) **yo'q**, shuning uchun
+  logo va favicon data URL bo'lib `text` ustunda saqlanadi — kichkina va kamdan
+  kam o'zgaradi. Keyinchalik fayl saqlash qo'shilsa, shu ustunlarga havola
+  yozish kifoya, o'qiydigan kod ikkalasini ham qabul qiladi.
+- Cheklovlar: logo ≤ ~300 KB, favicon ≤ ~100 KB (DTO'da `MaxLength` bilan);
+  bo'sh satr yuborilsa rasm olib tashlanadi.
 
 ## 7. Migratsiyalar
 
