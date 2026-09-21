@@ -16,10 +16,13 @@ export class StudentDiscountPeriodResponseDto {
   @ApiProperty({ required: false, nullable: true, example: '2026-03-01' })
   toMonth?: string | null;
 
-  @ApiProperty({ required: false, nullable: true, example: 'Referral discount' })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 'Referral discount',
+  })
   reason?: string | null;
 
   @ApiProperty({ example: '2026-01-10T10:00:00.000Z' })
   createdAt: string;
 }
-

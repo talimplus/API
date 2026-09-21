@@ -14,10 +14,17 @@ export class ExpenseResponseDto {
   @ApiProperty({ example: 1500000 })
   amount: number;
 
-  @ApiProperty({ example: 'Office rent for the month', required: false, nullable: true })
+  @ApiProperty({
+    example: 'Office rent for the month',
+    required: false,
+    nullable: true,
+  })
   description?: string | null;
 
-  @ApiProperty({ example: '2026-01-01', description: 'Month (DATE, first day of month)' })
+  @ApiProperty({
+    example: '2026-01-01',
+    description: 'Month (DATE, first day of month)',
+  })
   forMonth: string;
 
   @ApiProperty({ example: '2026-01-08T12:00:00.000Z' })
@@ -26,4 +33,3 @@ export class ExpenseResponseDto {
   @ApiProperty({ type: () => CenterResponseDto, required: false })
   center?: CenterResponseDto;
 }
-

@@ -8,6 +8,7 @@ import {
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Subscription } from '@/modules/subscriptions/entities/subscriptions.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { Role } from '@/modules/roles/entities/role.entity';
 
 @Entity('organizations')
 export class Organization {
@@ -28,6 +29,10 @@ export class Organization {
 
   @OneToMany(() => Subscription, (subscription) => subscription.organization)
   subscriptions: Subscription[];
+
+  /** Shu markazning o'z rollari (registratsiyada seed qilinadi) */
+  @OneToMany(() => Role, (role) => role.organization)
+  roles: Role[];
 
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;

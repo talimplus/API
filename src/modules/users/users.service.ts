@@ -9,7 +9,6 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { CreateUserDto } from '@/modules/users/dto/create-user.dto';
-import { Roles } from '@/decorators/roles.decorator';
 import * as bcrypt from 'bcrypt';
 import { UpdateUserDto } from '@/modules/users/dto/update-user.dto';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
@@ -19,11 +18,13 @@ import { OrganizationsService } from '@/modules/organizations/organizations.serv
 import { instanceToPlain } from 'class-transformer';
 import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 import { ValidationException } from '@/common/exceptions/validation.exception';
+import { RolesService } from '@/modules/roles/roles.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly organizationsService: OrganizationsService,
+    private readonly rolesService: RolesService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(Center)
@@ -46,26 +47,23 @@ export class UsersService {
   async create(dto: CreateUserDto, organizationId: number, role?: UserRole) {
     if (role === UserRole.ADMIN && !dto.centerId)
       throw new BadRequestException('Admin uchun centerId bo‘lishi kerak');
-    if (
-      ![
-        UserRole.TEACHER,
-        UserRole.MANAGER,
-        UserRole.RECEPTION,
-        UserRole.OTHER,
-        UserRole.STUDENT,
-      ].includes(dto.role)
-    ) {
-      throw new BadRequestException(
-        "Faqat teacher, manager, reception yoki Boshqalar sifatida qo'shish mumkin",
-      );
-    }
+
+    // Rol dinamik: `roleId` bo'yicha (yoki eski `role` enum'i bo'yicha) topiladi.
+    // Administrator rolini biriktirib bo'lmaydi — u markaz egasiniki.
+    const userRole = await this.rolesService.resolveRoleForUser(
+      organizationId,
+      dto.roleId,
+      dto.role,
+    );
 
     const existingUser = await this.userRepo.findOne({
       where: { login: dto.login },
     });
 
     if (existingUser) {
-      throw new ValidationException({ login: 'Bunday login allaqachon mavjud' });
+      throw new ValidationException({
+        login: 'Bunday login allaqachon mavjud',
+      });
     }
 
     // `users.phone` is globally unique (db constraint). Catch early to return a clear 400 error
@@ -74,7 +72,9 @@ export class UsersService {
       where: { phone: dto.phone },
     });
     if (existingByPhone) {
-      throw new ValidationException({ phone: 'Bunday phone allaqachon mavjud' });
+      throw new ValidationException({
+        phone: 'Bunday phone allaqachon mavjud',
+      });
     }
 
     const organization =
@@ -95,8 +95,14 @@ export class UsersService {
       }
     }
 
+    const rest = { ...dto };
+    delete rest.roleId;
+
     const user = this.userRepo.create({
-      ...dto,
+      ...rest,
+      // `users.role` har doim rol turi bilan sinxron
+      role: userRole.baseRole,
+      userRole,
       password: hashedPassword,
       center,
       organization,
@@ -105,15 +111,49 @@ export class UsersService {
     return this.userRepo.save(user);
   }
 
-  async update(id: number, dto: UpdateUserDto) {
-    const user = await this.findOne(id);
+  async update(id: number, dto: UpdateUserDto, organizationId?: number) {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
 
     if (dto.password) {
       dto.password = await bcrypt.hash(dto.password, 10);
     }
 
-    Object.assign(user, dto);
+    const { roleId, role, ...rest } = dto;
+    Object.assign(user, rest);
+
+    // Rolni almashtirish: ruxsatlar darhol yangi roldan o'qiladi
+    if (roleId !== undefined || role !== undefined) {
+      if (user.role === UserRole.ADMIN) {
+        throw new BadRequestException(
+          'Administratorning rolini o‘zgartirib bo‘lmaydi',
+        );
+      }
+
+      const newRole = await this.rolesService.resolveRoleForUser(
+        organizationId ?? (await this.resolveOrganizationId(user.id)),
+        roleId,
+        role,
+      );
+
+      user.userRole = newRole;
+      user.role = newRole.baseRole;
+      this.rolesService.invalidateCache(user.id);
+    }
+
     return this.userRepo.save(user);
+  }
+
+  /** Eski chaqiruvlar uchun: userning organization id'sini topadi. */
+  private async resolveOrganizationId(userId: number): Promise<number> {
+    const row = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['organization'],
+    });
+    if (!row?.organization?.id) {
+      throw new BadRequestException('Foydalanuvchining markazi topilmadi');
+    }
+    return row.organization.id;
   }
 
   async findByLogin(login: string) {
@@ -143,6 +183,7 @@ export class UsersService {
     const query = this.userRepo
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.center', 'center')
+      .leftJoinAndSelect('user.userRole', 'userRole')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId });
 
@@ -223,6 +264,7 @@ export class UsersService {
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.center', 'center')
       .leftJoinAndSelect('user.organization', 'organization')
+      .leftJoinAndSelect('user.userRole', 'userRole')
       .where('user.id = :userId', { userId })
       .getOne();
 
@@ -231,6 +273,8 @@ export class UsersService {
     const out: any = instanceToPlain(user);
     out.centerId = (user as any).center?.id ?? null;
     out.organizationId = (user as any).organization?.id ?? null;
+    out.roleId = (user as any).userRole?.id ?? null;
+    out.roleName = (user as any).userRole?.name ?? null;
     return out;
   }
 
@@ -242,17 +286,25 @@ export class UsersService {
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
 
     if (dto.login && dto.login !== user.login) {
-      const exists = await this.userRepo.findOne({ where: { login: dto.login } });
+      const exists = await this.userRepo.findOne({
+        where: { login: dto.login },
+      });
       if (exists && exists.id !== user.id) {
-        throw new ValidationException({ login: 'Bunday login allaqachon mavjud' });
+        throw new ValidationException({
+          login: 'Bunday login allaqachon mavjud',
+        });
       }
       user.login = dto.login;
     }
 
     if (dto.phone && dto.phone !== user.phone) {
-      const exists = await this.userRepo.findOne({ where: { phone: dto.phone } });
+      const exists = await this.userRepo.findOne({
+        where: { phone: dto.phone },
+      });
       if (exists && exists.id !== user.id) {
-        throw new ValidationException({ phone: 'Bunday phone allaqachon mavjud' });
+        throw new ValidationException({
+          phone: 'Bunday phone allaqachon mavjud',
+        });
       }
       user.phone = dto.phone;
     }
@@ -293,10 +345,16 @@ export class UsersService {
     const query = this.userRepo
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.center', 'center')
+      .leftJoinAndSelect('user.userRole', 'userRole')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
       .andWhere('user.role IN (:...roles)', {
-        roles: [UserRole.TEACHER, UserRole.MANAGER, UserRole.RECEPTION, UserRole.OTHER],
+        roles: [
+          UserRole.TEACHER,
+          UserRole.MANAGER,
+          UserRole.RECEPTION,
+          UserRole.OTHER,
+        ],
       });
 
     if (centerId) {
@@ -339,7 +397,6 @@ export class UsersService {
     return instanceToPlain(user);
   }
 
-  @Roles(UserRole.ADMIN)
   async remove(id: number, currentUser: CurrentUser) {
     const user = await this.userRepo.findOne({
       where: { id },
@@ -365,6 +422,7 @@ export class UsersService {
       };
     }
 
+    this.rolesService.invalidateCache(user.id);
     return this.userRepo.remove(user);
   }
 
@@ -375,6 +433,7 @@ export class UsersService {
       .leftJoinAndSelect('user.center', 'center')
       .leftJoinAndSelect('center.organization', 'centerOrg')
       .leftJoinAndSelect('user.organization', 'organization')
+      .leftJoinAndSelect('user.userRole', 'userRole')
       .where('user.login = :login', { login })
       .getOne();
   }

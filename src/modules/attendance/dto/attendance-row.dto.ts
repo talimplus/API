@@ -33,5 +33,3 @@ export class AttendanceRowDto {
   @ApiPropertyOptional({ type: () => StudentResponseDto })
   student?: StudentResponseDto;
 }
-
-

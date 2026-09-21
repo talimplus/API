@@ -16,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Roles } from '@/decorators/roles.decorator';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { StaffSalariesService } from '@/modules/staff-salaries/staff-salaries.service';
 import { StaffSalaryResponseDto } from '@/modules/staff-salaries/dto/staff-salary-response.dto';
@@ -29,7 +29,7 @@ export class StaffSalariesController {
   constructor(private readonly staffSalariesService: StaffSalariesService) {}
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('payroll.view')
   @ApiOperation({
     summary: 'List staff salaries for a month',
     description:
@@ -54,7 +54,8 @@ export class StaffSalariesController {
     @Query('centerId') centerId?: number,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId
@@ -70,7 +71,7 @@ export class StaffSalariesController {
   }
 
   @Put('pay/:id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('payroll.pay')
   @ApiOperation({
     summary: 'Pay staff salary (partial or full)',
     description:
@@ -86,4 +87,3 @@ export class StaffSalariesController {
     return this.staffSalariesService.pay(id, dto, req.user);
   }
 }
-

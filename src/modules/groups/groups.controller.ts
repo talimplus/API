@@ -18,7 +18,7 @@ import { PaginatedGroupResponseDto } from '@/modules/groups/dto/paginated-group-
 import { GroupResponseDto } from '@/modules/groups/dto/group-response.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { UserRole } from '@/common/enums/user-role.enums';
-import { Roles } from '@/decorators/roles.decorator';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { ChangeGroupStatusDto } from '@/modules/groups/dto/change-group-status.dto';
 import { ApiBody } from '@nestjs/swagger';
@@ -29,12 +29,7 @@ export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 
   @Post()
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('groups.create')
   @ApiOperation({ summary: 'Create new group' })
   @ApiResponse({ type: GroupResponseDto })
   create(@Body() dto: CreateGroupDto, @Req() req: any) {
@@ -42,12 +37,7 @@ export class GroupsController {
   }
 
   @Put(':id')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('groups.update')
   @ApiOperation({
     summary: 'Update group',
     description:
@@ -74,12 +64,7 @@ export class GroupsController {
   }
 
   @Put('change-status/:id')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('groups.changeStatus')
   @ApiOperation({ summary: 'Change group status' })
   @ApiResponse({ type: GroupResponseDto })
   @ApiQuery({ name: 'status', required: false, enum: GroupStatus })
@@ -100,13 +85,7 @@ export class GroupsController {
   }
 
   @Get()
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-    UserRole.TEACHER,
-  )
+  @RequirePermissions('groups.view')
   @ApiOperation({ summary: 'Get all groups' })
   @ApiResponse({ type: PaginatedGroupResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -150,6 +129,7 @@ export class GroupsController {
   }
 
   @Get('/all')
+  @RequirePermissions('groups.view')
   @ApiOperation({ summary: 'Get all groups (no pagination)' })
   @ApiResponse({ type: [GroupResponseDto] })
   @ApiQuery({ name: 'centerId', required: false })
@@ -197,6 +177,7 @@ export class GroupsController {
   }
 
   @Get(':id')
+  @RequirePermissions('groups.view')
   @ApiOperation({ summary: 'Get one group' })
   @ApiResponse({ type: GroupResponseDto })
   findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
@@ -204,7 +185,7 @@ export class GroupsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('groups.delete')
   @ApiOperation({ summary: 'Delete group' })
   @ApiResponse({ type: GroupResponseDto })
   remove(@Param('id', ParseIntPipe) id: number) {

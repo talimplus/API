@@ -1,7 +1,6 @@
 import { Controller, Get, Query, Req } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { StatisticsService } from '@/modules/statistics/statistics.service';
 import { DashboardResponseDto } from '@/modules/statistics/dto/dashboard-response.dto';
 import { DashboardQueryDto } from '@/modules/statistics/dto/dashboard-query.dto';
@@ -12,7 +11,7 @@ export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) {}
 
   @Get('dashboard')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('statistics.view')
   @ApiOperation({
     summary: 'Dashboard statistics',
     description:
@@ -30,4 +29,3 @@ export class StatisticsController {
     );
   }
 }
-

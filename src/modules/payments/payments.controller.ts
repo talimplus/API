@@ -2,10 +2,16 @@ import { PaginatedPaymentResponseDto } from '@/modules/payments/dto/paginated-pa
 import { PaymentResponseDto } from '@/modules/payments/dto/payment-reponse.dto';
 import { PaymentStatus } from '@/modules/payments/entities/payment.entity';
 import { PaymentMethod } from '@/modules/payments/entities/payment-receipt.entity';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
+import {
+  ApiOperation,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+  ApiBody,
+} from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { UserRole } from '@/common/enums/user-role.enums';
-import { Roles } from '@/decorators/roles.decorator';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import {
   Controller,
   Get,
@@ -33,6 +39,7 @@ import { ConfirmReceiptsDto } from '@/modules/payments/dto/confirm-receipts.dto'
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
   @Get()
+  @RequirePermissions('payments.view')
   @ApiOperation({
     summary: 'Get All Payments',
     description:
@@ -69,7 +76,7 @@ export class PaymentsController {
     required: false,
     description:
       "Oraliq boshi (YYYY-MM-DD yoki YYYY-MM). To'lov OYI (forMonth) bo'yicha " +
-      'filterlanadi; sana oy o\'rtasi bo\'lsa ham o\'sha oy to\'liq kiradi. ' +
+      "filterlanadi; sana oy o'rtasi bo'lsa ham o'sha oy to'liq kiradi. " +
       "dateTo'siz ham berilishi mumkin.",
     example: '2026-01-01',
   })
@@ -103,7 +110,8 @@ export class PaymentsController {
     @Query('search') search?: string,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId
@@ -135,11 +143,11 @@ export class PaymentsController {
   @ApiOperation({
     summary: "Export payments to Excel (filterlangan ko'rinishda)",
     description:
-      "GET /payments bilan AYNAN bir xil filterlarni qabul qiladi va natijani " +
-      ".xlsx fayl sifatida qaytaradi (paginatsiyasiz — filterga mos barcha " +
+      'GET /payments bilan AYNAN bir xil filterlarni qabul qiladi va natijani ' +
+      '.xlsx fayl sifatida qaytaradi (paginatsiyasiz — filterga mos barcha ' +
       "yozuvlar). Masalan o'qituvchi yoki guruh bo'yicha filter qilingan bo'lsa, " +
       "faqat shu o'qituvchi/guruhning to'lovlari yuklanadi. dateFrom/dateTo " +
-      "bilan oraliq ham berilishi mumkin (ikkalasi ham ixtiyoriy, faqat biri " +
+      'bilan oraliq ham berilishi mumkin (ikkalasi ham ixtiyoriy, faqat biri ' +
       "berilsa bir tomonlama filter bo'ladi).",
   })
   @ApiQuery({ name: 'centerId', required: false, type: Number })
@@ -159,7 +167,7 @@ export class PaymentsController {
     required: false,
     description:
       "Oraliq boshi (YYYY-MM-DD yoki YYYY-MM). To'lov OYI (forMonth) bo'yicha " +
-      'filterlanadi; sana oy o\'rtasi bo\'lsa ham o\'sha oy to\'liq kiradi. ' +
+      "filterlanadi; sana oy o'rtasi bo'lsa ham o'sha oy to'liq kiradi. " +
       "dateTo'siz ham berilishi mumkin.",
     example: '2026-01-01',
   })
@@ -180,12 +188,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.export')
   @Header(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -205,7 +208,8 @@ export class PaymentsController {
     @Query('search') search?: string,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId
@@ -234,10 +238,7 @@ export class PaymentsController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${fileName}"`,
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.setHeader('Content-Length', buffer.length);
     res.end(buffer);
   }
@@ -248,7 +249,11 @@ export class PaymentsController {
     schema: {
       properties: {
         comment: { type: 'string', nullable: true },
-        paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+        paymentMethod: {
+          type: 'string',
+          enum: Object.values(PaymentMethod),
+          nullable: true,
+        },
         paidAt: {
           type: 'string',
           format: 'date',
@@ -260,12 +265,7 @@ export class PaymentsController {
     },
     required: false,
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.create')
   async markAsPaid(
     @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
@@ -290,7 +290,11 @@ export class PaymentsController {
       properties: {
         amount: { type: 'number' },
         comment: { type: 'string', nullable: true },
-        paymentMethod: { type: 'string', enum: Object.values(PaymentMethod), nullable: true },
+        paymentMethod: {
+          type: 'string',
+          enum: Object.values(PaymentMethod),
+          nullable: true,
+        },
         paidAt: {
           type: 'string',
           format: 'date',
@@ -301,12 +305,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.create')
   async payPartial(
     @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
@@ -327,14 +326,14 @@ export class PaymentsController {
 
   @Put('confirm-receipt/:id')
   @ApiOperation({ summary: 'Confirm a payment receipt (admin approval)' })
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('receipts.confirm')
   async confirmReceipt(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
     return this.paymentsService.confirmReceipt(id, req.user);
   }
 
   @Put('reject-receipt/:id')
   @ApiOperation({ summary: 'Reject a payment receipt (admin rejection)' })
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('receipts.reject')
   async rejectReceipt(
     @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
@@ -349,8 +348,8 @@ export class PaymentsController {
     description:
       "Tasdiq kutayotgan to'lovlar. dateFrom/dateTo — pul QABUL QILINGAN sana " +
       "(receivedAt, bo'sh bo'lsa createdAt) bo'yicha, ikkalasi ham ixtiyoriy. " +
-      "meta.totalAmount — filterga mos BARCHA pending receiptlar summasi " +
-      "(joriy sahifa emas), \"Barchasini oldim\" tugmasida ko'rsatish uchun.",
+      'meta.totalAmount — filterga mos BARCHA pending receiptlar summasi ' +
+      '(joriy sahifa emas), "Barchasini oldim" tugmasida ko\'rsatish uchun.',
   })
   @ApiQuery({ name: 'centerId', required: false, type: Number })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -368,7 +367,7 @@ export class PaymentsController {
       "Qabul qilingan sana oralig'i oxiri (YYYY-MM-DD). Shu kun ham kiradi.",
     example: '2026-09-20',
   })
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('receipts.view')
   async pendingReceipts(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -378,7 +377,8 @@ export class PaymentsController {
     @Query('dateTo') dateTo?: string,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
     const effectiveCenterId = isAdmin
       ? centerId
         ? +centerId
@@ -399,7 +399,7 @@ export class PaymentsController {
     summary: "To'lov cheklari statistikasi — sahifa tepasidagi bloklar uchun",
     description:
       "Bitta so'rovda uchala holat: tasdiqlangan / tasdiq kutilmoqda / rad etilgan " +
-      "(har biriga soni va summasi). Filterlar GET /payments/pending-receipts " +
+      '(har biriga soni va summasi). Filterlar GET /payments/pending-receipts ' +
       "bilan aynan bir xil, sana ham bir xil maydon bo'yicha — pul QABUL QILINGAN " +
       "sana (receivedAt, bo'sh bo'lsa createdAt). `total` = tasdiqlangan + " +
       "kutilayotgan (rad etilgan pul kassaga kirmagani uchun qo'shilmaydi).",
@@ -428,7 +428,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('receipts.view')
   async receiptsStats(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -436,7 +436,8 @@ export class PaymentsController {
     @Query('dateTo') dateTo?: string,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
     const effectiveCenterId = isAdmin
       ? centerId
         ? +centerId
@@ -452,17 +453,18 @@ export class PaymentsController {
 
   @Put('confirm-receipts')
   @ApiOperation({
-    summary: "Bir nechta (yoki barcha) receiptni tasdiqlash — \"oldim\" qilib belgilash",
+    summary:
+      'Bir nechta (yoki barcha) receiptni tasdiqlash — "oldim" qilib belgilash',
     description:
-      "Ikki rejimda ishlaydi:\n" +
-      "1) `receiptIds: [12, 13]` — frontendda checkbox bilan belgilanganlar.\n" +
-      "2) `all: true` — filterga (centerId/dateFrom/dateTo) mos BARCHA pending " +
-      "receiptlar (\"Barchasini oldim\" tugmasi). Filter berilmasa — hammasi.\n\n" +
-      "Har biri yakka tasdiqlash (PUT /payments/confirm-receipt/:id) bilan bir xil " +
+      'Ikki rejimda ishlaydi:\n' +
+      '1) `receiptIds: [12, 13]` — frontendda checkbox bilan belgilanganlar.\n' +
+      '2) `all: true` — filterga (centerId/dateFrom/dateTo) mos BARCHA pending ' +
+      'receiptlar ("Barchasini oldim" tugmasi). Filter berilmasa — hammasi.\n\n' +
+      'Har biri yakka tasdiqlash (PUT /payments/confirm-receipt/:id) bilan bir xil ' +
       "o'tadi: pul payment'ga qo'shiladi, komissiya snapshot'i olinadi, chek " +
       "yasaladi. Bittasi xato bersa qolganlari to'xtamaydi — javobda nima " +
       "tasdiqlangani, nima o'tkazib yuborilgani va nima xato berganigacha ko'rinadi. " +
-      "Boshqa tashkilot yoki markazning receipti hech qachon tasdiqlanmaydi.",
+      'Boshqa tashkilot yoki markazning receipti hech qachon tasdiqlanmaydi.',
   })
   @ApiBody({ type: ConfirmReceiptsDto })
   @ApiResponse({
@@ -482,10 +484,11 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @RequirePermissions('receipts.confirm')
   async confirmReceipts(@Req() req: any, @Body() dto: ConfirmReceiptsDto) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
     const effectiveCenterId = isAdmin ? dto.centerId : req.user.centerId;
 
     return this.paymentsService.confirmReceiptsBulk(
@@ -502,12 +505,7 @@ export class PaymentsController {
   }
 
   @Put('calculate/:id')
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.recalculate')
   @ApiOperation({
     summary: 'Calculate payment amount for partial month study (preview only)',
     description:
@@ -543,16 +541,16 @@ export class PaymentsController {
     summary: 'Get student payment summary (view page)',
     description:
       "O'quvchi haqida qisqa ma'lumot + har oy bo'yicha to'lovlar (amountDue, " +
-      "amountPaid, pendingAmount, receivedAmount, remaining, payableNow, status) + " +
-      "jami xulosa (totalDue, totalPaid, totalDebt, totalPending, totalReceived, " +
-      "payableNow). Oylar eng yangisidan eskisiga tartiblangan.\n\n" +
-      "MUHIM — uchta summa farqi:\n" +
-      "- amountPaid/totalPaid: admin TASDIQLAGAN, kassaga tushgan pul.\n" +
-      "- pendingAmount/totalPending: reception olgan, tasdiq kutayotgan pul " +
+      'amountPaid, pendingAmount, receivedAmount, remaining, payableNow, status) + ' +
+      'jami xulosa (totalDue, totalPaid, totalDebt, totalPending, totalReceived, ' +
+      'payableNow). Oylar eng yangisidan eskisiga tartiblangan.\n\n' +
+      'MUHIM — uchta summa farqi:\n' +
+      '- amountPaid/totalPaid: admin TASDIQLAGAN, kassaga tushgan pul.\n' +
+      '- pendingAmount/totalPending: reception olgan, tasdiq kutayotgan pul ' +
       "(pul o'sha xodim zimmasida).\n" +
       "- receivedAmount/totalReceived = amountPaid + pendingAmount: o'quvchi " +
       "haqiqatda topshirgan pul. O'quvchidan yana qancha olish kerakligi " +
-      "(payableNow) ayni shundan hisoblanadi, remaining esa kassa qarzi.",
+      '(payableNow) ayni shundan hisoblanadi, remaining esa kassa qarzi.',
   })
   @ApiResponse({
     schema: {
@@ -597,12 +595,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.view')
   async studentSummary(
     @Req() req: any,
     @Param('studentId', ParseIntPipe) studentId: number,
@@ -618,8 +611,8 @@ export class PaymentsController {
       "boshlab taqsimlaydi. `amount` berilmasa — jami qarz to'liq to'lanadi. " +
       "Misol: 400000/oy dan 2 oy (800000) qarzi bo'lgan o'quvchi 600000 to'lasa, " +
       "1-oy to'liq yopiladi va 2-oyga 200000 tushib, 200000 qarz qoladi. " +
-      "Admin/super_admin uchun avtomatik tasdiqlanadi; reception/manager uchun " +
-      "PENDING receipt yaratiladi (admin keyin tasdiqlaydi).",
+      'Admin/super_admin uchun avtomatik tasdiqlanadi; reception/manager uchun ' +
+      'PENDING receipt yaratiladi (admin keyin tasdiqlaydi).',
   })
   @ApiBody({ type: PayStudentDebtDto })
   @ApiResponse({
@@ -630,19 +623,30 @@ export class PaymentsController {
         distributedAmount: 600000,
         unallocated: 0,
         allocations: [
-          { paymentId: 649, forMonth: '2026-08', groupId: 12, allocated: 400000, pending: false, checkNo: '5', transactionNo: 'TRX-20260906-000123' },
-          { paymentId: 650, forMonth: '2026-09', groupId: 12, allocated: 200000, pending: false, checkNo: '6-A', transactionNo: 'TRX-20260906-000124' },
+          {
+            paymentId: 649,
+            forMonth: '2026-08',
+            groupId: 12,
+            allocated: 400000,
+            pending: false,
+            checkNo: '5',
+            transactionNo: 'TRX-20260906-000123',
+          },
+          {
+            paymentId: 650,
+            forMonth: '2026-09',
+            groupId: 12,
+            allocated: 200000,
+            pending: false,
+            checkNo: '6-A',
+            transactionNo: 'TRX-20260906-000124',
+          },
         ],
         summary: { student: {}, totals: {}, months: [] },
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.create')
   async payStudentDebt(
     @Req() req: any,
     @Param('studentId', ParseIntPipe) studentId: number,
@@ -665,7 +669,7 @@ export class PaymentsController {
       "Bitta receipt (to'lov) uchun chek ma'lumotlari: chek raqami (1, 1-A, " +
       "1-A-B...), o'quvchi ism-familiyasi, telefon, guruh, o'qituvchi, to'lovdan " +
       "oldingi/keyingi qoldiq, to'lov usuli, summa va sana-vaqt. Frontendda " +
-      "chekni chop etish uchun ishlatiladi.",
+      'chekni chop etish uchun ishlatiladi.',
   })
   @ApiResponse({
     schema: {
@@ -698,12 +702,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.view')
   async getReceiptCheck(@Param('receiptId', ParseIntPipe) receiptId: number) {
     return this.paymentsService.buildCheckFromReceipt(receiptId);
   }
@@ -714,11 +713,11 @@ export class PaymentsController {
     description:
       "Bitta payment (o'quvchining bitta oyi) uchun qilingan BARCHA to'lovlarni " +
       "(receipt'larni) chek ko'rinishida qaytaradi. Har bir element — " +
-      "GET /payments/receipt/:receiptId/check qaytaradigan chek obyektining " +
+      'GET /payments/receipt/:receiptId/check qaytaradigan chek obyektining ' +
       "aynan o'zi (receiptId bilan). Frontend shu bitta so'rov bilan ham tarix " +
       "jadvalini chizadi, ham chekni chop etadi (qo'shimcha so'rovsiz). Tartib: " +
       "receivedAt bo'yicha ASC. Rad etilgan (rejected) receipt'lar ham status'i " +
-      "bilan qaytadi.",
+      'bilan qaytadi.',
   })
   @ApiResponse({
     schema: {
@@ -755,12 +754,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.view')
   async getPaymentReceipts(
     @Param('paymentId', ParseIntPipe) paymentId: number,
   ) {
@@ -769,12 +763,13 @@ export class PaymentsController {
 
   @Put('preview-exclusion/:id')
   @ApiOperation({
-    summary: 'Preview payment exclusion (chiqarib tashlashni oldindan hisoblash)',
+    summary:
+      'Preview payment exclusion (chiqarib tashlashni oldindan hisoblash)',
     description:
-      "Bir oy (payment) uchun excludeLessons (kun) yoki excludeAmount (summa) " +
+      'Bir oy (payment) uchun excludeLessons (kun) yoki excludeAmount (summa) ' +
       "yuborilganda to'lanadigan yangi summani hisoblab beradi. SAQLAMAYDI — " +
       "faqat frontendda jonli ko'rsatish uchun. Kun yuborilsa perLessonAmount " +
-      "orqali summaga aylantiriladi.",
+      'orqali summaga aylantiriladi.',
   })
   @ApiBody({ type: PreviewExclusionDto })
   @ApiResponse({
@@ -795,12 +790,7 @@ export class PaymentsController {
       },
     },
   })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.exclusion')
   async previewExclusion(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: PreviewExclusionDto,
@@ -815,18 +805,13 @@ export class PaymentsController {
   @ApiOperation({
     summary: 'Apply payment exclusion (chiqarib tashlashni saqlash)',
     description:
-      "Bir oy (payment) uchun chiqarib tashlashni SAQLAYDI: amountDue kamayadi " +
-      "va sabab (comment) yoziladi. excludeLessons yoki excludeAmount bilan birga " +
-      "comment MAJBURIY. Recalc paytida ham saqlanadi. Saqlangandan keyin frontend " +
-      "pay-partial/pay-debt orqali kamaygan summani qabul qiladi.",
+      'Bir oy (payment) uchun chiqarib tashlashni SAQLAYDI: amountDue kamayadi ' +
+      'va sabab (comment) yoziladi. excludeLessons yoki excludeAmount bilan birga ' +
+      'comment MAJBURIY. Recalc paytida ham saqlanadi. Saqlangandan keyin frontend ' +
+      'pay-partial/pay-debt orqali kamaygan summani qabul qiladi.',
   })
   @ApiBody({ type: ApplyExclusionDto })
-  @Roles(
-    UserRole.RECEPTION,
-    UserRole.MANAGER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-  )
+  @RequirePermissions('payments.exclusion')
   async applyExclusion(
     @Req() req: any,
     @Param('id', ParseIntPipe) id: number,
@@ -844,6 +829,7 @@ export class PaymentsController {
   }
 
   @Get(':id')
+  @RequirePermissions('payments.view')
   @ApiOperation({ summary: 'Get Payment by id' })
   @ApiResponse({ type: PaymentResponseDto })
   async getOne(@Param('id', ParseIntPipe) id: number) {
@@ -851,7 +837,7 @@ export class PaymentsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('payments.update')
   @ApiOperation({
     summary: 'Update payment (e.g., set planned study end date)',
     description:

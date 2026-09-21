@@ -3,7 +3,11 @@ import { IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateStudentDiscountPeriodDto {
-  @ApiProperty({ required: false, example: 10, description: 'Discount percent (0..100)' })
+  @ApiProperty({
+    required: false,
+    example: 10,
+    description: 'Discount percent (0..100)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -11,7 +15,11 @@ export class UpdateStudentDiscountPeriodDto {
   @Max(100)
   percent?: number;
 
-  @ApiProperty({ required: false, example: '2026-01', description: 'Start month (YYYY-MM), inclusive' })
+  @ApiProperty({
+    required: false,
+    example: '2026-01',
+    description: 'Start month (YYYY-MM), inclusive',
+  })
   @IsOptional()
   @IsString()
   fromMonth?: string;
@@ -32,4 +40,3 @@ export class UpdateStudentDiscountPeriodDto {
   @IsString()
   reason?: string;
 }
-

@@ -12,7 +12,7 @@ export class PreviewExclusionDto {
   @ApiPropertyOptional({
     example: 2,
     description:
-      "Chiqarib tashlanadigan darslar soni. excludeAmount bilan birga yuborilsa, " +
+      'Chiqarib tashlanadigan darslar soni. excludeAmount bilan birga yuborilsa, ' +
       'excludeAmount ustun turadi.',
   })
   @IsOptional()
@@ -34,7 +34,7 @@ export class ApplyExclusionDto extends PreviewExclusionDto {
   @ApiPropertyOptional({
     example: '2 dars sababli qoldirildi (shifokor spravkasi)',
     description:
-      "Chiqarib tashlash sababi. excludeLessons yoki excludeAmount yuborilsa MAJBURIY.",
+      'Chiqarib tashlash sababi. excludeLessons yoki excludeAmount yuborilsa MAJBURIY.',
   })
   @IsOptional()
   @IsString()

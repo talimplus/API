@@ -17,7 +17,7 @@ import { StudentStatus } from '@/common/enums/students-status.enums';
 import { ApiOperation, ApiResponse, ApiTags, ApiQuery } from '@nestjs/swagger';
 import { PaginatedStudentResponseDto } from '@/modules/students/dto/paginate-student-response.dto';
 import { StudentResponseDto } from '@/modules/students/dto/student-response.dto';
-import { Roles } from '@/decorators/roles.decorator';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
 import { UpdateStudentDiscountPeriodDto } from '@/modules/students/dto/update-student-discount-period.dto';
@@ -35,7 +35,7 @@ export class StudentsController {
   constructor(private readonly studentService: StudentsService) {}
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
+  @RequirePermissions('students.view')
   @ApiOperation({ summary: 'Get all students' })
   @ApiResponse({ type: PaginatedStudentResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -115,7 +115,7 @@ export class StudentsController {
   }
 
   @Get('/all')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
+  @RequirePermissions('students.view')
   @ApiOperation({ summary: 'Get all students without pagination' })
   @ApiResponse({ type: [StudentResponseDto] })
   @ApiQuery({ name: 'centerId', required: false })
@@ -149,6 +149,7 @@ export class StudentsController {
   }
 
   @Get('/referrals')
+  @RequirePermissions('students.view')
   async findAllReferrals(@Req() req: any) {
     return this.studentService.getReferredStudents(
       req.user.organizationId,
@@ -157,7 +158,7 @@ export class StudentsController {
   }
 
   @Get(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION, UserRole.TEACHER)
+  @RequirePermissions('students.view')
   @ApiOperation({ summary: 'Get student by id' })
   @ApiResponse({ type: StudentResponseDto })
   async findOne(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
@@ -165,7 +166,7 @@ export class StudentsController {
   }
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('students.create')
   @ApiOperation({ summary: 'Create student' })
   @ApiResponse({ type: StudentResponseDto })
   async create(@Body() dto: CreateStudentDto, @Req() req: any) {
@@ -178,12 +179,7 @@ export class StudentsController {
   }
 
   @Put('change-status/:id')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('students.changeStatus')
   @ApiOperation({ summary: 'Change student status' })
   @ApiResponse({ type: StudentResponseDto })
   @ApiBody({ type: ChangeStudentStatusDto, required: false })
@@ -203,12 +199,7 @@ export class StudentsController {
   }
 
   @Put(':id')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('students.update')
   @ApiOperation({ summary: 'Update student' })
   @ApiResponse({ type: StudentResponseDto })
   async update(
@@ -220,7 +211,7 @@ export class StudentsController {
   }
 
   @Get(':id/discount-periods')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('students.discounts')
   @ApiOperation({ summary: 'List student discount periods' })
   @ApiResponse({ type: [StudentDiscountPeriodResponseDto] })
   async listDiscountPeriods(
@@ -231,7 +222,7 @@ export class StudentsController {
   }
 
   @Post(':id/discount-periods')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('students.discounts')
   @ApiOperation({ summary: 'Create student discount period' })
   @ApiBody({ type: CreateStudentDiscountPeriodDto })
   @ApiResponse({ type: StudentDiscountPeriodResponseDto })
@@ -248,7 +239,7 @@ export class StudentsController {
   }
 
   @Put(':id/discount-periods/:periodId')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('students.discounts')
   @ApiOperation({ summary: 'Update student discount period' })
   @ApiBody({ type: UpdateStudentDiscountPeriodDto })
   @ApiResponse({ type: StudentDiscountPeriodResponseDto })
@@ -267,7 +258,7 @@ export class StudentsController {
   }
 
   @Delete(':id/discount-periods/:periodId')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('students.discounts')
   @ApiOperation({ summary: 'Delete student discount period' })
   @ApiResponse({ schema: { example: { success: true } } })
   async deleteDiscountPeriod(

@@ -33,4 +33,3 @@ export class CreateStudentDiscountPeriodDto {
   @IsString()
   reason?: string;
 }
-

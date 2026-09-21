@@ -11,10 +11,16 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Payment, PaymentReceipt, Expense, Student, StaffSalary, Center]),
+    TypeOrmModule.forFeature([
+      Payment,
+      PaymentReceipt,
+      Expense,
+      Student,
+      StaffSalary,
+      Center,
+    ]),
   ],
   controllers: [StatisticsController],
   providers: [StatisticsService],
 })
 export class StatisticsModule {}
-

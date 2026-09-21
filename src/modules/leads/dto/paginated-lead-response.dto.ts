@@ -9,4 +9,3 @@ export class PaginatedLeadResponseDto {
   @ApiProperty({ type: PaginationMetaDto })
   meta: PaginationMetaDto;
 }
-

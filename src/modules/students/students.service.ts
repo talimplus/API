@@ -787,7 +787,7 @@ export class StudentsService {
         : [];
     if (groups.length !== safeGroupIds.length && safeGroupIds.length > 0) {
       throw new BadRequestException(
-        'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+        "Ba'zi guruhlar topilmadi yoki bu markazga tegishli emas",
       );
     }
     // Guruh(lar)ning dars kunlarini o'quvchiga yozib qo'yamiz.
@@ -930,7 +930,7 @@ export class StudentsService {
       });
       if (groups.length !== dto.groupIds.length) {
         throw new BadRequestException(
-          'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+          "Ba'zi guruhlar topilmadi yoki bu markazga tegishli emas",
         );
       }
 
@@ -1062,7 +1062,10 @@ export class StudentsService {
     return this.findById(organizationId, saved.id);
   }
 
-  private static readonly ALLOWED_STATUS_TRANSITIONS: Record<StudentStatus, StudentStatus[]> = {
+  private static readonly ALLOWED_STATUS_TRANSITIONS: Record<
+    StudentStatus,
+    StudentStatus[]
+  > = {
     [StudentStatus.NEW]: [StudentStatus.ACTIVE, StudentStatus.IGNORED],
     [StudentStatus.ACTIVE]: [StudentStatus.STOPPED, StudentStatus.FINISHED],
     [StudentStatus.STOPPED]: [StudentStatus.ACTIVE, StudentStatus.FINISHED],
@@ -1086,7 +1089,8 @@ export class StudentsService {
     });
     if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
 
-    const allowed = StudentsService.ALLOWED_STATUS_TRANSITIONS[student.status] ?? [];
+    const allowed =
+      StudentsService.ALLOWED_STATUS_TRANSITIONS[student.status] ?? [];
     if (!allowed.includes(status)) {
       throw new BadRequestException(
         `${student.status} → ${status} o'tish mumkin emas`,

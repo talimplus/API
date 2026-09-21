@@ -3,7 +3,11 @@ import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateExpenseDto {
-  @ApiProperty({ example: 2, required: false, description: 'Center id (optional if user has centerId)' })
+  @ApiProperty({
+    example: 2,
+    required: false,
+    description: 'Center id (optional if user has centerId)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -33,4 +37,3 @@ export class CreateExpenseDto {
   @IsString()
   forMonth?: string;
 }
-

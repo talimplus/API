@@ -27,4 +27,3 @@ export class ChangeStudentStatusDto {
   @IsEnum(StudentReturnLikelihood)
   returnLikelihood?: StudentReturnLikelihood;
 }
-

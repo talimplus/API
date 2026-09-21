@@ -2,8 +2,14 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { dayjs } from '@/shared/utils/dayjs';
 import { Repository } from 'typeorm';
-import { Payment, PaymentStatus } from '@/modules/payments/entities/payment.entity';
-import { PaymentReceipt, PaymentReceiptStatus } from '@/modules/payments/entities/payment-receipt.entity';
+import {
+  Payment,
+  PaymentStatus,
+} from '@/modules/payments/entities/payment.entity';
+import {
+  PaymentReceipt,
+  PaymentReceiptStatus,
+} from '@/modules/payments/entities/payment-receipt.entity';
 import { Expense } from '@/modules/expenses/entities/expenses.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
@@ -32,7 +38,9 @@ export class StatisticsService {
     if (!ym) return '';
     const v = ym.trim();
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(v)) {
-      throw new BadRequestException('Month must be in YYYY-MM format (month 01-12)');
+      throw new BadRequestException(
+        'Month must be in YYYY-MM format (month 01-12)',
+      );
     }
     return v;
   }
@@ -59,7 +67,9 @@ export class StatisticsService {
       .getOne();
 
     if (!center) {
-      throw new BadRequestException('centerId is invalid for this organization');
+      throw new BadRequestException(
+        'centerId is invalid for this organization',
+      );
     }
 
     return centerId;
@@ -193,7 +203,12 @@ export class StatisticsService {
       stoppedCount: n(studentsRaw?.stoppedCount),
     };
 
-    const netCashflow = n(payments.amountPaid - payments.refundedAmount - expenses.totalAmount - payroll.amountPaid);
+    const netCashflow = n(
+      payments.amountPaid -
+        payments.refundedAmount -
+        expenses.totalAmount -
+        payroll.amountPaid,
+    );
 
     const paymentsByMethodRaw = await this.receiptRepo
       .createQueryBuilder('r')
@@ -205,7 +220,9 @@ export class StatisticsService {
       .leftJoin('r.payment', 'p')
       .leftJoin('p.student', 'rs')
       .where('rs.centerId = :centerId', { centerId })
-      .andWhere('r.status = :confirmed', { confirmed: PaymentReceiptStatus.CONFIRMED })
+      .andWhere('r.status = :confirmed', {
+        confirmed: PaymentReceiptStatus.CONFIRMED,
+      })
       .andWhere('p.forMonth >= :fromMonthStart', { fromMonthStart })
       .andWhere('p.forMonth < :endExclusive', { endExclusive })
       .groupBy('r.paymentMethod')
@@ -230,4 +247,3 @@ export class StatisticsService {
     };
   }
 }
-

@@ -4,5 +4,3 @@ export enum AttendanceStatus {
   LATE = 'late',
   EXCUSED = 'excused',
 }
-
-

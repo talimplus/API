@@ -79,7 +79,8 @@ export class StudentResponseDto {
     example: '12345678901234',
     required: false,
     nullable: true,
-    description: 'JSHSHIR (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
+    description:
+      'JSHSHIR (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
   })
   jshshir?: string | null;
 
@@ -92,7 +93,7 @@ export class StudentResponseDto {
   @ApiProperty({
     example: [1, 2],
     required: false,
-    description: "Student biriktirilgan guruh IDlari",
+    description: 'Student biriktirilgan guruh IDlari',
     type: [Number],
   })
   groupIds?: number[];

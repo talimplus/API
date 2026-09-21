@@ -80,7 +80,11 @@ export class DashboardResponseDto {
   toMonth: string;
 
   @ApiProperty({
-    example: { amountDue: 1000000, amountPaid: 800000, remainingAmount: 200000 },
+    example: {
+      amountDue: 1000000,
+      amountPaid: 800000,
+      remainingAmount: 200000,
+    },
   })
   payments: PaymentsDashboardDto;
 
@@ -99,8 +103,8 @@ export class DashboardResponseDto {
 
   @ApiProperty({
     example: 150000,
-    description: 'payments.amountPaid - expenses.totalAmount - payroll.amountPaid',
+    description:
+      'payments.amountPaid - expenses.totalAmount - payroll.amountPaid',
   })
   netCashflow: number;
 }
-

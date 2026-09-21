@@ -22,4 +22,3 @@ import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.enti
   exports: [TeacherEarningsService],
 })
 export class TeacherEarningsModule {}
-

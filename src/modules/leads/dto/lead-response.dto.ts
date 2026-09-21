@@ -28,7 +28,11 @@ export class LeadResponseDto {
   @ApiProperty({ example: 10, default: 0 })
   discountPercent: number;
 
-  @ApiProperty({ example: 'Referral discount', required: false, nullable: true })
+  @ApiProperty({
+    example: 'Referral discount',
+    required: false,
+    nullable: true,
+  })
   discountReason?: string | null;
 
   @ApiProperty({ required: false, nullable: true })
@@ -40,7 +44,12 @@ export class LeadResponseDto {
   @ApiProperty({ enum: StudentPreferredTime, required: false, nullable: true })
   preferredTime?: StudentPreferredTime | null;
 
-  @ApiProperty({ enum: WeekDay, isArray: true, required: false, nullable: true })
+  @ApiProperty({
+    enum: WeekDay,
+    isArray: true,
+    required: false,
+    nullable: true,
+  })
   preferredDays?: WeekDay[] | null;
 
   @ApiProperty({ enum: LeadStatus, example: LeadStatus.NEW })
@@ -69,7 +78,8 @@ export class LeadResponseDto {
     example: '2026-01-20',
     required: false,
     nullable: true,
-    description: 'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
+    description:
+      'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
   })
   followUpDate?: string | null;
 
@@ -101,8 +111,8 @@ export class LeadResponseDto {
     example: '12345678901234',
     required: false,
     nullable: true,
-    description: 'JSHSHIR (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
+    description:
+      'JSHSHIR (only visible to ADMIN/SUPER_ADMIN in list endpoints)',
   })
   jshshir?: string | null;
 }
-

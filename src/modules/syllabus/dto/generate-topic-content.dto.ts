@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class GenerateTopicContentDto {
   @ApiProperty({
-    example: '10-11 sinf o\'quvchilari',
+    example: "10-11 sinf o'quvchilari",
     description: 'Auditoriya (yosh, daraja)',
     required: false,
   })

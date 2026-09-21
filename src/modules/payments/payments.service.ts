@@ -122,7 +122,7 @@ export class PaymentsService {
         .where('p.id = :id', { id: paymentId })
         .getOne();
 
-      if (!lockedPayment) throw new NotFoundException('To\'lov topilmadi');
+      if (!lockedPayment) throw new NotFoundException("To'lov topilmadi");
 
       const prevPaid = Number(lockedPayment.amountPaid ?? 0);
       const amountDue = Number(lockedPayment.amountDue ?? 0);
@@ -144,19 +144,24 @@ export class PaymentsService {
     });
 
     if (saved.prevPaid === 0 && Number(saved.result.amountPaid ?? 0) > 0) {
-      void this.applyReferralDiscountOnFirstPayment(saved.result.studentId).catch(
-        (e) => {
-          console.warn(
-            'referral discount apply failed:',
-            (e as any)?.message ?? e,
-          );
-        },
-      );
+      void this.applyReferralDiscountOnFirstPayment(
+        saved.result.studentId,
+      ).catch((e) => {
+        console.warn(
+          'referral discount apply failed:',
+          (e as any)?.message ?? e,
+        );
+      });
     }
 
-    void this.triggerTeacherEarningsRecalcForPayment(saved.result.id).catch((e) => {
-      console.warn('teacher earnings recalc failed:', (e as any)?.message ?? e);
-    });
+    void this.triggerTeacherEarningsRecalcForPayment(saved.result.id).catch(
+      (e) => {
+        console.warn(
+          'teacher earnings recalc failed:',
+          (e as any)?.message ?? e,
+        );
+      },
+    );
 
     return saved.result;
   }
@@ -372,7 +377,11 @@ export class PaymentsService {
     return { receipt: savedReceipt, payment: updatedPayment, check };
   }
 
-  async rejectReceipt(receiptId: number, currentUser: CurrentUser, reason?: string) {
+  async rejectReceipt(
+    receiptId: number,
+    currentUser: CurrentUser,
+    reason?: string,
+  ) {
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
@@ -385,7 +394,9 @@ export class PaymentsService {
     });
     if (!receipt) throw new NotFoundException('Receipt not found');
     if (receipt.status === PaymentReceiptStatus.CONFIRMED) {
-      throw new BadRequestException('Tasdiqlangan receiptni rad etib bo\'lmaydi');
+      throw new BadRequestException(
+        "Tasdiqlangan receiptni rad etib bo'lmaydi",
+      );
     }
     if (receipt.status === PaymentReceiptStatus.REJECTED) {
       return { receipt, alreadyRejected: true };
@@ -532,12 +543,14 @@ export class PaymentsService {
       .getRawMany<{ status: string; count: string; sum: string }>();
 
     const empty = () => ({ count: 0, amount: 0 });
-    const stats: Record<PaymentReceiptStatus, { count: number; amount: number }> =
-      {
-        [PaymentReceiptStatus.CONFIRMED]: empty(),
-        [PaymentReceiptStatus.PENDING]: empty(),
-        [PaymentReceiptStatus.REJECTED]: empty(),
-      };
+    const stats: Record<
+      PaymentReceiptStatus,
+      { count: number; amount: number }
+    > = {
+      [PaymentReceiptStatus.CONFIRMED]: empty(),
+      [PaymentReceiptStatus.PENDING]: empty(),
+      [PaymentReceiptStatus.REJECTED]: empty(),
+    };
 
     for (const row of rows) {
       const key = row.status as PaymentReceiptStatus;
@@ -640,7 +653,7 @@ export class PaymentsService {
     const hasIds = !!args.receiptIds?.length;
     if (!hasIds && !args.all) {
       throw new BadRequestException(
-        "receiptIds bering yoki barchasini tasdiqlash uchun all: true yuboring",
+        'receiptIds bering yoki barchasini tasdiqlash uchun all: true yuboring',
       );
     }
 
@@ -667,7 +680,11 @@ export class PaymentsService {
 
     const targetIds = targets.map((r) => Number(r.id));
 
-    const confirmed: Array<{ receiptId: number; amount: number; checkNo?: string | null }> = [];
+    const confirmed: Array<{
+      receiptId: number;
+      amount: number;
+      checkNo?: string | null;
+    }> = [];
     const failed: Array<{ receiptId: number; reason: string }> = [];
 
     for (const receiptId of targetIds) {
@@ -676,7 +693,8 @@ export class PaymentsService {
         confirmed.push({
           receiptId,
           amount: Number(result.receipt?.amount ?? 0),
-          checkNo: (result as any).check?.checkNo ?? result.receipt?.checkNo ?? null,
+          checkNo:
+            (result as any).check?.checkNo ?? result.receipt?.checkNo ?? null,
         });
       } catch (e: any) {
         this.logger.error(
@@ -695,7 +713,9 @@ export class PaymentsService {
       : [];
 
     return {
-      requested: hasIds ? [...new Set(args.receiptIds)].length : targetIds.length,
+      requested: hasIds
+        ? [...new Set(args.receiptIds)].length
+        : targetIds.length,
       confirmedCount: confirmed.length,
       confirmedAmount: this.round2(
         confirmed.reduce((acc, c) => acc + c.amount, 0),
@@ -985,7 +1005,7 @@ export class PaymentsService {
       );
     }
 
-    let amount =
+    const amount =
       amountInput != null && amountInput !== undefined
         ? this.round2(Number(amountInput))
         : totalAvailable;
@@ -1100,7 +1120,9 @@ export class PaymentsService {
     // Bazaviy summadan oshib ketmasin.
     excludedTotal = this.round2(Math.min(excludedTotal, base.amountDue));
 
-    const newAmountDue = this.round2(Math.max(0, base.amountDue - excludedTotal));
+    const newAmountDue = this.round2(
+      Math.max(0, base.amountDue - excludedTotal),
+    );
     const newRemaining = this.round2(Math.max(0, newAmountDue - amountPaid));
 
     return {
@@ -1138,7 +1160,7 @@ export class PaymentsService {
     }
     if (!args.comment || !String(args.comment).trim()) {
       throw new BadRequestException(
-        "Chiqarib tashlashda izoh (comment) majburiy",
+        'Chiqarib tashlashda izoh (comment) majburiy',
       );
     }
 
@@ -1507,7 +1529,8 @@ export class PaymentsService {
   ): string {
     if (installmentIndex <= 1 && singleFull) return String(invoiceNo);
     const letters: string[] = [];
-    for (let i = 1; i <= installmentIndex; i++) letters.push(this.columnLetter(i));
+    for (let i = 1; i <= installmentIndex; i++)
+      letters.push(this.columnLetter(i));
     return `${invoiceNo}-${letters.join('-')}`;
   }
 
@@ -1519,7 +1542,9 @@ export class PaymentsService {
    * to'lov qabul qilingan kun. Chek qaytib kelganda shu raqam bo'yicha
    * aynan qaysi to'lov ekani aniqlanadi.
    */
-  private async generateTransactionNo(when: Date = new Date()): Promise<string> {
+  private async generateTransactionNo(
+    when: Date = new Date(),
+  ): Promise<string> {
     const rows = await this.dataSource.query(
       `SELECT nextval('payment_receipt_transaction_seq') AS seq`,
     );
@@ -1613,9 +1638,7 @@ export class PaymentsService {
         : null,
       // Guruh + o'qituvchi
       group: group ? { id: group.id, name: group.name ?? null } : null,
-      teacher: teacher
-        ? { id: teacher.id, fullName: fullName(teacher) }
-        : null,
+      teacher: teacher ? { id: teacher.id, fullName: fullName(teacher) } : null,
       // Oy
       forMonth: payment?.forMonth
         ? dayjs(payment.forMonth).format('YYYY-MM')
@@ -1628,7 +1651,9 @@ export class PaymentsService {
         receipt.balanceAfter != null ? Number(receipt.balanceAfter) : null,
       // To'lov usuli va sana
       paymentMethod: receipt.paymentMethod ?? null,
-      paidAt: receipt.paidAt ? dayjs(receipt.paidAt).format('YYYY-MM-DD') : null,
+      paidAt: receipt.paidAt
+        ? dayjs(receipt.paidAt).format('YYYY-MM-DD')
+        : null,
       receivedAt: receipt.receivedAt
         ? dayjs(receipt.receivedAt).toISOString()
         : null,
@@ -2060,7 +2085,10 @@ export class PaymentsService {
       // Chiqish chegarasi = BUGUN (exclusive): bugundan boshlab darslar to'lovga
       // kirmaydi. Joriy oy uchun bu bugungacha o'tgan darslarni beradi; kelajak
       // oylar uchun (oy boshi > bugun) hech qanday dars qolmaydi -> billable=0.
-      const leftExclusive = dayjs().tz(timezone).startOf('day').format('YYYY-MM-DD');
+      const leftExclusive = dayjs()
+        .tz(timezone)
+        .startOf('day')
+        .format('YYYY-MM-DD');
 
       const { lessonsPlanned, lessonsBillable, lessonsExcused, amountDue } =
         await this.computeMonthBilling({
@@ -2433,9 +2461,7 @@ export class PaymentsService {
   ): Promise<void> {
     this.discountCache.clear();
     this.joinedAtCache.clear();
-    const forMonth = dayjs(forMonthInput)
-      .startOf('month')
-      .format('YYYY-MM-01');
+    const forMonth = dayjs(forMonthInput).startOf('month').format('YYYY-MM-01');
 
     let payment = await this.paymentRepo.findOne({
       where: {
@@ -2520,7 +2546,9 @@ export class PaymentsService {
 
     await this.paymentRepo.save(payment);
 
-    void this.triggerTeacherEarningsRecalcForPayment(payment.id).catch(() => {});
+    void this.triggerTeacherEarningsRecalcForPayment(payment.id).catch(
+      () => {},
+    );
   }
 
   private async ensurePaymentsForStudents(
@@ -2804,7 +2832,10 @@ export class PaymentsService {
       dateFrom,
       dateTo,
     }: PaymentListFilters,
-    { isAdmin, effectiveCenterId }: { isAdmin: boolean; effectiveCenterId?: number },
+    {
+      isAdmin,
+      effectiveCenterId,
+    }: { isAdmin: boolean; effectiveCenterId?: number },
   ) {
     const query = this.paymentRepo
       .createQueryBuilder('payments')
@@ -3081,12 +3112,20 @@ export class PaymentsService {
 
     const filterRow = sheet.getRow(2);
     filterRow.getCell(1).value = this.describePaymentFilters(filters, rows);
-    filterRow.getCell(1).font = { italic: true, size: 10, color: { argb: 'FF666666' } };
+    filterRow.getCell(1).font = {
+      italic: true,
+      size: 10,
+      color: { argb: 'FF666666' },
+    };
     sheet.mergeCells(2, 1, 2, columns.length);
 
     const headerRow = sheet.getRow(3);
     headerRow.font = { bold: true };
-    headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    headerRow.alignment = {
+      vertical: 'middle',
+      horizontal: 'center',
+      wrapText: true,
+    };
     headerRow.eachCell((cell) => {
       cell.fill = {
         type: 'pattern',
@@ -3125,8 +3164,14 @@ export class PaymentsService {
     // Jami qatori
     const totalRow = sheet.addRow({
       student: 'JAMI',
-      amountDue: rows.reduce((a: number, p: any) => a + Number(p.amountDue ?? 0), 0),
-      amountPaid: rows.reduce((a: number, p: any) => a + Number(p.amountPaid ?? 0), 0),
+      amountDue: rows.reduce(
+        (a: number, p: any) => a + Number(p.amountDue ?? 0),
+        0,
+      ),
+      amountPaid: rows.reduce(
+        (a: number, p: any) => a + Number(p.amountPaid ?? 0),
+        0,
+      ),
       pendingAmount: rows.reduce(
         (a: number, p: any) => a + Number(p.pendingAmount ?? 0),
         0,
@@ -3226,11 +3271,14 @@ export class PaymentsService {
     }
 
     if (filters.status) {
-      parts.push(`Holat: ${PAYMENT_STATUS_LABELS[filters.status] ?? filters.status}`);
+      parts.push(
+        `Holat: ${PAYMENT_STATUS_LABELS[filters.status] ?? filters.status}`,
+      );
     }
 
     if (filters.overdueOnly) parts.push('Faqat kechikkanlar');
-    if (filters.search?.trim()) parts.push(`Qidiruv: "${filters.search.trim()}"`);
+    if (filters.search?.trim())
+      parts.push(`Qidiruv: "${filters.search.trim()}"`);
 
     const applied = parts.length ? parts.join(' | ') : 'Filtersiz (barchasi)';
 

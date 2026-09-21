@@ -123,7 +123,11 @@ export class PaymentReceipt {
   @Column({ type: 'timestamp', nullable: true })
   confirmedAt?: Date | null;
 
-  @Column({ type: 'enum', enum: PaymentReceiptStatus, default: PaymentReceiptStatus.PENDING })
+  @Column({
+    type: 'enum',
+    enum: PaymentReceiptStatus,
+    default: PaymentReceiptStatus.PENDING,
+  })
   status: PaymentReceiptStatus;
 
   @Column({ type: 'enum', enum: PaymentMethod, nullable: true })
@@ -135,4 +139,3 @@ export class PaymentReceipt {
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
-

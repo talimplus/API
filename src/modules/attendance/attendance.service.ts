@@ -267,11 +267,11 @@ export class AttendanceService {
 
     const rangeFrom =
       query.mode === 'range' && (query.from || query.to)
-        ? query.from ?? dayjs(group.startDate).format('YYYY-MM-DD')
+        ? (query.from ?? dayjs(group.startDate).format('YYYY-MM-DD'))
         : lessonDates[0];
     const rangeTo =
       query.mode === 'range' && (query.from || query.to)
-        ? query.to ?? today
+        ? (query.to ?? today)
         : lessonDates[lessonDates.length - 1];
 
     const overrides =
@@ -351,7 +351,9 @@ export class AttendanceService {
     this.assertCanAccessGroup(user, group);
 
     if (group.status !== GroupStatus.STARTED) {
-      throw new BadRequestException('Faqat boshlangan guruhlar uchun davomat yozish mumkin');
+      throw new BadRequestException(
+        'Faqat boshlangan guruhlar uchun davomat yozish mumkin',
+      );
     }
 
     if (!group.schedules?.length) {
@@ -581,7 +583,9 @@ export class AttendanceService {
     this.assertCanAccessGroup(user, group);
 
     if (group.status !== GroupStatus.STARTED) {
-      throw new BadRequestException('Faqat boshlangan guruhlar uchun dars ko\'chirish mumkin');
+      throw new BadRequestException(
+        "Faqat boshlangan guruhlar uchun dars ko'chirish mumkin",
+      );
     }
 
     const timezone = group.timezone || 'Asia/Tashkent';
@@ -637,7 +641,9 @@ export class AttendanceService {
       window: { mode: 'range', from: dto.toDate, to: dto.toDate },
     });
     if (toIsScheduled.includes(dto.toDate)) {
-      throw new BadRequestException('toDate is already a scheduled lesson date');
+      throw new BadRequestException(
+        'toDate is already a scheduled lesson date',
+      );
     }
 
     const existingFrom = await this.overrideRepo.findOne({
@@ -651,14 +657,18 @@ export class AttendanceService {
       where: { groupId, toDate: dto.toDate as any },
     });
     if (existingTo) {
-      throw new BadRequestException('toDate is already used by another reschedule');
+      throw new BadRequestException(
+        'toDate is already used by another reschedule',
+      );
     }
 
     const fromAttendanceCount = await this.attendanceRepo.count({
       where: { groupId, lessonDate: fromDate as any },
     });
     if (fromAttendanceCount) {
-      throw new BadRequestException('Attendance already submitted for fromDate');
+      throw new BadRequestException(
+        'Attendance already submitted for fromDate',
+      );
     }
 
     const toAttendanceCount = await this.attendanceRepo.count({

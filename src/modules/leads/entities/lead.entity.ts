@@ -111,4 +111,3 @@ export class Lead {
   @UpdateDateColumn({ type: 'timestamp' })
   updatedAt: Date;
 }
-

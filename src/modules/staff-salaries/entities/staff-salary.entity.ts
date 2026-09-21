@@ -51,4 +51,3 @@ export class StaffSalary {
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
-

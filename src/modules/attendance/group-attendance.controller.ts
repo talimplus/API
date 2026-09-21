@@ -19,8 +19,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { AttendanceService } from '@/modules/attendance/attendance.service';
 import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-dates.query.dto';
 import { LessonDatesViewDto } from '@/modules/attendance/dto/lesson-dates-view.dto';
@@ -35,13 +34,7 @@ export class GroupAttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
   @Get('lesson-dates')
-  @Roles(
-    UserRole.TEACHER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('attendance.view')
   @ApiOperation({
     summary: 'Lesson dates view (schedule-driven, gaps allowed)',
     description:
@@ -68,13 +61,7 @@ export class GroupAttendanceController {
   }
 
   @Post('submit')
-  @Roles(
-    UserRole.TEACHER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('attendance.manage')
   @ApiOperation({
     summary: 'Submit attendance (lazy creation, bulk upsert, no duplicates)',
     description:
@@ -104,17 +91,11 @@ export class GroupAttendanceController {
   }
 
   @Post('reschedule')
-  @Roles(
-    UserRole.TEACHER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('attendance.manage')
   @ApiOperation({
     summary: 'Reschedule a lesson to a new date',
     description:
-      'Marks today\'s scheduled lesson as cancelled and adds a new extra lesson (toDate). ' +
+      "Marks today's scheduled lesson as cancelled and adds a new extra lesson (toDate). " +
       'toDate must not be a regular scheduled lesson date.',
   })
   @ApiParam({ name: 'groupId', type: Number })
@@ -135,13 +116,7 @@ export class GroupAttendanceController {
   }
 
   @Get()
-  @Roles(
-    UserRole.TEACHER,
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('attendance.view')
   @ApiOperation({
     summary: 'Attendance report (database-driven only)',
     description:

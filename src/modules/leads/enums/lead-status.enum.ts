@@ -4,4 +4,3 @@ export enum LeadStatus {
   DISCARDED = 'discarded',
   LATER = 'keyinroq',
 }
-

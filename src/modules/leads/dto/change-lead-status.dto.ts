@@ -16,4 +16,3 @@ export class ChangeLeadStatusDto {
   @IsString()
   reason?: string;
 }
-

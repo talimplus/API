@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Center } from './entities/centers.entity';
@@ -29,7 +33,8 @@ export class CentersService {
         where: { organization: { id: organizationId } as any },
       });
       const shouldBeDefault =
-        dto.isDefault === true || (existingCount === 0 && dto.isDefault !== false);
+        dto.isDefault === true ||
+        (existingCount === 0 && dto.isDefault !== false);
 
       if (shouldBeDefault) {
         await centerRepo

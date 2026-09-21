@@ -24,4 +24,3 @@ export class BlacklistedToken {
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
-

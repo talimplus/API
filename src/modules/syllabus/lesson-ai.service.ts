@@ -67,8 +67,10 @@ export class LessonAiService {
     user: string | AiChatMessage[],
   ): Promise<any> {
     const client = this.getClient();
-    const history: { role: 'system' | 'user' | 'assistant'; content: string }[] =
-      typeof user === 'string' ? [{ role: 'user', content: user }] : user;
+    const history: {
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+    }[] = typeof user === 'string' ? [{ role: 'user', content: user }] : user;
 
     const response = await client.chat.completions.create({
       model: this.model,
@@ -82,7 +84,7 @@ export class LessonAiService {
     } catch (e) {
       this.logger.error(`AI JSON parse xatosi: ${raw.slice(0, 500)}`);
       throw new ServiceUnavailableException(
-        'AI javobini o\'qib bo\'lmadi, qayta urinib ko\'ring',
+        "AI javobini o'qib bo'lmadi, qayta urinib ko'ring",
       );
     }
   }
@@ -103,13 +105,13 @@ export class LessonAiService {
       '',
       "Reja tuzishdan oldin quyidagi ma'lumotlar aniq bo'lishi kerak:",
       "1. Yo'nalish va qamrov — qaysi kurs/fan, unda nimalar o'rgatiladi (masalan frontend bo'lsa: HTML, CSS, JS, TypeScript kiradimi va h.k.).",
-      '2. Jami darslar soni. Foydalanuvchi buni bevosita aytmasligi mumkin — u holda kurs davomiyligi (necha oy) VA haftasiga necha kun dars bo\'lishini so\'rab, o\'zing hisoblaysan: jami darslar ≈ oylar soni × 4 hafta × haftadagi darslar soni.',
+      "2. Jami darslar soni. Foydalanuvchi buni bevosita aytmasligi mumkin — u holda kurs davomiyligi (necha oy) VA haftasiga necha kun dars bo'lishini so'rab, o'zing hisoblaysan: jami darslar ≈ oylar soni × 4 hafta × haftadagi darslar soni.",
       '',
       'Qoidalar:',
       "- Muhim ma'lumot yetishmasa, qisqa va aniq savol ber. Bir xabarda bir-ikkitadan ortiq savol berma, keraksiz narsani so'rama.",
       "- Auditoriya darajasi kabi ikkinchi darajali detallar aytilmasa, o'zing oqilona taxmin qil — qayta so'rab o'tirma.",
       "- Ma'lumot yetarli bo'lgach reja tuz: mavzular mantiqiy ketma-ketlikda, soddadan murakkabga, amaliy mashg'ulotlar va oraliq loyiha/imtihonlar bilan.",
-      "- Har mavzuga difficulty (easy, medium yoki hard) va estimatedLessons (mavzu nechta dars egallashi) belgila.",
+      '- Har mavzuga difficulty (easy, medium yoki hard) va estimatedLessons (mavzu nechta dars egallashi) belgila.',
       "- Barcha mavzular estimatedLessons yig'indisi jami darslar soniga teng yoki undan 1-3 dars kam bo'lsin (takrorlash uchun zaxira).",
       "- Faqat o'zbek tilida javob ber.",
       '',
@@ -221,10 +223,10 @@ export class LessonAiService {
       "Sen o'quv markazi uchun dars rejalashtiruvchi yordamchisan.",
       'Berilgan kurs mavzularini belgilangan darslar soniga teng va mantiqiy taqsimlab berasan.',
       'Qoidalar:',
-      '- Mavzular tartibini saqla (id tartibi emas, berilgan ro\'yxat tartibi).',
+      "- Mavzular tartibini saqla (id tartibi emas, berilgan ro'yxat tartibi).",
       "- Qiyin (hard) mavzularga ko'proq dars ajrat, oson (easy) va kichik mavzularni bitta darsga birlashtirishing mumkin.",
-      '- estimatedLessons maydoni mavzu odatda nechta dars egallashiga ishora, lekin jami darslar soniga sig\'dirish uchun moslashtir.',
-      '- Har bir dars kamida bitta mavzuga ega bo\'lishi shart emas (takrorlash/imtihon darslari bo\'sh qolishi mumkin), lekin barcha mavzular qamrab olinishi shart.',
+      "- estimatedLessons maydoni mavzu odatda nechta dars egallashiga ishora, lekin jami darslar soniga sig'dirish uchun moslashtir.",
+      "- Har bir dars kamida bitta mavzuga ega bo'lishi shart emas (takrorlash/imtihon darslari bo'sh qolishi mumkin), lekin barcha mavzular qamrab olinishi shart.",
       'Faqat quyidagi JSON formatda javob ber:',
       '{"lessons": [{"lessonNumber": 1, "topicIds": [12]}, {"lessonNumber": 2, "topicIds": [13, 14]}]}',
     ].join('\n');
@@ -253,9 +255,7 @@ export class LessonAiService {
 
       const topicIds = (Array.isArray(l?.topicIds) ? l.topicIds : [])
         .map((id: any) => Number(id))
-        .filter(
-          (id: number) => validTopicIds.has(id) && !usedTopicIds.has(id),
-        );
+        .filter((id: number) => validTopicIds.has(id) && !usedTopicIds.has(id));
       topicIds.forEach((id: number) => usedTopicIds.add(id));
 
       if (topicIds.length) cleaned.push({ lessonNumber, topicIds });
@@ -293,7 +293,7 @@ export class LessonAiService {
       "Sen tajribali o'qituvchi-metodist yordamchisan.",
       "Berilgan mavzu uchun o'zbek tilida, markdown formatida uchta material tayyorlaysan:",
       "1. guide — o'qituvchi uchun qo'llanma: mavzuni qanday tushuntirish, e'tibor beriladigan nuqtalar, ko'p uchraydigan xatolar.",
-      "2. lessonOutline — dars rejasi: darsning bosqichma-bosqich borishi (kirish, yangi mavzu, mashqlar, yakun).",
+      '2. lessonOutline — dars rejasi: darsning bosqichma-bosqich borishi (kirish, yangi mavzu, mashqlar, yakun).',
       '3. homework — uyga vazifa: aniq topshiriqlar.',
       'Faqat quyidagi JSON formatda javob ber:',
       '{"guide": "...", "lessonOutline": "...", "homework": "..."}',

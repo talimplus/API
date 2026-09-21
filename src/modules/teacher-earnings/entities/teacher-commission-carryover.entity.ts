@@ -43,4 +43,3 @@ export class TeacherCommissionCarryOver {
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
-

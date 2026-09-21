@@ -44,10 +44,24 @@ export class CreateUserDto {
   password: string;
 
   @ApiProperty({
-    example: UserRole.TEACHER,
+    example: 3,
+    description:
+      'Xodimning roli (`GET /roles` dan). Ruxsatlar shu roldan olinadi.',
   })
+  @IsOptional()
+  @IsNumber()
+  roleId?: number;
+
+  @ApiProperty({
+    example: UserRole.TEACHER,
+    required: false,
+    deprecated: true,
+    description:
+      'Eski maydon. `roleId` yuborilmagan bo‘lsa, shu tur bo‘yicha tizim roli tanlanadi.',
+  })
+  @IsOptional()
   @IsEnum(UserRole)
-  role: UserRole;
+  role?: UserRole;
 
   @ApiProperty({
     example: 2,

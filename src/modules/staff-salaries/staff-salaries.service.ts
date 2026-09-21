@@ -13,7 +13,10 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { dayjs } from '@/shared/utils/dayjs';
 import { PayStaffSalaryDto } from '@/modules/staff-salaries/dto/pay-staff-salary.dto';
 import { TeacherEarningsService } from '@/modules/teacher-earnings/teacher-earnings.service';
-import { PaymentReceipt, PaymentReceiptStatus } from '@/modules/payments/entities/payment-receipt.entity';
+import {
+  PaymentReceipt,
+  PaymentReceiptStatus,
+} from '@/modules/payments/entities/payment-receipt.entity';
 import { CurrentUser } from '@/common/types/current.user';
 
 @Injectable()
@@ -120,9 +123,7 @@ export class StaffSalariesService {
             { force },
           );
         baseSalary = Number((earning as any).totalEarning ?? 0);
-      } else if (
-        u.role === UserRole.MANAGER || u.role === UserRole.RECEPTION
-      ) {
+      } else if (u.role === UserRole.MANAGER || u.role === UserRole.RECEPTION) {
         // Add commission from payment receipts (confirmed receipts from previous month)
         const earningYm = dayjs(month)
           .subtract(1, 'month')
@@ -138,7 +139,9 @@ export class StaffSalariesService {
         const receipts = await this.receiptRepo
           .createQueryBuilder('r')
           .leftJoin('r.receivedBy', 'u')
-          .where('r.status = :status', { status: PaymentReceiptStatus.CONFIRMED })
+          .where('r.status = :status', {
+            status: PaymentReceiptStatus.CONFIRMED,
+          })
           .andWhere('u.id = :userId', { userId: u.id })
           .andWhere('r.confirmedAt >= :start', { start: earningMonthStart })
           .andWhere('r.confirmedAt <= :end', { end: earningMonthEnd })
@@ -192,11 +195,17 @@ export class StaffSalariesService {
     const monthStart = dayjs(month).startOf('month').toDate();
 
     // Ensure the month is populated so UI never sees an empty table.
-    await this.ensureSalariesForMonth(organizationId, month.slice(0, 7), centerId);
+    await this.ensureSalariesForMonth(
+      organizationId,
+      month.slice(0, 7),
+      centerId,
+    );
 
     const rows = await this.staffSalaryRepo
       .createQueryBuilder('salary')
       .leftJoinAndSelect('salary.user', 'user')
+      // Rol nomi dinamik ("Kassir", "Bosh menejer") — jadvalda shu ko'rsatiladi
+      .leftJoinAndSelect('user.userRole', 'userRole')
       .leftJoin('user.organization', 'organization')
       .leftJoin('user.center', 'center')
       .where('organization.id = :organizationId', { organizationId })
@@ -229,7 +238,9 @@ export class StaffSalariesService {
       .format('YYYY-MM');
 
     const teacherEarningById = new Map<number, any>();
-    const teacherUserIds = rows.filter((r) => r.user?.role === UserRole.TEACHER).map((r) => r.userId);
+    const teacherUserIds = rows
+      .filter((r) => r.user?.role === UserRole.TEACHER)
+      .map((r) => r.userId);
     if (teacherUserIds.length) {
       const earnings = await this.teacherEarningsService.listEarningsByUserIds(
         teacherUserIds,
@@ -298,7 +309,7 @@ export class StaffSalariesService {
     if (!salary) throw new NotFoundException('Salary record not found');
 
     if (salary.status === StaffSalaryStatus.PAID) {
-      throw new BadRequestException('Maosh allaqachon to\'liq to\'langan');
+      throw new BadRequestException("Maosh allaqachon to'liq to'langan");
     }
 
     const baseSalary = Number(salary.baseSalary ?? 0);

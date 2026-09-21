@@ -18,4 +18,3 @@ import { StudentsModule } from '@/modules/students/students.module';
   exports: [LeadsService],
 })
 export class LeadsModule {}
-

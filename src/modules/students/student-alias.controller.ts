@@ -2,6 +2,7 @@ import { Controller, Get, Query, Req } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { StudentsService } from '@/modules/students/students.service';
 import { PaginatedStudentResponseDto } from '@/modules/students/dto/paginate-student-response.dto';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
@@ -13,6 +14,7 @@ export class StudentAliasController {
   constructor(private readonly studentsService: StudentsService) {}
 
   @Get()
+  @RequirePermissions('students.view')
   @ApiOperation({ summary: 'Get all students (alias: /student)' })
   @ApiResponse({ type: PaginatedStudentResponseDto })
   @ApiQuery({ name: 'centerId', required: false })
@@ -84,4 +86,3 @@ export class StudentAliasController {
     );
   }
 }
-

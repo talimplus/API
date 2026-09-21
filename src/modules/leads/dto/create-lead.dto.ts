@@ -16,7 +16,10 @@ import { LeadStatus } from '@/modules/leads/enums/lead-status.enum';
 import { IsDateString } from 'class-validator';
 
 export class CreateLeadDto {
-  @ApiProperty({ example: '998901234567', description: 'Lead phone (required)' })
+  @ApiProperty({
+    example: '998901234567',
+    description: 'Lead phone (required)',
+  })
   @IsNotEmpty()
   @IsString()
   phone: string;
@@ -60,7 +63,7 @@ export class CreateLeadDto {
   @IsString()
   discountReason?: string;
 
-  @ApiProperty({ example: "Lead haqida izoh", required: false })
+  @ApiProperty({ example: 'Lead haqida izoh', required: false })
   @IsOptional()
   @IsString()
   comment?: string;
@@ -116,7 +119,7 @@ export class CreateLeadDto {
     example: 2,
     required: false,
     description:
-      "centerId faqat admin/super_admin lead yaratishda yuborishi mumkin (aks holda tokendan olinadi)",
+      'centerId faqat admin/super_admin lead yaratishda yuborishi mumkin (aks holda tokendan olinadi)',
   })
   @IsOptional()
   @IsNumber()
@@ -125,10 +128,10 @@ export class CreateLeadDto {
   @ApiProperty({
     example: '2026-01-20',
     required: false,
-    description: 'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
+    description:
+      'Follow-up date: when to contact the lead again (YYYY-MM-DD format)',
   })
   @IsOptional()
   @IsDateString()
   followUpDate?: string;
 }
-

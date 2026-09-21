@@ -29,4 +29,3 @@ export class TeacherMonthlyEarningResponseDto {
   @ApiProperty({ type: () => UserResponseDto })
   teacher: UserResponseDto;
 }
-

@@ -10,7 +10,10 @@ export class StaffSalaryResponseDto {
   @ApiProperty({ example: 10 })
   userId: number;
 
-  @ApiProperty({ example: '2026-01-01', description: 'First day of month (DATE)' })
+  @ApiProperty({
+    example: '2026-01-01',
+    description: 'First day of month (DATE)',
+  })
   forMonth: string;
 
   @ApiProperty({ example: 1000000 })
@@ -22,7 +25,11 @@ export class StaffSalaryResponseDto {
   @ApiProperty({ enum: StaffSalaryStatus, example: StaffSalaryStatus.PARTIAL })
   status: StaffSalaryStatus;
 
-  @ApiProperty({ example: '2026-01-15T10:00:00.000Z', required: false, nullable: true })
+  @ApiProperty({
+    example: '2026-01-15T10:00:00.000Z',
+    required: false,
+    nullable: true,
+  })
   paidAt?: string | null;
 
   @ApiProperty({ example: 'Paid cash', required: false, nullable: true })
@@ -85,4 +92,3 @@ export class StaffSalaryResponseDto {
   })
   earningTotalEarning?: number | null;
 }
-

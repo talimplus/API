@@ -43,4 +43,3 @@ export class StudentDiscountPeriod {
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
-

@@ -54,4 +54,3 @@ export class TeacherMonthlyEarning {
   @Column({ type: 'timestamp', default: () => 'now()' })
   calculatedAt: Date;
 }
-

@@ -6,7 +6,10 @@ export class CalculateTeacherEarningDto {
   @IsInt()
   teacherId: number;
 
-  @ApiProperty({ example: '2025-12', description: 'Month being earned (YYYY-MM)' })
+  @ApiProperty({
+    example: '2025-12',
+    description: 'Month being earned (YYYY-MM)',
+  })
   @IsString()
   forMonth: string;
 
@@ -15,4 +18,3 @@ export class CalculateTeacherEarningDto {
   @IsBoolean()
   force?: boolean;
 }
-

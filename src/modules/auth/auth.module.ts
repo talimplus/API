@@ -10,6 +10,7 @@ import { SubscriptionsModule } from '@/modules/subscriptions/subscriptions.modul
 import { CentersModule } from '@/modules/centers/centers.module';
 import { OrganizationsModule } from '@/modules/organizations/organizations.module';
 import { BlacklistModule } from '@/modules/blacklist/blacklist.module';
+import { RolesModule } from '@/modules/roles/roles.module';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -20,6 +21,7 @@ dotenv.config();
     OrganizationsModule,
     ConfigModule,
     UsersModule,
+    RolesModule,
     CentersModule,
     BlacklistModule,
     JwtModule.register({

@@ -11,8 +11,7 @@ import {
   Delete,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { SyllabusService } from './syllabus.service';
 import { CreateSyllabusDto } from './dto/create-syllabus.dto';
 import { UpdateSyllabusDto } from './dto/update-syllabus.dto';
@@ -29,14 +28,15 @@ export class SyllabusController {
   constructor(private readonly syllabusService: SyllabusService) {}
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.manage')
   @ApiOperation({ summary: 'Yangi kurs rejasi yaratish' })
   create(@Body() dto: CreateSyllabusDto, @Req() req: any) {
     return this.syllabusService.create(dto, req.user);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Kurs rejalari ro\'yxati' })
+  @RequirePermissions('syllabus.view')
+  @ApiOperation({ summary: "Kurs rejalari ro'yxati" })
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -57,7 +57,7 @@ export class SyllabusController {
   // ---------- AI bilan reja tuzish ----------
 
   @Post('ai/chat')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.ai')
   @ApiOperation({
     summary:
       "AI bilan chat orqali kurs rejasi tuzish. Ma'lumot yetishmasa {type: 'question'}, tayyor bo'lsa {type: 'plan'} qaytaradi (saqlamaydi)",
@@ -67,7 +67,7 @@ export class SyllabusController {
   }
 
   @Post('ai/save')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.ai')
   @ApiOperation({
     summary:
       'AI tuzgan rejani mavzulari bilan birga saqlash (foydalanuvchi tasdiqlagandan keyin)',
@@ -77,13 +77,14 @@ export class SyllabusController {
   }
 
   @Get(':id')
+  @RequirePermissions('syllabus.view')
   @ApiOperation({ summary: 'Kurs rejasi (mavzulari bilan)' })
   findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.syllabusService.findOne(id, req.user);
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.manage')
   @ApiOperation({ summary: 'Kurs rejasini yangilash' })
   update(
     @Param('id', ParseIntPipe) id: number,
@@ -94,8 +95,8 @@ export class SyllabusController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
-  @ApiOperation({ summary: 'Kurs rejasini o\'chirish' })
+  @RequirePermissions('syllabus.manage')
+  @ApiOperation({ summary: "Kurs rejasini o'chirish" })
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.syllabusService.remove(id, req.user);
   }
@@ -103,8 +104,8 @@ export class SyllabusController {
   // ---------- Mavzular ----------
 
   @Post(':id/topics')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
-  @ApiOperation({ summary: 'Kurs rejasiga mavzu qo\'shish (oxiriga)' })
+  @RequirePermissions('syllabus.manage')
+  @ApiOperation({ summary: "Kurs rejasiga mavzu qo'shish (oxiriga)" })
   addTopic(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CreateTopicDto,
@@ -114,8 +115,8 @@ export class SyllabusController {
   }
 
   @Put(':id/topics/reorder')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
-  @ApiOperation({ summary: 'Mavzular tartibini o\'zgartirish' })
+  @RequirePermissions('syllabus.manage')
+  @ApiOperation({ summary: "Mavzular tartibini o'zgartirish" })
   reorderTopics(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReorderTopicsDto,
@@ -125,7 +126,7 @@ export class SyllabusController {
   }
 
   @Put(':id/topics/:topicId')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.manage')
   @ApiOperation({ summary: 'Mavzuni yangilash' })
   updateTopic(
     @Param('id', ParseIntPipe) id: number,
@@ -137,8 +138,8 @@ export class SyllabusController {
   }
 
   @Delete(':id/topics/:topicId')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
-  @ApiOperation({ summary: 'Mavzuni o\'chirish' })
+  @RequirePermissions('syllabus.manage')
+  @ApiOperation({ summary: "Mavzuni o'chirish" })
   removeTopic(
     @Param('id', ParseIntPipe) id: number,
     @Param('topicId', ParseIntPipe) topicId: number,
@@ -148,7 +149,7 @@ export class SyllabusController {
   }
 
   @Post(':id/topics/:topicId/generate-content')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @RequirePermissions('syllabus.ai')
   @ApiOperation({
     summary:
       "AI bilan mavzu uchun qo'llanma/dars rejasi/uy vazifasi qoralamasini yaratish (saqlamaydi — tahrirlab PUT bilan saqlanadi)",

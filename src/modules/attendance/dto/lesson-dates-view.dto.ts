@@ -99,12 +99,25 @@ export class LessonDatesViewDto {
   @ApiProperty({
     example: {
       '2026-01-06': { exists: false, rows: [] },
-      '2026-01-03': { exists: true, rows: [{ id: 1, groupId: 10, studentId: 123, lessonDate: '2026-01-03', status: 'present', comment: null, submittedById: 55, submittedAt: '2026-01-03T10:00:00.000Z', updatedAt: '2026-01-03T10:00:00.000Z' }] },
+      '2026-01-03': {
+        exists: true,
+        rows: [
+          {
+            id: 1,
+            groupId: 10,
+            studentId: 123,
+            lessonDate: '2026-01-03',
+            status: 'present',
+            comment: null,
+            submittedById: 55,
+            submittedAt: '2026-01-03T10:00:00.000Z',
+            updatedAt: '2026-01-03T10:00:00.000Z',
+          },
+        ],
+      },
     },
     description:
       'Keyed by lessonDate. Missing attendance rows are expected and represented as exists=false.',
   })
   attendanceByDate: Record<string, AttendanceByDateDto>;
 }
-
-

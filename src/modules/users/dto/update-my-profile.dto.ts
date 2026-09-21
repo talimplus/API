@@ -27,4 +27,3 @@ export class UpdateMyProfileDto {
   @MinLength(6)
   password?: string;
 }
-

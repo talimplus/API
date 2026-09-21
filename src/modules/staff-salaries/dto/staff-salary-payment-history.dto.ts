@@ -7,7 +7,11 @@ export class StaffSalaryPaymentHistoryDto {
   @ApiProperty({ example: 200000 })
   amount: number;
 
-  @ApiProperty({ example: 'Paid by bank transfer', required: false, nullable: true })
+  @ApiProperty({
+    example: 'Paid by bank transfer',
+    required: false,
+    nullable: true,
+  })
   comment?: string | null;
 
   @ApiProperty({ example: '2026-01-15T10:00:00.000Z' })

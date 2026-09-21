@@ -55,7 +55,9 @@ export function computeLessonDates(args: ComputeLessonDatesArgs): string[] {
 
     const rangeStart = from.isAfter(start) ? from : start;
     const rangeEnd = endBoundary
-      ? (to.isBefore(endBoundary) ? to : endBoundary)
+      ? to.isBefore(endBoundary)
+        ? to
+        : endBoundary
       : to;
 
     if (rangeEnd.isBefore(rangeStart)) return [];
@@ -76,14 +78,19 @@ export function computeLessonDates(args: ComputeLessonDatesArgs): string[] {
   if (!count) return [];
 
   const latest = endBoundary
-    ? (today.isBefore(endBoundary) ? today : endBoundary)
+    ? today.isBefore(endBoundary)
+      ? today
+      : endBoundary
     : today;
 
   if (latest.isBefore(start)) return [];
 
   const found: string[] = [];
   let cursor = latest;
-  while ((cursor.isSame(start) || cursor.isAfter(start)) && found.length < count) {
+  while (
+    (cursor.isSame(start) || cursor.isAfter(start)) &&
+    found.length < count
+  ) {
     if (scheduleDows.includes(cursor.day())) {
       found.push(cursor.format('YYYY-MM-DD'));
     }
@@ -92,5 +99,3 @@ export function computeLessonDates(args: ComputeLessonDatesArgs): string[] {
 
   return found.reverse();
 }
-
-

@@ -23,7 +23,7 @@ export class SubmitAttendanceItemDto {
 
   @ApiProperty({
     required: false,
-    example: 'Kasal bo\'lgani uchun',
+    example: "Kasal bo'lgani uchun",
     description:
       'Optional note. REQUIRED when status is "excused" (sababli) — used as the excuse reason and to justify the payment deduction.',
   })
@@ -51,5 +51,3 @@ export class SubmitAttendanceDto {
   @Type(() => SubmitAttendanceItemDto)
   items: SubmitAttendanceItemDto[];
 }
-
-

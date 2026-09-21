@@ -14,6 +14,7 @@ import { SubjectsService } from './subjects.service';
 import { CreateSubjectDto } from './dto/create-subject.dto';
 import { UpdateSubjectDto } from './dto/update-subject.dto';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { PaginatedSubjectResponseDto } from '@/modules/subjects/dto/paginated-subject-response';
 import { SubjectResponseDto } from '@/modules/subjects/dto/subject-response.dto';
 
@@ -23,12 +24,14 @@ export class SubjectsController {
   constructor(private readonly subjectsService: SubjectsService) {}
 
   @Post()
+  @RequirePermissions('subjects.manage')
   @ApiOperation({ summary: 'Create new subject' })
   create(@Body() dto: CreateSubjectDto, @Req() req: any) {
     return this.subjectsService.create(dto, req.user.centerId);
   }
 
   @Get()
+  @RequirePermissions('subjects.view')
   @ApiOperation({ summary: 'Get all subjects' })
   @ApiResponse({ type: PaginatedSubjectResponseDto })
   findAll(
@@ -47,6 +50,7 @@ export class SubjectsController {
   }
 
   @Get(':id')
+  @RequirePermissions('subjects.view')
   @ApiResponse({ type: SubjectResponseDto })
   @ApiOperation({ summary: 'Get subject by id' })
   findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
@@ -54,6 +58,7 @@ export class SubjectsController {
   }
 
   @Put(':id')
+  @RequirePermissions('subjects.manage')
   @ApiResponse({ type: SubjectResponseDto })
   @ApiOperation({ summary: 'Update subject' })
   update(
@@ -65,6 +70,7 @@ export class SubjectsController {
   }
 
   @Delete(':id')
+  @RequirePermissions('subjects.manage')
   @ApiOperation({ summary: 'Delete subject by id' })
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.subjectsService.remove(id, req.user.centerId);

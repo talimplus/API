@@ -9,7 +9,10 @@ import { TeacherMonthlyEarning } from '@/modules/teacher-earnings/entities/teach
 import { TeacherCommissionCarryOver } from '@/modules/teacher-earnings/entities/teacher-commission-carryover.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
-import { Payment, PaymentStatus } from '@/modules/payments/entities/payment.entity';
+import {
+  Payment,
+  PaymentStatus,
+} from '@/modules/payments/entities/payment.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
@@ -159,7 +162,10 @@ export class TeacherEarningsService {
       0,
       Math.min(100, Number(teacher.commissionPercentage ?? 0)),
     );
-    const grossPaid = await this.computeCommissionAmount(teacherId, earningMonth);
+    const grossPaid = await this.computeCommissionAmount(
+      teacherId,
+      earningMonth,
+    );
     const commissionAmount = this.round2(
       Math.max(0, grossPaid * (commissionPct / 100)),
     );
@@ -221,7 +227,9 @@ export class TeacherEarningsService {
 
     const carryOverCommission = this.round2(alreadyAppliedSum + toApplySum);
 
-    const totalEarning = this.round2(baseSalary + commissionAmount + carryOverCommission);
+    const totalEarning = this.round2(
+      baseSalary + commissionAmount + carryOverCommission,
+    );
 
     const snapshot =
       existing ??
@@ -263,7 +271,10 @@ export class TeacherEarningsService {
     return savedSnapshot;
   }
 
-  async ensureTeacherEarningsForMonth(organizationId: number, forMonthYM: string) {
+  async ensureTeacherEarningsForMonth(
+    organizationId: number,
+    forMonthYM: string,
+  ) {
     const forMonth = this.normalizeForMonthYM(forMonthYM);
 
     const teachers = await this.userRepo
@@ -271,15 +282,22 @@ export class TeacherEarningsService {
       .leftJoin('u.organization', 'org')
       .where('org.id = :organizationId', { organizationId })
       .andWhere('u.role = :role', { role: UserRole.TEACHER })
-      .andWhere('(COALESCE(u.salary, 0) > 0 OR COALESCE(u.commissionPercentage, 0) > 0)')
+      .andWhere(
+        '(COALESCE(u.salary, 0) > 0 OR COALESCE(u.commissionPercentage, 0) > 0)',
+      )
       .getMany();
 
     for (const t of teachers) {
       // No force: create if missing
       // eslint-disable-next-line no-await-in-loop
-      await this.calculateTeacherEarningsForMonth(organizationId, t.id, forMonth.slice(0, 7), {
-        force: false,
-      });
+      await this.calculateTeacherEarningsForMonth(
+        organizationId,
+        t.id,
+        forMonth.slice(0, 7),
+        {
+          force: false,
+        },
+      );
     }
   }
 
@@ -295,7 +313,10 @@ export class TeacherEarningsService {
   async listEarnings(organizationId: number, forMonthYM: string) {
     const forMonth = this.normalizeForMonthYM(forMonthYM);
 
-    await this.ensureTeacherEarningsForMonth(organizationId, forMonth.slice(0, 7));
+    await this.ensureTeacherEarningsForMonth(
+      organizationId,
+      forMonth.slice(0, 7),
+    );
 
     return this.earningRepo
       .createQueryBuilder('e')
@@ -307,4 +328,3 @@ export class TeacherEarningsService {
       .getMany();
   }
 }
-

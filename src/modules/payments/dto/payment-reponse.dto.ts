@@ -21,7 +21,8 @@ export class PaymentResponseDto {
 
   @ApiProperty({
     example: 50000.0,
-    description: 'How much was refunded to the student for this month (cumulative)',
+    description:
+      'How much was refunded to the student for this month (cumulative)',
   })
   refundedAmount: number;
 
@@ -34,7 +35,8 @@ export class PaymentResponseDto {
 
   @ApiProperty({
     example: true,
-    description: 'True if there is at least one pending receipt for this payment.',
+    description:
+      'True if there is at least one pending receipt for this payment.',
   })
   hasPendingReceipt: boolean;
 
@@ -56,7 +58,8 @@ export class PaymentResponseDto {
       { percent: 10, reason: 'Base: Referral' },
       { percent: 20, reason: 'Yaxshi o‘qigani uchun' },
     ],
-    description: 'Breakdown of all discounts contributing to discountPercentApplied.',
+    description:
+      'Breakdown of all discounts contributing to discountPercentApplied.',
   })
   discountBreakdown: Array<{ percent: number; reason: string }>;
 
@@ -71,7 +74,7 @@ export class PaymentResponseDto {
     example: 270000.0,
     description:
       "amountPaid + pendingAmount. O'quvchi haqiqatda topshirgan pul: tasdiqlangan " +
-      "summa + reception olgan, lekin hali tasdiqlanmagan summa.",
+      'summa + reception olgan, lekin hali tasdiqlanmagan summa.',
   })
   receivedAmount: number;
 
@@ -79,7 +82,7 @@ export class PaymentResponseDto {
     example: 0,
     description:
       "amountDue - receivedAmount. O'quvchidan hali OLINISHI KERAK bo'lgan summa " +
-      '(tasdiq kutayotgan pul ham hisobga olinadi, chunki uni o\'quvchi allaqachon topshirgan).',
+      "(tasdiq kutayotgan pul ham hisobga olinadi, chunki uni o'quvchi allaqachon topshirgan).",
   })
   payableNow: number;
 
@@ -95,7 +98,10 @@ export class PaymentResponseDto {
   })
   isOverdue: boolean;
 
-  @ApiProperty({ example: 12, description: 'Total scheduled lessons in the month' })
+  @ApiProperty({
+    example: 12,
+    description: 'Total scheduled lessons in the month',
+  })
   lessonsPlanned: number;
 
   @ApiProperty({
@@ -117,7 +123,10 @@ export class PaymentResponseDto {
   @ApiProperty({ enum: PaymentStatus, example: PaymentStatus.PARTIAL })
   status: PaymentStatus;
 
-  @ApiProperty({ example: '2025-06-01', description: 'First day of month (DATE)' })
+  @ApiProperty({
+    example: '2025-06-01',
+    description: 'First day of month (DATE)',
+  })
   forMonth: string;
 
   @ApiProperty({ example: '2025-05-18T21:00:00.000Z' })

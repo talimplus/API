@@ -35,4 +35,3 @@ export class UpdateExpenseDto {
   @IsString()
   forMonth?: string;
 }
-

@@ -3,4 +3,3 @@ export enum StudentReturnLikelihood {
   MAYBE = 'maybe', // 50/50
   SURE = 'sure',
 }
-

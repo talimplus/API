@@ -48,7 +48,14 @@ export class GroupPlanService {
   private async getGroupOrThrow(groupId: number): Promise<Group> {
     const group = await this.groupRepo.findOne({
       where: { id: groupId },
-      relations: ['schedules', 'center', 'subject', 'room', 'teacher', 'syllabus'],
+      relations: [
+        'schedules',
+        'center',
+        'subject',
+        'room',
+        'teacher',
+        'syllabus',
+      ],
     });
     if (!group) throw new NotFoundException('Guruh topilmadi');
     return group;
@@ -70,10 +77,7 @@ export class GroupPlanService {
    */
   private assertCanEditGroupPlan(user: any, group: Group) {
     this.assertCanAccessGroup(user, group);
-    if (
-      user?.role === UserRole.TEACHER &&
-      group.teacher?.id !== user.userId
-    ) {
+    if (user?.role === UserRole.TEACHER && group.teacher?.id !== user.userId) {
       throw new ForbiddenException(
         "Faqat o'zingiz dars beradigan guruh rejasini o'zgartira olasiz",
       );
@@ -262,9 +266,7 @@ export class GroupPlanService {
     });
     if (!syllabus) throw new NotFoundException('Kurs rejasi topilmadi');
     if (group.center?.id && syllabus.center?.id !== group.center.id) {
-      throw new ForbiddenException(
-        'Kurs rejasi boshqa markazga tegishli',
-      );
+      throw new ForbiddenException('Kurs rejasi boshqa markazga tegishli');
     }
 
     // Boshqa syllabusga o'tishda eski biriktirishlar ma'nosini yo'qotadi
@@ -288,12 +290,10 @@ export class GroupPlanService {
     this.assertCanEditGroupPlan(user, group);
 
     if (!Number.isInteger(lessonNumber) || lessonNumber < 1) {
-      throw new BadRequestException("Dars raqami 1 dan boshlanadi");
+      throw new BadRequestException('Dars raqami 1 dan boshlanadi');
     }
     if (!group.syllabus) {
-      throw new BadRequestException(
-        'Avval guruhga kurs rejasini biriktiring',
-      );
+      throw new BadRequestException('Avval guruhga kurs rejasini biriktiring');
     }
 
     const uniqueIds = Array.from(new Set(dto.topicIds));
@@ -328,9 +328,7 @@ export class GroupPlanService {
     this.assertCanEditGroupPlan(user, group);
 
     if (!group.syllabus) {
-      throw new BadRequestException(
-        'Avval guruhga kurs rejasini biriktiring',
-      );
+      throw new BadRequestException('Avval guruhga kurs rejasini biriktiring');
     }
     if (!group.schedules?.length && !dto.totalLessons) {
       throw new BadRequestException('Guruh jadvali sozlanmagan');
@@ -344,7 +342,7 @@ export class GroupPlanService {
       (a, b) => a.orderIndex - b.orderIndex,
     );
     if (!topics.length) {
-      throw new BadRequestException('Kurs rejasida mavzular yo\'q');
+      throw new BadRequestException("Kurs rejasida mavzular yo'q");
     }
 
     let totalLessons = dto.totalLessons;
@@ -359,7 +357,7 @@ export class GroupPlanService {
       totalLessons = dates.length;
     }
     if (!totalLessons) {
-      throw new BadRequestException("Jami darslar soni 0 chiqdi");
+      throw new BadRequestException('Jami darslar soni 0 chiqdi');
     }
 
     const distributed = await this.lessonAiService.distributeTopics({

@@ -17,10 +17,12 @@ import { StatisticsModule } from '@/modules/statistics/statistics.module';
 import { LeadsModule } from '@/modules/leads/leads.module';
 import { SyllabusModule } from '@/modules/syllabus/syllabus.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
+import { RolesModule } from '@/modules/roles/roles.module';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { AccessGuard } from '@/guards/access.guard';
 import { JwtAuthGuard } from '@/guards/auth.guard';
 import { RolesGuard } from '@/guards/roles.guard';
+import { PermissionsGuard } from '@/guards/permissions.guard';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
@@ -33,6 +35,7 @@ import { Module } from '@nestjs/common';
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot(dataSourceOptions),
     AuthModule,
+    RolesModule,
     UsersModule,
     StaffSalariesModule,
     CentersModule,
@@ -66,6 +69,11 @@ import { Module } from '@nestjs/common';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    {
+      // Dinamik ruxsatlar: `@RequirePermissions(...)` bo'lgan endpoint'larni tekshiradi
+      provide: APP_GUARD,
+      useClass: PermissionsGuard,
     },
   ],
   controllers: [],

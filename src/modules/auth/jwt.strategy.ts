@@ -29,7 +29,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         : null;
 
     if (token) {
-      const isBlacklisted = await this.blacklistService.isTokenBlacklisted(token);
+      const isBlacklisted =
+        await this.blacklistService.isTokenBlacklisted(token);
       if (isBlacklisted) {
         throw new UnauthorizedException('Token is blacklisted');
       }
@@ -39,6 +40,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId: payload.sub,
       email: payload.email,
       role: payload.role,
+      roleId: payload.roleId ?? null,
       centerId: payload.centerId,
       organizationId: payload.organizationId,
     };

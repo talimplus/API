@@ -8,5 +8,3 @@ dayjsLib.extend(utc);
 dayjsLib.extend(timezone);
 
 export const dayjs = dayjsLib;
-
-

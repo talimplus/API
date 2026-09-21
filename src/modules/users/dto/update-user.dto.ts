@@ -53,10 +53,20 @@ export class UpdateUserDto {
   @MinLength(6)
   password?: string;
 
+  @ApiProperty({
+    example: 3,
+    required: false,
+    description: 'Yangi rol (`GET /roles` dan). Ruxsatlar shu roldan olinadi.',
+  })
+  @IsOptional()
+  @IsNumber()
+  roleId?: number;
+
   @IsOptional()
   @ApiProperty({
     example: UserRole.TEACHER,
     required: false,
+    deprecated: true,
   })
   @IsEnum(UserRole)
   role?: UserRole;

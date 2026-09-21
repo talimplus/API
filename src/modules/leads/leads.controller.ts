@@ -23,8 +23,7 @@ import { CreateLeadDto } from '@/modules/leads/dto/create-lead.dto';
 import { UpdateLeadDto } from '@/modules/leads/dto/update-lead.dto';
 import { LeadResponseDto } from '@/modules/leads/dto/lead-response.dto';
 import { PaginatedLeadResponseDto } from '@/modules/leads/dto/paginated-lead-response.dto';
-import { Roles } from '@/decorators/roles.decorator';
-import { UserRole } from '@/common/enums/user-role.enums';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { LeadStatus } from '@/modules/leads/enums/lead-status.enum';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ChangeLeadStatusDto } from '@/modules/leads/dto/change-lead-status.dto';
@@ -36,7 +35,7 @@ export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
   @Get()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('leads.view')
   @ApiOperation({ summary: 'List leads (paginated)' })
   @ApiQuery({ name: 'centerId', required: false })
   @ApiQuery({ name: 'name', required: false })
@@ -46,7 +45,8 @@ export class LeadsController {
   @ApiQuery({
     name: 'followUpDate',
     required: false,
-    description: "Filter by follow-up date. Use 'today' for today's date or YYYY-MM-DD format for specific date",
+    description:
+      "Filter by follow-up date. Use 'today' for today's date or YYYY-MM-DD format for specific date",
   })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
@@ -79,7 +79,7 @@ export class LeadsController {
   }
 
   @Post()
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('leads.create')
   @ApiOperation({ summary: 'Create lead' })
   @ApiBody({ type: CreateLeadDto })
   @ApiResponse({ type: LeadResponseDto })
@@ -88,8 +88,10 @@ export class LeadsController {
   }
 
   @Put('change-status/:id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
-  @ApiOperation({ summary: 'Change lead status (optionally append reason into comment)' })
+  @RequirePermissions('leads.update')
+  @ApiOperation({
+    summary: 'Change lead status (optionally append reason into comment)',
+  })
   @ApiBody({ type: ChangeLeadStatusDto })
   @ApiResponse({ type: LeadResponseDto })
   changeStatus(
@@ -97,11 +99,16 @@ export class LeadsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ChangeLeadStatusDto,
   ) {
-    return this.leadsService.changeStatus(req.user.organizationId, id, dto, req.user);
+    return this.leadsService.changeStatus(
+      req.user.organizationId,
+      id,
+      dto,
+      req.user,
+    );
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('leads.update')
   @ApiOperation({ summary: 'Update lead' })
   @ApiBody({ type: UpdateLeadDto })
   @ApiResponse({ type: LeadResponseDto })
@@ -110,11 +117,16 @@ export class LeadsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateLeadDto,
   ) {
-    return this.leadsService.update(req.user.organizationId, id, dto as any, req.user);
+    return this.leadsService.update(
+      req.user.organizationId,
+      id,
+      dto as any,
+      req.user,
+    );
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('leads.delete')
   @ApiOperation({ summary: 'Delete lead' })
   @ApiResponse({ schema: { example: { success: true } } })
   remove(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
@@ -122,8 +134,10 @@ export class LeadsController {
   }
 
   @Post(':id/transfer-to-student')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
-  @ApiOperation({ summary: 'Transfer lead to student (create student + mark lead converted)' })
+  @RequirePermissions('leads.transfer')
+  @ApiOperation({
+    summary: 'Transfer lead to student (create student + mark lead converted)',
+  })
   @ApiBody({
     type: CreateStudentDto,
     description:
@@ -135,7 +149,11 @@ export class LeadsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CreateStudentDto,
   ) {
-    return this.leadsService.transferToStudent(req.user.organizationId, id, req.user, dto);
+    return this.leadsService.transferToStudent(
+      req.user.organizationId,
+      id,
+      req.user,
+      dto,
+    );
   }
 }
-

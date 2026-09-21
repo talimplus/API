@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Expense } from '@/modules/expenses/entities/expenses.entity';
@@ -171,8 +175,10 @@ export class ExpensesService {
     }
     if (dto.name !== undefined) patch.name = dto.name;
     if (dto.amount !== undefined) patch.amount = dto.amount;
-    if (dto.description !== undefined) patch.description = dto.description ?? null;
-    if (dto.forMonth !== undefined) patch.forMonth = this.normalizeForMonth(dto.forMonth) as any;
+    if (dto.description !== undefined)
+      patch.description = dto.description ?? null;
+    if (dto.forMonth !== undefined)
+      patch.forMonth = this.normalizeForMonth(dto.forMonth) as any;
 
     await this.expenseRepo.update({ id }, patch);
     return this.findOne(organizationId, id);
@@ -185,4 +191,3 @@ export class ExpensesService {
     return { success: true };
   }
 }
-

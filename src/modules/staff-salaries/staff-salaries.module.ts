@@ -10,7 +10,12 @@ import { TeacherEarningsModule } from '@/modules/teacher-earnings/teacher-earnin
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([StaffSalary, StaffSalaryPayment, PaymentReceipt, User]),
+    TypeOrmModule.forFeature([
+      StaffSalary,
+      StaffSalaryPayment,
+      PaymentReceipt,
+      User,
+    ]),
     forwardRef(() => TeacherEarningsModule),
   ],
   providers: [StaffSalariesService],
@@ -18,4 +23,3 @@ import { TeacherEarningsModule } from '@/modules/teacher-earnings/teacher-earnin
   exports: [StaffSalariesService],
 })
 export class StaffSalariesModule {}
-

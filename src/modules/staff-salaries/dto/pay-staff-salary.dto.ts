@@ -12,4 +12,3 @@ export class PayStaffSalaryDto {
   @IsString()
   comment?: string;
 }
-

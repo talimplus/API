@@ -13,8 +13,12 @@ export class CustomValidationPipe extends ValidationPipe {
 
         const collect = (errs: any[], parentPath = '') => {
           for (const error of errs) {
-            const field = parentPath ? `${parentPath}.${error.property}` : error.property;
-            const constraints = error?.constraints ? Object.values(error.constraints) : [];
+            const field = parentPath
+              ? `${parentPath}.${error.property}`
+              : error.property;
+            const constraints = error?.constraints
+              ? Object.values(error.constraints)
+              : [];
             if (constraints.length > 0) {
               formattedErrors[field] = String(constraints[0]);
             }

@@ -14,7 +14,7 @@ export class PayStudentDebtDto {
     example: 600000,
     description:
       "To'lov summasi. Bo'sh qoldirilsa, o'quvchining jami qarzi to'liq to'lanadi. " +
-      "Summa eng eski oydan boshlab taqsimlanadi (oldest-first).",
+      'Summa eng eski oydan boshlab taqsimlanadi (oldest-first).',
   })
   @IsOptional()
   @IsNumber()

@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
-import { Roles } from '@/decorators/roles.decorator';
+import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { UpdateUserDto } from '@/modules/users/dto/update-user.dto';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { ApiOperation, ApiResponse, ApiTags, ApiBody } from '@nestjs/swagger';
@@ -27,10 +27,10 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   /**
-   * 🔐 Faqat admin (ya'ni markaz egasi) yangi user (teacher, manager, other) qo‘shadi
+   * 🔐 `users.create` ruxsatiga ega xodim yangi xodim qo‘shadi (roli tanlanadi)
    */
   @Post()
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.create')
   @ApiOperation({ summary: 'Create new user' })
   @ApiResponse({ type: UserResponseDto })
   async create(@Body() dto: CreateUserDto, @Req() req: any) {
@@ -45,7 +45,7 @@ export class UsersController {
    * 📩 Email orqali foydalanuvchini topish (masalan, tizim ichida)
    */
   @Get('email/:email')
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.view')
   @ApiOperation({ summary: 'Find user by email' })
   @ApiResponse({ type: UserResponseDto })
   async findOneByEmail(@Param('email') email: string) {
@@ -53,22 +53,23 @@ export class UsersController {
   }
 
   @Put(':id')
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.update')
   @ApiOperation({ summary: 'Update user' })
   @ApiBody({ type: UpdateUserDto })
   @ApiResponse({ type: UserResponseDto })
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateUserDto,
+    @Req() req: any,
   ) {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(id, dto, req.user.organizationId);
   }
 
   /**
    * 📋 Hozirgi markazdagi barcha foydalanuvchilar
    */
   @Get()
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.view')
   @ApiOperation({ summary: 'Get all users' })
   @ApiResponse({ type: PaginatedUserResponseDto })
   @ApiQuery({ name: 'role', required: false, enum: UserRole })
@@ -94,8 +95,10 @@ export class UsersController {
   /**
    * 👷 Ishchilar ro'yxati (studentlar emas): teacher/manager/other
    */
+  // Xodimlar ro'yxati guruh yaratish/tahrirlash formasida o'qituvchi tanlash
+  // uchun ham kerak — shuning uchun guruh boshqarish ruxsati ham yetarli.
   @Get('employees')
-  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.RECEPTION)
+  @RequirePermissions('users.view', 'groups.create', 'groups.update')
   @ApiOperation({ summary: 'Get employees (non-students)' })
   @ApiResponse({ type: PaginatedUserResponseDto })
   async findEmployees(
@@ -118,13 +121,10 @@ export class UsersController {
   /**
    * 👩‍🏫 O'qituvchilar ro'yxati (paginatsiyasiz) — filter/select uchun
    */
+  // O'qituvchilar ro'yxati guruh/o'quvchi formalarida select uchun kerak —
+  // shuning uchun guruh yoki o'quvchi ko'rish ruxsati ham yetarli.
   @Get('teachers')
-  @Roles(
-    UserRole.ADMIN,
-    UserRole.SUPER_ADMIN,
-    UserRole.MANAGER,
-    UserRole.RECEPTION,
-  )
+  @RequirePermissions('users.view', 'groups.view', 'students.view')
   @ApiOperation({ summary: 'Get all teachers (no pagination)' })
   @ApiResponse({ type: [UserResponseDto] })
   @ApiQuery({ name: 'centerId', required: false, type: Number })
@@ -135,7 +135,8 @@ export class UsersController {
     @Query('name') name?: string,
   ) {
     const isAdmin =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN;
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
       ? centerId
@@ -168,7 +169,7 @@ export class UsersController {
    * 🔍 ID bo‘yicha foydalanuvchini olish (faqat markazdagi bo‘lsa)
    */
   @Get(':id')
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.view')
   @ApiOperation({ summary: 'Find user by id' })
   @ApiResponse({ type: UserResponseDto })
   async findOneById(@Param('id', ParseIntPipe) id: number) {
@@ -179,7 +180,7 @@ export class UsersController {
    * 🗑️ Foydalanuvchini o‘chirish (haqiqiy o‘chirish emas, remove ishlatyapsiz)
    */
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @RequirePermissions('users.delete')
   @ApiOperation({ summary: 'Remove user' })
   @ApiResponse({ type: UserResponseDto })
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {

@@ -47,7 +47,9 @@ export class LeadsService {
       .getOne();
 
     if (!center) {
-      throw new BadRequestException('centerId is invalid for this organization');
+      throw new BadRequestException(
+        'centerId is invalid for this organization',
+      );
     }
     return centerId;
   }
@@ -84,7 +86,10 @@ export class LeadsService {
     const resolvedCenterId = centerId
       ? await this.resolveCenterIdOrThrow(organizationId, centerId)
       : !isAdmin
-        ? await this.resolveCenterIdOrThrow(organizationId, currentUser.centerId)
+        ? await this.resolveCenterIdOrThrow(
+            organizationId,
+            currentUser.centerId,
+          )
         : undefined;
 
     const query = this.leadRepo
@@ -95,12 +100,16 @@ export class LeadsService {
       .where('org.id = :organizationId', { organizationId });
 
     if (resolvedCenterId) {
-      query.andWhere('lead.centerId = :centerId', { centerId: resolvedCenterId });
+      query.andWhere('lead.centerId = :centerId', {
+        centerId: resolvedCenterId,
+      });
     }
 
     if (name?.trim()) {
       const q = `%${name.trim()}%`;
-      query.andWhere('(lead.firstName ILIKE :q OR lead.lastName ILIKE :q)', { q });
+      query.andWhere('(lead.firstName ILIKE :q OR lead.lastName ILIKE :q)', {
+        q,
+      });
     }
 
     if (phone?.trim()) {
@@ -155,7 +164,9 @@ export class LeadsService {
         createdAt: l.createdAt?.toISOString?.() ?? String(l.createdAt),
         updatedAt: l.updatedAt?.toISOString?.() ?? String(l.updatedAt),
         birthDate: l.birthDate ? dayjs(l.birthDate).format('YYYY-MM-DD') : null,
-        followUpDate: l.followUpDate ? dayjs(l.followUpDate).format('YYYY-MM-DD') : null,
+        followUpDate: l.followUpDate
+          ? dayjs(l.followUpDate).format('YYYY-MM-DD')
+          : null,
       };
 
       if (!isAdmin) {
@@ -177,16 +188,13 @@ export class LeadsService {
     };
   }
 
-  async create(
-    dto: any,
-    currentUser: CurrentUser,
-  ) {
+  async create(dto: any, currentUser: CurrentUser) {
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
 
     const effectiveCenterId = isAdmin
-      ? dto.centerId ?? currentUser.centerId
+      ? (dto.centerId ?? currentUser.centerId)
       : currentUser.centerId;
 
     const centerId = await this.resolveCenterIdOrThrow(
@@ -194,11 +202,14 @@ export class LeadsService {
       effectiveCenterId,
     );
 
-    const org = await this.orgRepo.findOne({ where: { id: currentUser.organizationId } });
+    const org = await this.orgRepo.findOne({
+      where: { id: currentUser.organizationId },
+    });
     if (!org) throw new NotFoundException('Organization not found');
 
     if (dto.phone?.trim?.()) dto.phone = dto.phone.trim();
-    if (!dto.phone) throw new ValidationException({ phone: 'phone is required' });
+    if (!dto.phone)
+      throw new ValidationException({ phone: 'phone is required' });
 
     const groups =
       Array.isArray(dto.groupIds) && dto.groupIds.length
@@ -212,7 +223,7 @@ export class LeadsService {
       groups.length !== dto.groupIds.length
     ) {
       throw new BadRequestException(
-        'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+        "Ba'zi guruhlar topilmadi yoki bu markazga tegishli emas",
       );
     }
 
@@ -268,7 +279,11 @@ export class LeadsService {
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
 
-    if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+    if (
+      !isAdmin &&
+      currentUser.centerId &&
+      lead.centerId !== currentUser.centerId
+    ) {
       throw new NotFoundException('Lead not found');
     }
 
@@ -276,7 +291,10 @@ export class LeadsService {
       throw new BadRequestException('centerId cannot be changed');
     }
     if (dto.centerId !== undefined) {
-      lead.centerId = await this.resolveCenterIdOrThrow(organizationId, dto.centerId);
+      lead.centerId = await this.resolveCenterIdOrThrow(
+        organizationId,
+        dto.centerId,
+      );
     }
 
     if (dto.phone !== undefined) {
@@ -286,23 +304,33 @@ export class LeadsService {
     }
     if (dto.firstName !== undefined) lead.firstName = dto.firstName ?? null;
     if (dto.lastName !== undefined) lead.lastName = dto.lastName ?? null;
-    if (dto.secondPhone !== undefined) lead.secondPhone = dto.secondPhone ?? null;
+    if (dto.secondPhone !== undefined)
+      lead.secondPhone = dto.secondPhone ?? null;
     if (dto.birthDate !== undefined) {
       lead.birthDate = dto.birthDate ? new Date(dto.birthDate) : null;
     }
     if (dto.monthlyFee !== undefined) lead.monthlyFee = dto.monthlyFee ?? null;
-    if (dto.discountPercent !== undefined) lead.discountPercent = dto.discountPercent ?? 0;
-    if (dto.discountReason !== undefined) lead.discountReason = dto.discountReason ?? null;
+    if (dto.discountPercent !== undefined)
+      lead.discountPercent = dto.discountPercent ?? 0;
+    if (dto.discountReason !== undefined)
+      lead.discountReason = dto.discountReason ?? null;
     if (dto.comment !== undefined) lead.comment = dto.comment ?? null;
-    if (dto.heardAboutUs !== undefined) lead.heardAboutUs = dto.heardAboutUs ?? null;
-    if (dto.preferredTime !== undefined) lead.preferredTime = dto.preferredTime ?? null;
-    if (dto.preferredDays !== undefined) lead.preferredDays = dto.preferredDays ?? null;
-    if (dto.passportSeries !== undefined) lead.passportSeries = dto.passportSeries ?? null;
-    if (dto.passportNumber !== undefined) lead.passportNumber = dto.passportNumber ?? null;
+    if (dto.heardAboutUs !== undefined)
+      lead.heardAboutUs = dto.heardAboutUs ?? null;
+    if (dto.preferredTime !== undefined)
+      lead.preferredTime = dto.preferredTime ?? null;
+    if (dto.preferredDays !== undefined)
+      lead.preferredDays = dto.preferredDays ?? null;
+    if (dto.passportSeries !== undefined)
+      lead.passportSeries = dto.passportSeries ?? null;
+    if (dto.passportNumber !== undefined)
+      lead.passportNumber = dto.passportNumber ?? null;
     if (dto.jshshir !== undefined) lead.jshshir = dto.jshshir ?? null;
     if (dto.status !== undefined) {
       if (dto.status === LeadStatus.CONVERTED) {
-        throw new BadRequestException('CONVERTED statusini faqat transfer orqali o\'rnatish mumkin');
+        throw new BadRequestException(
+          "CONVERTED statusini faqat transfer orqali o'rnatish mumkin",
+        );
       }
       lead.status = dto.status ?? LeadStatus.NEW;
     }
@@ -324,7 +352,7 @@ export class LeadsService {
         lead.groups.length !== dto.groupIds.length
       ) {
         throw new BadRequestException(
-          'Ba\'zi guruhlar topilmadi yoki bu markazga tegishli emas',
+          "Ba'zi guruhlar topilmadi yoki bu markazga tegishli emas",
         );
       }
     }
@@ -351,7 +379,11 @@ export class LeadsService {
       const isAdmin =
         currentUser.role === UserRole.ADMIN ||
         currentUser.role === UserRole.SUPER_ADMIN;
-      if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+      if (
+        !isAdmin &&
+        currentUser.centerId &&
+        lead.centerId !== currentUser.centerId
+      ) {
         throw new NotFoundException('Lead not found');
       }
     }
@@ -384,7 +416,11 @@ export class LeadsService {
       const isAdmin =
         currentUser.role === UserRole.ADMIN ||
         currentUser.role === UserRole.SUPER_ADMIN;
-      if (!isAdmin && currentUser.centerId && lead.centerId !== currentUser.centerId) {
+      if (
+        !isAdmin &&
+        currentUser.centerId &&
+        lead.centerId !== currentUser.centerId
+      ) {
         throw new NotFoundException('Lead not found');
       }
     }
@@ -434,4 +470,3 @@ export class LeadsService {
     return { success: true, studentId: lead.studentId };
   }
 }
-

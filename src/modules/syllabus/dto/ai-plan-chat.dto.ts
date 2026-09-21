@@ -17,7 +17,7 @@ export class AiPlanChatMessageDto {
   @ApiProperty({
     enum: ['user', 'assistant'],
     example: 'user',
-    description: "Xabar kimdan: foydalanuvchi yoki AI",
+    description: 'Xabar kimdan: foydalanuvchi yoki AI',
   })
   @IsIn(['user', 'assistant'])
   role: 'user' | 'assistant';
@@ -36,7 +36,7 @@ export class AiPlanChatDto {
   @ApiProperty({
     example: 3,
     description:
-      "Fan idsi (ixtiyoriy — berilsa AI fan nomini kontekst sifatida oladi)",
+      'Fan idsi (ixtiyoriy — berilsa AI fan nomini kontekst sifatida oladi)',
     required: false,
   })
   @IsOptional()

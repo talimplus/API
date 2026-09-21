@@ -27,8 +27,8 @@ export class ConfirmReceiptsDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      "\"Barchasini oldim\" tugmasi uchun. `receiptIds` berilmaganda MAJBURIY " +
-      "(tasodifan hammasini tasdiqlab yubormaslik uchun). Filterga (centerId, " +
+      '"Barchasini oldim" tugmasi uchun. `receiptIds` berilmaganda MAJBURIY ' +
+      '(tasodifan hammasini tasdiqlab yubormaslik uchun). Filterga (centerId, ' +
       'dateFrom, dateTo) mos keladigan BARCHA pending receiptlar tasdiqlanadi.',
   })
   @IsOptional()
@@ -37,7 +37,8 @@ export class ConfirmReceiptsDto {
 
   @ApiPropertyOptional({
     example: 2,
-    description: "Faqat `all: true` uchun. Admin bo'lmaganlar o'z markaziga bog'lanadi.",
+    description:
+      "Faqat `all: true` uchun. Admin bo'lmaganlar o'z markaziga bog'lanadi.",
   })
   @IsOptional()
   @Type(() => Number)

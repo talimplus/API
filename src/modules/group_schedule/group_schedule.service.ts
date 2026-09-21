@@ -66,7 +66,11 @@ export class GroupScheduleService {
     return schedule;
   }
 
-  async update(groupId: number, dto: UpdateGroupScheduleDto, organizationId: number) {
+  async update(
+    groupId: number,
+    dto: UpdateGroupScheduleDto,
+    organizationId: number,
+  ) {
     const group = await this.findGroupOrThrow(groupId, organizationId);
 
     await this.scheduleRepo.delete({ group: { id: groupId } });
