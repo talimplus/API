@@ -37,6 +37,12 @@ import { ValidationException } from '@/common/exceptions/validation.exception';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
+import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
+import { GroupsService } from '@/modules/groups/groups.service';
+import {
+  TransferPreviewDto,
+  TransferStudentsDto,
+} from '@/modules/students/dto/transfer-students.dto';
 
 @Injectable()
 export class StudentsService {
@@ -62,6 +68,9 @@ export class StudentsService {
     private readonly referralsService: ReferralsService,
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
+    @Inject(forwardRef(() => GroupsService))
+    private readonly groupsService: GroupsService,
+    private readonly enrollmentsService: EnrollmentsService,
   ) {}
   async findAll(
     organizationId: number,
@@ -697,6 +706,13 @@ export class StudentsService {
     });
   }
 
+  /** Guruh timezone'idagi bugungi sana (YYYY-MM-DD). */
+  private todayInGroupTz(group?: Group | null): string {
+    return dayjs()
+      .tz(group?.timezone || 'Asia/Tashkent')
+      .format('YYYY-MM-DD');
+  }
+
   /**
    * Biriktirilgan guruh(lar)ning jadval kunlaridan o'quvchining `studyDays`
    * qiymatini hisoblaydi (union, hafta tartibida). Guruh bo'lmasa yoki
@@ -848,6 +864,15 @@ export class StudentsService {
 
     const savedStudent = await this.studentRepo.save(student);
 
+    // A'zolik oynasini ochamiz — to'lov proratsiyasi shu sanadan boshlanadi.
+    for (const group of groups) {
+      await this.enrollmentsService.open(
+        savedStudent.id,
+        group.id,
+        this.todayInGroupTz(group),
+      );
+    }
+
     if (Array.isArray(discountPeriods)) {
       await this.replaceDiscountPeriodsForStudent(
         savedStudent.id,
@@ -934,17 +959,33 @@ export class StudentsService {
         );
       }
 
-      // Olib tashlangan guruhlar: eski biriktirilgan guruhlardan yangi ro'yxatda
-      // yo'q bo'lganlari. Ular uchun to'lovlarni MOSLASHTIRAMIZ (kerak bo'lsa
-      // o'chiramiz/refund qilamiz) — bu many-to-many yozuv o'chishidan (save)
-      // OLDIN bajarilishi shart, aks holda joinedAt yo'qoladi.
-      const oldGroupIds = ((student as any).groups ?? []).map((g: any) => g.id);
+      // A'zolik oynalarini avval yozamiz: chiqarilgan guruhlarga `leftAt`,
+      // yangilariga `joinedAt`. To'lov qayta hisoblanganda chegaralar shu
+      // yerdan o'qiladi, shuning uchun bu junction yozuvi o'chishidan (save)
+      // OLDIN bajarilishi shart.
+      const oldGroupIds: number[] = ((student as any).groups ?? []).map(
+        (g: any) => g.id,
+      );
       const removedGroupIds: number[] = oldGroupIds.filter(
         (gid: number) => !dto.groupIds!.includes(gid),
       );
+
+      const tzGroup = groups[0] ?? (student as any).groups?.[0] ?? null;
+      const today = this.todayInGroupTz(tzGroup);
+
+      await this.enrollmentsService.syncForStudent({
+        studentId: id,
+        previousGroupIds: oldGroupIds,
+        nextGroupIds: dto.groupIds,
+        date: today,
+        reason: "Guruhlar ro'yxati o'zgartirildi",
+      });
+
+      // Chiqarilgan guruhlar uchun to'lovni moslaymiz (kerak bo'lsa o'chiramiz
+      // yoki ortiqcha pulni qaytariladigan qilib belgilaymiz).
       for (const gid of removedGroupIds) {
         await this.paymentsService
-          .adjustPaymentsForStudentLeftGroup(id, gid)
+          .adjustPaymentsForStudentLeftGroup(id, gid, { leftAt: today })
           .catch(() => undefined);
       }
 
@@ -1060,6 +1101,292 @@ export class StudentsService {
 
     // Return the same enriched shape as findById so frontend always has ids
     return this.findById(organizationId, saved.id);
+  }
+
+  // ── O'quvchini boshqa guruhga ko'chirish ─────────────────────────────────
+
+  /**
+   * Ko'chirishdan OLDIN ko'rsatiladigan ma'lumot: har bir o'quvchining eski
+   * guruhdagi qarzi va ortiqcha to'lagan puli. Front shu asosda ogohlantirish
+   * chiqaradi (qarz ko'chirishni bloklamaydi — u eski guruhda qoladi).
+   */
+  async previewTransfer(
+    organizationId: number,
+    dto: TransferPreviewDto,
+  ): Promise<
+    Array<{
+      studentId: number;
+      firstName: string;
+      lastName: string;
+      debt: number;
+      overpaid: number;
+    }>
+  > {
+    // Maqsad guruh bu yerda tekshirilmaydi — u hali tanlanmagan bo'lishi mumkin.
+    const fromGroup = await this.groupRepo.findOne({
+      where: {
+        id: dto.fromGroupId,
+        center: { organization: { id: organizationId } },
+      },
+    });
+    if (!fromGroup) throw new NotFoundException('Guruh topilmadi');
+
+    const students = await this.studentRepo.find({
+      where: {
+        id: In(dto.studentIds),
+        center: { organization: { id: organizationId } },
+      },
+    });
+
+    const rows = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('p.studentId', 'studentId')
+      .addSelect(
+        'COALESCE(SUM(GREATEST(p.amountDue - p.amountPaid, 0)), 0)',
+        'debt',
+      )
+      .addSelect(
+        'COALESCE(SUM(GREATEST(p.amountPaid - p.amountDue, 0)), 0)',
+        'overpaid',
+      )
+      .where('p.groupId = :groupId', { groupId: fromGroup.id })
+      .andWhere('p.studentId IN (:...ids)', { ids: dto.studentIds })
+      .groupBy('p.studentId')
+      .getRawMany<{ studentId: number; debt: string; overpaid: string }>();
+
+    const byStudent = new Map(rows.map((r) => [Number(r.studentId), r]));
+
+    return students.map((s) => ({
+      studentId: s.id,
+      firstName: s.firstName,
+      lastName: s.lastName,
+      debt: Number(byStudent.get(s.id)?.debt ?? 0),
+      overpaid: Number(byStudent.get(s.id)?.overpaid ?? 0),
+    }));
+  }
+
+  private async resolveTransferGroups(
+    organizationId: number,
+    dto: TransferStudentsDto,
+  ): Promise<{ fromGroup: Group; toGroup: Group }> {
+    if (dto.fromGroupId === dto.toGroupId) {
+      throw new BadRequestException(
+        "Manba va maqsad guruh bir xil bo'lishi mumkin emas",
+      );
+    }
+
+    const groups = await this.groupRepo.find({
+      where: {
+        id: In([dto.fromGroupId, dto.toGroupId]),
+        center: { organization: { id: organizationId } },
+      },
+      relations: ['center', 'schedules'],
+    });
+
+    const fromGroup = groups.find((g) => g.id === dto.fromGroupId);
+    const toGroup = groups.find((g) => g.id === dto.toGroupId);
+    if (!fromGroup || !toGroup) {
+      throw new NotFoundException('Guruh topilmadi');
+    }
+    if (fromGroup.center?.id !== toGroup.center?.id) {
+      throw new BadRequestException(
+        "O'quvchini boshqa filial guruhiga ko'chirib bo'lmaydi",
+      );
+    }
+    if (toGroup.status === GroupStatus.FINISHED) {
+      throw new BadRequestException("Tugagan guruhga ko'chirib bo'lmaydi");
+    }
+
+    return { fromGroup, toGroup };
+  }
+
+  /**
+   * O'quvchilarni bir guruhdan boshqasiga ko'chiradi.
+   *
+   * Pul tomoni (`payments.settlePaymentsForTransfer`):
+   *  - eski guruh ko'chirish sanasigacha o'tgan darslar bo'yicha prorate;
+   *  - yangi guruh ko'chirish sanasidan qolgan darslar bo'yicha prorate;
+   *  - eski guruhga ortiqcha to'langan pul yangi guruh to'loviga chek bilan
+   *    o'tkaziladi (naqd qaytarilmaydi);
+   *  - eski guruhdagi qarz o'sha guruh nomi bilan qolaveradi.
+   *
+   * O'qituvchi komissiyasi har doim to'lov qatorining guruhiga qarab
+   * hisoblanadi, shuning uchun eski o'qituvchi o'tgan darslar uchun o'z
+   * foizini saqlaydi, yangi o'qituvchi esa faqat o'z qismidan oladi.
+   */
+  async transferStudents(
+    organizationId: number,
+    dto: TransferStudentsDto,
+    currentUser: CurrentUser,
+  ) {
+    const { fromGroup, toGroup } = await this.resolveTransferGroups(
+      organizationId,
+      dto,
+    );
+
+    const transferDate = dto.transferDate ?? this.todayInGroupTz(toGroup);
+
+    const students = await this.studentRepo.find({
+      where: {
+        id: In(dto.studentIds),
+        center: { organization: { id: organizationId } },
+      },
+      relations: ['groups'],
+    });
+    if (students.length !== dto.studentIds.length) {
+      throw new BadRequestException(
+        "Ba'zi o'quvchilar topilmadi yoki bu tashkilotga tegishli emas",
+      );
+    }
+
+    const notInSource = students.filter(
+      (s) => !(s.groups ?? []).some((g) => g.id === fromGroup.id),
+    );
+    if (notInSource.length) {
+      const names = notInSource
+        .map((s) => `${s.firstName} ${s.lastName}`)
+        .join(', ');
+      throw new BadRequestException(
+        `Bu o'quvchilar manba guruhda emas: ${names}`,
+      );
+    }
+
+    const reason =
+      dto.reason?.trim() || `"${fromGroup.name}" dan "${toGroup.name}" ga`;
+
+    const results: Array<{
+      studentId: number;
+      firstName: string;
+      lastName: string;
+      carriedOverAmount: number;
+      refundedAmount: number;
+      remainingDebtInSourceGroup: number;
+    }> = [];
+
+    for (const student of students) {
+      const alreadyInTarget = (student.groups ?? []).some(
+        (g) => g.id === toGroup.id,
+      );
+
+      // 1) A'zolik oynalari — to'lov chegaralari shu yerdan o'qiladi,
+      //    shuning uchun junction o'zgarishidan OLDIN yoziladi.
+      await this.enrollmentsService.close(
+        student.id,
+        fromGroup.id,
+        transferDate,
+        { reason, transferredToGroupId: toGroup.id },
+      );
+      if (!alreadyInTarget) {
+        await this.enrollmentsService.open(
+          student.id,
+          toGroup.id,
+          transferDate,
+          { transferredFromGroupId: fromGroup.id },
+        );
+      }
+
+      // 2) Joriy a'zolik (many-to-many) — eski guruhdan chiqarib, yangisiga.
+      await this.studentRepo
+        .createQueryBuilder()
+        .relation(Student, 'groups')
+        .of(student.id)
+        .addAndRemove(alreadyInTarget ? [] : [toGroup.id], [fromGroup.id]);
+
+      // 3) Status va dars kunlari.
+      //
+      // MUHIM: bu yerda `studentRepo.save(student)` ishlatilmaydi. Entity
+      // `groups` bilan yuklangan va uning xotiradagi nusxasi hali ESKI
+      // guruhni saqlab turibdi — save() many-to-many farqini hisoblab,
+      // yuqoridagi addAndRemove'ni bekor qilib yuborardi. Shuning uchun
+      // faqat ustunlarni yangilaymiz.
+      const nextGroupIds = Array.from(
+        new Set([
+          ...(student.groups ?? [])
+            .map((g) => g.id)
+            .filter((gid) => gid !== fromGroup.id),
+          toGroup.id,
+        ]),
+      );
+
+      const patch: Partial<Student> = {
+        studyDays: await this.computeStudyDays(nextGroupIds),
+      };
+      if (
+        student.status === StudentStatus.FINISHED &&
+        toGroup.status !== GroupStatus.FINISHED
+      ) {
+        // Kurs tugab keyingi bosqichga o'tgan o'quvchi qayta faollashadi.
+        patch.status = StudentStatus.ACTIVE;
+        patch.activatedAt = student.activatedAt ?? new Date();
+        patch.stoppedAt = null;
+      }
+      await this.studentRepo.update(student.id, patch as any);
+      Object.assign(student, patch);
+
+      // 4) Pul: eski guruhni yopish, yangisini ochish, ortiqchasini ko'chirish.
+      const settlement = await this.paymentsService.settlePaymentsForTransfer({
+        studentId: student.id,
+        fromGroupId: fromGroup.id,
+        toGroupId: toGroup.id,
+        transferDate,
+        performedById: currentUser?.userId ?? null,
+        comment: `Ko'chirildi: ${reason}`,
+      });
+
+      const debtRow = await this.paymentRepo
+        .createQueryBuilder('p')
+        .select(
+          'COALESCE(SUM(GREATEST(p.amountDue - p.amountPaid, 0)), 0)',
+          'debt',
+        )
+        .where('p.groupId = :groupId', { groupId: fromGroup.id })
+        .andWhere('p.studentId = :studentId', { studentId: student.id })
+        .getRawOne<{ debt: string }>();
+
+      results.push({
+        studentId: student.id,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        carriedOverAmount: settlement.carriedOverAmount,
+        refundedAmount: settlement.refundedAmount,
+        remainingDebtInSourceGroup: Number(debtRow?.debt ?? 0),
+      });
+    }
+
+    // 5) Kerak bo'lsa eski guruhni yopamiz (odam kam qolgani uchun yopilgan
+    //    guruh holati).
+    let sourceGroupClosed = false;
+    if (dto.closeSourceGroup) {
+      // `changeStatus` tugash sanasi majburiy bo'lishini talab qiladi (aks holda
+      // darslar va to'lovlar cheksiz hisoblanadi). Guruh muddatsiz bo'lsa yoki
+      // tugash sanasi ko'chirish kunidan keyin bo'lsa — sanani ko'chirish kuniga
+      // tortamiz: oxirgi o'quvchi shu kuni ketdi, undan keyin dars yo'q.
+      const currentEndDate = fromGroup.endDate
+        ? dayjs(fromGroup.endDate).format('YYYY-MM-DD')
+        : null;
+      if (!currentEndDate || currentEndDate > transferDate) {
+        await this.groupRepo.update(fromGroup.id, {
+          endDate: transferDate as any,
+        });
+      }
+
+      await this.groupsService.changeStatus(
+        organizationId,
+        fromGroup.id,
+        GroupStatus.FINISHED,
+        fromGroup.center?.id,
+      );
+      sourceGroupClosed = true;
+    }
+
+    return {
+      fromGroupId: fromGroup.id,
+      toGroupId: toGroup.id,
+      transferDate,
+      sourceGroupClosed,
+      transferred: results.length,
+      results,
+    };
   }
 
   private static readonly ALLOWED_STATUS_TRANSITIONS: Record<

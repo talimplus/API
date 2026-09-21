@@ -54,6 +54,15 @@ export class Payment {
   refundedAt?: Date | null;
 
   /**
+   * Boshqa guruh to'loviga ko'chirilgan pul (kumulyativ). O'quvchi guruhini
+   * o'zgartirganda eski guruhga ortiqcha to'lab qo'ygan summa naqd
+   * qaytarilmaydi — u yangi guruh to'loviga o'tadi. Pul markazdan chiqmagani
+   * uchun buni `refundedAmount` bilan aralashtirmaymiz.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  transferredOutAmount: number;
+
+  /**
    * Soft deadline (usually 10th of month in group timezone).
    */
   @Column({ type: 'date', nullable: true })

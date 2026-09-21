@@ -28,6 +28,10 @@ import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihoo
 import { ChangeStudentStatusDto } from '@/modules/students/dto/change-student-status.dto';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
+import {
+  TransferPreviewDto,
+  TransferStudentsDto,
+} from '@/modules/students/dto/transfer-students.dto';
 
 @ApiTags('Students')
 @Controller('students')
@@ -175,6 +179,40 @@ export class StudentsController {
       req.user.centerId,
       req.user.organizationId,
       req.user.role,
+    );
+  }
+
+  // MUHIM: `:id` li POST yo'llaridan OLDIN turishi kerak, aks holda
+  // "transfer" id deb qabul qilinadi.
+  @Post('transfer/preview')
+  @RequirePermissions('students.transfer')
+  @ApiOperation({
+    summary: "Ko'chirishdan oldingi ma'lumot (qarz / ortiqcha to'lov)",
+    description:
+      "Har bir o'quvchining eski guruhdagi qarzi va ortiqcha to'lagan puli. " +
+      "Qarz ko'chirishni bloklamaydi — u eski guruhda qoladi.",
+  })
+  @ApiBody({ type: TransferPreviewDto })
+  async previewTransfer(@Req() req: any, @Body() dto: TransferPreviewDto) {
+    return this.studentService.previewTransfer(req.user.organizationId, dto);
+  }
+
+  @Post('transfer')
+  @RequirePermissions('students.transfer')
+  @ApiOperation({
+    summary: "O'quvchilarni boshqa guruhga ko'chirish",
+    description:
+      "Eski guruh ko'chirish sanasigacha, yangi guruh shu sanadan boshlab " +
+      "hisoblanadi. Ortiqcha to'langan pul yangi guruh to'loviga o'tadi, " +
+      'qarz esa eski guruhda qoladi. `closeSourceGroup` bilan eski guruh ' +
+      'yopiladi (odam kam qolgan guruh holati).',
+  })
+  @ApiBody({ type: TransferStudentsDto })
+  async transfer(@Req() req: any, @Body() dto: TransferStudentsDto) {
+    return this.studentService.transferStudents(
+      req.user.organizationId,
+      dto,
+      req.user,
     );
   }
 

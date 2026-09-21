@@ -92,10 +92,11 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `roles` | `/roles` | dinamik rollar, `/roles/permissions` |
 | `rooms`, `subjects` | `/rooms`, `/subjects` | ma'lumotnomalar |
 | `groups` | `/groups`, `/group` | guruh CRUD, status, **narx tarixi** (`group-fee.service.ts`), `groups-lifecycle.service.ts` (kunlik 03:00 auto-finish) |
-| `group_schedule` | `/group-schedule` | guruh dars kunlari/vaqti |
+| `group_schedule` | `/group-schedule` | guruh dars kunlari/vaqti, **dars jadvali** (`/board`) va xona/o'qituvchi bandligi (`/conflicts`) |
 | `attendance` | `/groups/:groupId/attendance` | o'quvchilar davomati + dars ko'chirish (`AttendanceLessonOverride`) |
 | `staff-attendance` | `/staff-attendance` | **xodim davomati** ("Keldim", kechikish, ishonchlilik, hisobot) |
-| `students` | `/students`, `/student` | o'quvchi CRUD, status, chegirma davrlari |
+| `students` | `/students`, `/student` | o'quvchi CRUD, status, chegirma davrlari, **boshqa guruhga ko'chirish** |
+| `enrollments` | — | a'zolik oynalari (`joinedAt`/`leftAt`) — billing chegaralari uchun yagona manba |
 | `leads` | `/leads` | potentsial mijoz, `transferToStudent` |
 | `payments` | `/payments` | **eng katta modul** — oylik hisob, cheklar, eksport |
 | `teacher-earnings` | `/teacher-earnings` | o'qituvchi oylik daromadi + carryover |
@@ -114,11 +115,38 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
   syllabus rejasi va avtomatik yopilish shu sanalarga qarab ishlaydi. `endDate = null` → muddatsiz.
 - Status: `new → started → finished`. `changeStatus` da `endDate` majburiy mos keladi;
   `finished` qilinganda kelajakdagi `endDate` bugunga tortiladi.
+- **`started` qilish uchun `endDate` ham, `room` ham bo'lishi shart.** Yetishmaganlari
+  bitta 422 da qaytadi (`endDate`, `roomId`) — front tahrirlash formasini ochib xatoni
+  aynan shu maydonlarga qo'yadi.
+- **Xona guruhning o'z filialidan bo'lishi shart** (`create` ham, `update` ham
+  tekshiradi; o'qituvchi ham shunday). Xona o'chirilsa guruh **o'chmaydi** —
+  FK `ON DELETE SET NULL`, guruh "xonasiz" bo'lib qoladi.
 - Kunlik cron (03:00) `endDate` o'tgan guruhlarni yopadi va o'quvchilar statusini moslaydi
   (`syncStudentStatusesForGroups`: hamma guruhi tugagan o'quvchi → `finished`).
-- Xona bandligi: bir xona + bir kun + bir vaqt → ikkinchi guruhga berilmaydi
-  (`assertRoomScheduleAvailable`).
 - Sana/jadval o'zgarsa → shu guruhning **ochiq** to'lovlari qayta hisoblanadi.
+- `lessonDurationMinutes` (default 90) — bitta darsning uzunligi. Guruhning
+  barcha darslari bir xil uzunlikda deb hisoblanadi.
+
+### 6.1.1 Dars jadvali va bandlik (`group_schedule`)
+
+`ScheduleBoardService` (`group_schedule/schedule-board.service.ts`) — alohida
+kichik modul (`ScheduleBoardModule`), uni ham `GroupsModule`, ham
+`GroupScheduleModule` ishlatadi (`GroupFeeModule` bilan bir xil sabab).
+
+- **To'qnashuv qoidasi:** bir kunda, bir xonada (yoki bir o'qituvchida) vaqti
+  kesishgan ikkita dars bo'lolmaydi. Oraliq yopiq-ochiq:
+  `[startTime .. startTime + lessonDurationMinutes)` — ya'ni 09:00–10:30 va
+  10:30–12:00 **to'qnashmaydi**, 09:00–10:30 va 10:00–11:30 to'qnashadi.
+- Tekshiruv guruh yaratishda ham, tahrirlashda ham bajariladi
+  (`assertScheduleAvailable`) va **422** bo'lib qaytadi: xona to'qnashuvi
+  `roomId` maydoniga, o'qituvchiniki `teacherId` ga bog'lanadi.
+- `POST /group-schedule/conflicts` — saqlashdan oldin tekshirish (forma
+  natijani input ostida ko'rsatadi). Ruxsat: `schedule.view` **yoki**
+  `groups.create` **yoki** `groups.update`.
+- `GET /group-schedule/board?centerId=` — sahifa uchun **butun hafta**:
+  filial xonalari + tugamagan guruhlarning barcha darslari. Kunni front
+  o'zi filtrlaydi. O'qituvchi ham butun jadvalni ko'radi (xona bandligi —
+  umumiy ma'lumot). Ruxsat: `schedule.view`.
 
 ### 6.2 Guruh narxi — oyga bog'langan (MUHIM)
 
@@ -216,10 +244,62 @@ finished→ active
 
 - `stopped`/`ignored` ga o'tishda `returnLikelihood` **majburiy**; izoh mavjudiga qo'shiladi.
 - `activatedAt` / `stoppedAt` — to'lov proratsiyasining chegaralari.
-- Guruhga qo'shilgan sana — `students_groups_groups.joinedAt` (`getEnrollmentJoinedAt`).
+- Guruhga qo'shilgan/chiqqan sana — `student_group_enrollments` (pastda 6.5.1).
+  `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
 - `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
+
+### 6.5.1 A'zolik oynasi va boshqa guruhga ko'chirish (MUHIM)
+
+Jadval `student_group_enrollments` — o'quvchining bitta guruhdagi **a'zolik
+oynasi**. Junction (`students_groups_groups`) faqat "hozir qaysi guruhda"
+degan savolga javob beradi va o'quvchi chiqarilganda o'chadi; bu jadval esa
+tarixni saqlaydi va **to'lov proratsiyasining chegaralarini beradi**:
+
+| Ustun | Ma'no |
+|---|---|
+| `joinedAt` | guruhga qo'shilgan sana, **inclusive** — o'sha kungi dars to'lovga kiradi |
+| `leftAt` | guruhdan chiqqan sana, **exclusive** — o'sha kungi dars KIRMAYDI. `null` — hali a'zo |
+| `transferredToGroupId` / `transferredFromGroupId` | ko'chirish zanjiri |
+
+- Bir juftlik uchun bir nechta oyna bo'lishi mumkin (chiqib, qaytib kelgan);
+  ochiq oyna (`leftAt IS NULL`) esa bittadan ortiq emas (partial unique index).
+- `computeMonthBilling` har doim shu oynani o'qiydi (`resolveEnrollmentWindow`)
+  va `joinedAt`/`leftAt` ni chegara qilib qo'yadi. Shu sabab **qayta hisoblash
+  (`recalcOpenPaymentRows`) ketgan guruhning proratsiyasini bekor qilmaydi**.
+  Oyna topilmasa junction'dagi eski `joinedAt` ga, u ham bo'lmasa
+  `activatedAt`/`group.startDate` ga qaytiladi.
+- Davomat ham shu chegarada: oynadan tashqaridagi darsga davomat yozilmaydi
+  (400), lekin ketgan o'quvchi jurnalda tarix uchun **ko'rinib turadi**
+  (`leftAt` bilan, faqat o'qish uchun).
+
+**Ko'chirish** — `POST /students/transfer` (`students.transfer` ruxsati),
+`StudentsService.transferStudents`. Uchta hayotiy holatni qoplaydi: guruh
+yopilishi (`closeSourceGroup: true` — tugash sanasi ko'chirish kuniga tortiladi),
+oy o'rtasida boshqa guruhga o'tish, kurs tugab keyingi bosqichga o'tish
+(o'quvchi `finished` → `active`).
+
+Pul qismi — `PaymentsService.settlePaymentsForTransfer`:
+
+1. eski guruh `leftAt` gacha qayta hisoblanadi (**PAID** qatorlar ham);
+2. yangi guruh uchun `joinedAt` dan prorate qilingan qator yaratiladi —
+   oyna tufayli qo'shilishdan oldingi oylarga qarz **yozilmaydi**;
+3. eski guruhga ortiqcha to'langan pul `payments.transferredOutAmount` ga
+   yoziladi va yangi guruh to'loviga **tasdiqlangan chek** bilan o'tkaziladi
+   (`payment_receipts.transferFromPaymentId`, `paymentMethod` bo'sh, qabul
+   qiluvchi komissiyasi yo'q — kassaga yangi pul tushmagan);
+4. yangi guruhda yopadigan qarz qolmasa — qoldiq `refundedAmount` ga o'tadi
+   (naqd qaytariladi). `refundedAmount` = pul kassadan chiqdi,
+   `transferredOutAmount` = pul markazda qoldi; ikkalasi aralashtirilmaydi;
+5. **eski guruhdagi qarz o'sha guruhda qoladi** — ko'chirish bloklanmaydi.
+
+Natijada ko'chirilgan oy uchun `A + B = bitta oylik narx`. O'qituvchi
+komissiyasi to'lov qatorining guruhiga bog'langani uchun avtomatik bo'linadi:
+eski o'qituvchi o'tgan darslar uchun foizini saqlaydi.
+
+Orqaga sanalangan ko'chirishda `ensurePayments` oynasi ko'chirish oyidan
+bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
 
 ### 6.6 Lead va referral
 

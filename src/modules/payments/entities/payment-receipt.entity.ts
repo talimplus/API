@@ -133,6 +133,16 @@ export class PaymentReceipt {
   @Column({ type: 'enum', enum: PaymentMethod, nullable: true })
   paymentMethod?: PaymentMethod | null;
 
+  /**
+   * Bu chek yangi pul emas, boshqa guruh to'lovidan **ko'chirilgan** pul
+   * bo'lsa — o'sha to'lovning id'si. O'quvchi guruhini almashtirganda eski
+   * guruhga ortiqcha to'langan summa shu yo'l bilan yangi guruhga o'tadi.
+   * Bunday chekda `paymentMethod` bo'sh bo'ladi va qabul qiluvchi
+   * komissiyasi hisoblanmaydi (kassaga yangi pul tushmagan).
+   */
+  @Column({ type: 'int', nullable: true })
+  transferFromPaymentId?: number | null;
+
   @Column({ type: 'text', nullable: true })
   comment?: string | null;
 

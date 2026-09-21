@@ -106,6 +106,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
         key: 'students.discounts',
         label: { uz: 'Chegirmalarni boshqarish', ru: 'Управление скидками' },
       },
+      {
+        key: 'students.transfer',
+        label: {
+          uz: 'Boshqa guruhga ko‘chirish',
+          ru: 'Перевод в другую группу',
+        },
+      },
     ],
   },
   {

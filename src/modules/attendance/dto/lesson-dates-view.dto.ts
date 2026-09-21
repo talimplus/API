@@ -37,6 +37,17 @@ export class GroupStudentDto {
       "bunday so'rovni 400 bilan rad etadi. null bo'lsa sana noma'lum (cheklov yo'q).",
   })
   joinedAt: string | null;
+
+  @ApiProperty({
+    example: '2026-03-01',
+    nullable: true,
+    description:
+      "O'quvchi SHU guruhdan chiqqan sana (YYYY-MM-DD), **exclusive**: o'sha " +
+      "kungi darsga ham davomat yozilmaydi va to'lov hisoblanmaydi. null " +
+      "bo'lsa o'quvchi hali guruhda. Boshqa guruhga ko'chirilgan o'quvchi " +
+      "jurnalda shu sanagacha ko'rinib turadi (tarix uchun, faqat o'qish).",
+  })
+  leftAt: string | null;
 }
 
 export class LessonDatesViewDto {

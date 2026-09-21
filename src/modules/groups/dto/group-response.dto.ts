@@ -22,6 +22,14 @@ export class GroupResponseDto {
   @ApiProperty({ example: '2026-06-01', required: false, nullable: true })
   endDate?: string | null;
 
+  @ApiProperty({
+    example: 90,
+    description:
+      "Bitta darsning davomiyligi (daqiqa). Xona va o'qituvchi bandligi " +
+      'hamda dars jadvali panjarasi shu qiymatga tayanadi.',
+  })
+  lessonDurationMinutes: number;
+
   @ApiProperty({ enum: GroupStatus, example: GroupStatus.NEW })
   status: GroupStatus;
 

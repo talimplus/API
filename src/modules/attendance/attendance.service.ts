@@ -6,6 +6,7 @@ import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.
 import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { Student } from '@/modules/students/entities/students.entity';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { dayjs } from '@/shared/utils/dayjs';
 import {
@@ -35,6 +36,9 @@ export class AttendanceService {
 
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
+
+    @InjectRepository(Student)
+    private readonly studentRepo: Repository<Student>,
 
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
@@ -99,8 +103,42 @@ export class AttendanceService {
   private async getJoinDatesByStudent(
     groupId: number,
     timezone: string,
-  ): Promise<Map<number, string>> {
-    const map = new Map<number, string>();
+  ): Promise<Map<number, { joinedAt: string; leftAt: string | null }>> {
+    const map = new Map<number, { joinedAt: string; leftAt: string | null }>();
+
+    // Asosiy manba — a'zolik oynalari (o'quvchi chiqib ketgan bo'lsa ham qoladi).
+    try {
+      const rows = await this.groupRepo.manager.query(
+        `SELECT "studentId", "joinedAt", "leftAt"
+           FROM "student_group_enrollments"
+          WHERE "groupId" = $1
+          ORDER BY "joinedAt" ASC`,
+        [groupId],
+      );
+      for (const r of rows ?? []) {
+        if (!r?.joinedAt) continue;
+        const joinedAt = dayjs(r.joinedAt).format('YYYY-MM-DD');
+        const leftAt = r.leftAt ? dayjs(r.leftAt).format('YYYY-MM-DD') : null;
+        const prev = map.get(Number(r.studentId));
+        if (!prev) {
+          map.set(Number(r.studentId), { joinedAt, leftAt });
+          continue;
+        }
+        map.set(Number(r.studentId), {
+          joinedAt: joinedAt < prev.joinedAt ? joinedAt : prev.joinedAt,
+          leftAt:
+            prev.leftAt === null || leftAt === null
+              ? null
+              : leftAt > prev.leftAt
+                ? leftAt
+                : prev.leftAt,
+        });
+      }
+      if (map.size) return map;
+    } catch {
+      // jadval yo'q (migratsiya ishlamagan) — junction'ga tushamiz
+    }
+
     try {
       const rows = await this.groupRepo.manager.query(
         `SELECT "studentsId" AS "studentId", "joinedAt"
@@ -111,12 +149,86 @@ export class AttendanceService {
       for (const r of rows ?? []) {
         if (!r?.joinedAt) continue;
         const d = dayjs(new Date(r.joinedAt)).tz(timezone);
-        if (d.isValid()) map.set(Number(r.studentId), d.format('YYYY-MM-DD'));
+        if (d.isValid()) {
+          map.set(Number(r.studentId), {
+            joinedAt: d.format('YYYY-MM-DD'),
+            leftAt: null,
+          });
+        }
       }
     } catch {
       // ustun yo'q / so'rov bajarilmadi — cheklov qo'llanmaydi
     }
     return map;
+  }
+
+  /**
+   * Jurnal qatorlari: guruhdagi hozirgi o'quvchilar + ko'rsatilayotgan
+   * oraliqda shu guruhda o'qigan, keyin chiqib ketganlar (tarix uchun,
+   * `leftAt` dan keyin faqat o'qish uchun).
+   */
+  private async buildJournalStudents(args: {
+    group: Group;
+    windows: Map<number, { joinedAt: string; leftAt: string | null }>;
+    rangeFrom: string | null;
+    rangeTo: string | null;
+  }) {
+    const { group, windows, rangeFrom, rangeTo } = args;
+
+    const rows = new Map<
+      number,
+      {
+        id: number;
+        firstName: string;
+        lastName: string;
+        joinedAt: string | null;
+        leftAt: string | null;
+      }
+    >();
+
+    for (const s of group.students ?? []) {
+      const w = windows.get(s.id);
+      rows.set(s.id, {
+        id: s.id,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        joinedAt: w?.joinedAt ?? null,
+        leftAt: w?.leftAt ?? null,
+      });
+    }
+
+    // Chiqib ketganlar: oynasi ko'rsatilayotgan oraliq bilan kesishsa qo'shamiz.
+    const leftIds = Array.from(windows.entries())
+      .filter(([studentId, w]) => {
+        if (rows.has(studentId)) return false;
+        if (!w.leftAt) return false;
+        if (!rangeFrom || !rangeTo) return false;
+        return w.joinedAt <= rangeTo && w.leftAt > rangeFrom;
+      })
+      .map(([studentId]) => studentId);
+
+    if (leftIds.length) {
+      const leftStudents = await this.studentRepo.find({
+        where: { id: In(leftIds) },
+        select: ['id', 'firstName', 'lastName'],
+      });
+      for (const s of leftStudents) {
+        const w = windows.get(s.id);
+        rows.set(s.id, {
+          id: s.id,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          joinedAt: w?.joinedAt ?? null,
+          leftAt: w?.leftAt ?? null,
+        });
+      }
+    }
+
+    return Array.from(rows.values()).sort((a, b) =>
+      `${a.firstName} ${a.lastName}`.localeCompare(
+        `${b.firstName} ${b.lastName}`,
+      ),
+    );
   }
 
   private async findOverridesForDate(groupId: number, lessonDate: string) {
@@ -195,23 +307,22 @@ export class AttendanceService {
     const timezone = group.timezone || 'Asia/Tashkent';
     const today = dayjs().tz(timezone).format('YYYY-MM-DD');
 
-    // Har bir o'quvchi qachon guruhga qo'shilgani — front shu sanadan oldingi
-    // kataklarni tahrirlanmaydigan qilib ko'rsatadi.
+    // Har bir o'quvchining shu guruhdagi a'zolik oynasi — front `joinedAt` dan
+    // oldingi va `leftAt` dan keyingi kataklarni tahrirlanmaydigan qiladi.
     const joinDates = await this.getJoinDatesByStudent(groupId, timezone);
-    const students = (group.students ?? [])
-      .map((s) => ({
-        id: s.id,
-        firstName: s.firstName,
-        lastName: s.lastName,
-        joinedAt: joinDates.get(s.id) ?? null,
-      }))
-      .sort((a, b) =>
-        `${a.firstName} ${a.lastName}`.localeCompare(
-          `${b.firstName} ${b.lastName}`,
-        ),
-      );
 
     const lessonDates = this.computeLessonDatesForGroup(group, query);
+
+    // Ro'yxatga guruhdan chiqib ketgan (boshqa guruhga ko'chirilgan) o'quvchilar
+    // ham kiradi — agar ular ko'rsatilayotgan oraliqda o'qigan bo'lsa. Aks holda
+    // ularning davomat tarixi jurnaldan butunlay yo'qolib qolardi.
+    const students = await this.buildJournalStudents({
+      group,
+      windows: joinDates,
+      rangeFrom: lessonDates[0] ?? null,
+      rangeTo: lessonDates[lessonDates.length - 1] ?? null,
+    });
+
     if (!lessonDates.length) {
       if (query.mode === 'range' && (query.from || query.to)) {
         const startDate = dayjs(group.startDate).format('YYYY-MM-DD');
@@ -435,30 +546,47 @@ export class AttendanceService {
       );
     }
 
-    // O'quvchi guruhga qo'shilgan sanadan OLDINGI darslarga davomat yozilmaydi:
-    // u darslarda o'quvchi hali guruhda bo'lmagan. Chegara to'lov bilan bir xil
-    // (payments proratsiyasi ham joinedAt dan boshlanadi), shuning uchun davomat
-    // hisoboti va to'lov bir-biriga mos bo'ladi.
+    // O'quvchining a'zolik oynasidan TASHQARIDAGI darslarga davomat yozilmaydi:
+    // u darslarda o'quvchi hali guruhda bo'lmagan yoki allaqachon chiqib ketgan.
+    // Chegara to'lov bilan bir xil (proratsiya ham joinedAt…leftAt oralig'ida),
+    // shuning uchun davomat hisoboti va to'lov bir-biriga mos bo'ladi.
     const joinDates = await this.getJoinDatesByStudent(groupId, timezone);
+    const nameById = new Map(
+      (group.students ?? []).map((s) => [s.id, `${s.firstName} ${s.lastName}`]),
+    );
+
     const beforeJoin = dto.items.filter((i) => {
-      const joined = joinDates.get(i.studentId);
-      return !!joined && dto.lessonDate < joined;
+      const w = joinDates.get(i.studentId);
+      return !!w?.joinedAt && dto.lessonDate < w.joinedAt;
     });
     if (beforeJoin.length) {
-      const nameById = new Map(
-        (group.students ?? []).map((s) => [
-          s.id,
-          `${s.firstName} ${s.lastName}`,
-        ]),
-      );
       throw new BadRequestException(
         `Bu o'quvchilar guruhga keyinroq qo'shilgan, ${dto.lessonDate} sanasidagi darsga davomat yozib bo'lmaydi: ` +
           beforeJoin
             .map(
               (i) =>
-                `${nameById.get(i.studentId) ?? i.studentId} (${joinDates.get(
-                  i.studentId,
-                )} dan)`,
+                `${nameById.get(i.studentId) ?? i.studentId} (${
+                  joinDates.get(i.studentId)?.joinedAt
+                } dan)`,
+            )
+            .join(', '),
+      );
+    }
+
+    // `leftAt` — exclusive: chiqqan kunidagi dars ham uniki emas.
+    const afterLeave = dto.items.filter((i) => {
+      const w = joinDates.get(i.studentId);
+      return !!w?.leftAt && dto.lessonDate >= w.leftAt;
+    });
+    if (afterLeave.length) {
+      throw new BadRequestException(
+        `Bu o'quvchilar guruhdan chiqqan, ${dto.lessonDate} sanasidagi darsga davomat yozib bo'lmaydi: ` +
+          afterLeave
+            .map(
+              (i) =>
+                `${nameById.get(i.studentId) ?? i.studentId} (${
+                  joinDates.get(i.studentId)?.leftAt
+                } dan chiqqan)`,
             )
             .join(', '),
       );

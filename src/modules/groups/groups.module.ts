@@ -10,6 +10,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { GroupScheduleModule } from '@/modules/group_schedule/group_schedule.module';
+import { ScheduleBoardModule } from '@/modules/group_schedule/schedule-board.module';
 import { AttendanceModule } from '@/modules/attendance/attendance.module';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 import { GroupFeeModule } from '@/modules/groups/group-fee.module';
@@ -30,6 +31,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
       AttendanceLessonOverride,
     ]),
     GroupFeeModule,
+    ScheduleBoardModule,
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
     forwardRef(() => PaymentsModule),

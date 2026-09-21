@@ -7,11 +7,17 @@ import { GroupAttendanceController } from './group-attendance.controller';
 import { StudentsModule } from '@/modules/students/students.module';
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { Student } from '@/modules/students/entities/students.entity';
 import { PaymentsModule } from '@/modules/payments/payments.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Attendance, AttendanceLessonOverride, Group]),
+    TypeOrmModule.forFeature([
+      Attendance,
+      AttendanceLessonOverride,
+      Group,
+      Student,
+    ]),
     forwardRef(() => StudentsModule),
     forwardRef(() => GroupsModule),
     forwardRef(() => PaymentsModule),

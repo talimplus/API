@@ -24,9 +24,21 @@ import { Student } from '@/modules/students/entities/students.entity';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { PaymentsService } from '@/modules/payments/payments.service';
 import { GroupFeeService } from '@/modules/groups/group-fee.service';
+import { ScheduleBoardService } from '@/modules/group_schedule/schedule-board.service';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
 import { MoreThan } from 'typeorm';
+
+/** To'qnashuv xabarini o'zbekcha yozish uchun (xabar backendda yig'iladi). */
+const DAY_LABELS_UZ: Record<WeekDay, string> = {
+  [WeekDay.MONDAY]: 'Dushanba',
+  [WeekDay.TUESDAY]: 'Seshanba',
+  [WeekDay.WEDNESDAY]: 'Chorshanba',
+  [WeekDay.THURSDAY]: 'Payshanba',
+  [WeekDay.FRIDAY]: 'Juma',
+  [WeekDay.SATURDAY]: 'Shanba',
+  [WeekDay.SUNDAY]: 'Yakshanba',
+};
 
 @Injectable()
 export class GroupsService {
@@ -52,6 +64,7 @@ export class GroupsService {
     @Inject(forwardRef(() => PaymentsService))
     private readonly paymentsService: PaymentsService,
     private readonly groupFeeService: GroupFeeService,
+    private readonly scheduleBoardService: ScheduleBoardService,
   ) {}
 
   /**
@@ -205,58 +218,53 @@ export class GroupsService {
     }
   }
 
-  /** Normalize 'HH:mm' or 'HH:mm:ss' to 'HH:mm:ss' for reliable comparison. */
-  private normalizeTime(t: string): string {
-    const [h = '00', m = '00', s = '00'] = String(t).split(':');
-    return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`;
-  }
-
   /**
-   * Prevents double-booking a room: a room cannot host two (non-finished)
-   * groups on the same weekday at the same start time.
+   * Xona va o'qituvchi bandligi.
+   *
+   * Bitta xonada (va bitta o'qituvchida) bir vaqtning o'zida ikkita dars
+   * bo'lolmaydi. Kesishish haqiqiy vaqt oralig'i bo'yicha hisoblanadi:
+   * `[startTime .. startTime + lessonDurationMinutes)`. Ya'ni 09:00–10:30 va
+   * 10:30–12:00 to'qnashmaydi, 09:00–10:30 va 10:00–11:30 esa to'qnashadi.
+   *
+   * Xato 422 bo'lib qaytadi va aynan tegishli maydonga (`roomId` /
+   * `teacherId`) bog'lanadi — formada shu input ostida ko'rinadi.
    */
-  private async assertRoomScheduleAvailable(args: {
+  private async assertScheduleAvailable(args: {
+    organizationId: number;
     roomId?: number | null;
+    teacherId?: number | null;
     days?: { day: WeekDay; startTime: string }[];
+    durationMinutes?: number | null;
     excludeGroupId?: number;
   }) {
-    const { roomId, days, excludeGroupId } = args;
-    if (!roomId || !days?.length) return;
+    const conflicts = await this.scheduleBoardService.findConflicts({
+      organizationId: args.organizationId,
+      days: args.days ?? [],
+      durationMinutes: args.durationMinutes,
+      roomId: args.roomId ?? null,
+      teacherId: args.teacherId ?? null,
+      excludeGroupId: args.excludeGroupId ?? null,
+    });
+    if (!conflicts.length) return;
 
-    const qb = this.scheduleRepo
-      .createQueryBuilder('sch')
-      .innerJoin('sch.group', 'g')
-      .innerJoin('g.room', 'r')
-      .where('r.id = :roomId', { roomId })
-      .andWhere('g.status != :finished', { finished: GroupStatus.FINISHED })
-      .select('sch.day', 'day')
-      .addSelect('sch.startTime', 'startTime')
-      .addSelect('g.name', 'groupName');
-    if (excludeGroupId) {
-      qb.andWhere('g.id != :excludeGroupId', { excludeGroupId });
+    const describe = (c: (typeof conflicts)[number]) =>
+      `"${c.groupName}" — ${DAY_LABELS_UZ[c.day] ?? c.day} ${c.startTime}–${c.endTime}`;
+
+    const errors: Record<string, string> = {};
+
+    const roomConflicts = conflicts.filter((c) => c.reason === 'room');
+    if (roomConflicts.length) {
+      errors.roomId = `Xona band: ${roomConflicts.map(describe).join('; ')}`;
     }
 
-    const existing = await qb.getRawMany<{
-      day: WeekDay;
-      startTime: string;
-      groupName: string;
-    }>();
-
-    const taken = new Map<string, string>();
-    for (const e of existing) {
-      taken.set(`${e.day}|${this.normalizeTime(e.startTime)}`, e.groupName);
+    const teacherConflicts = conflicts.filter((c) => c.reason === 'teacher');
+    if (teacherConflicts.length) {
+      errors.teacherId = `O'qituvchi band: ${teacherConflicts
+        .map(describe)
+        .join('; ')}`;
     }
 
-    for (const d of days) {
-      const conflictGroup = taken.get(
-        `${d.day}|${this.normalizeTime(d.startTime)}`,
-      );
-      if (conflictGroup) {
-        throw new BadRequestException(
-          `Xona band: bu xona "${conflictGroup}" guruhiga ${d.day} kuni ${this.normalizeTime(d.startTime).slice(0, 5)} da biriktirilgan`,
-        );
-      }
-    }
+    throw new ValidationException(errors);
   }
 
   async create(dto: CreateGroupDto, centerId: number, role: UserRole) {
@@ -305,9 +313,12 @@ export class GroupsService {
       }
     }
 
-    await this.assertRoomScheduleAvailable({
+    await this.assertScheduleAvailable({
+      organizationId: center.organizationId,
       roomId: dto.roomId,
+      teacherId: dto.teacherId,
       days: dto.days,
+      durationMinutes: dto.lessonDurationMinutes,
     });
 
     const startDate = dto.startDate
@@ -330,6 +341,7 @@ export class GroupsService {
       teacher,
       room,
       timezone: dto.timezone,
+      lessonDurationMinutes: dto.lessonDurationMinutes ?? 90,
       // DATE ustunlariga string yoziladi — timezone siljishining oldini oladi.
       startDate: (startDate ?? undefined) as unknown as Date,
       endDate: (endDate ?? null) as unknown as Date | null,
@@ -372,7 +384,9 @@ export class GroupsService {
   ) {
     const group = await this.groupRepo.findOne({
       where: { id },
-      relations: ['room', 'schedules', 'center'],
+      // `teacher` ham kerak: o'qituvchi o'zgartirilmasa ham uning bandligi
+      // yangi jadval bo'yicha qayta tekshiriladi.
+      relations: ['room', 'teacher', 'schedules', 'center'],
     });
 
     if (!group) throw new NotFoundException('Group not found');
@@ -419,17 +433,36 @@ export class GroupsService {
       });
       if (!group.center) throw new NotFoundException('Center not found');
     }
+    // MUHIM: xona va o'qituvchi guruhning **o'z filialidan** bo'lishi shart.
+    // Ilgari bu tekshirilmasdi va boshqa filialning xonasi biriktirilib
+    // qolardi — foydalanuvchi o'z filialidan xonani o'chirsa ham guruhda
+    // o'sha xona nomi ko'rinib turardi.
+    const effectiveCenterId = group.center?.id;
+
     if (dto.roomId) {
       group.room = await this.roomRepo.findOneBy({
         id: dto.roomId,
+        center: { id: effectiveCenterId },
       });
-      if (!group.room) throw new NotFoundException('Room not found');
+      if (!group.room) {
+        throw new ValidationException({
+          roomId: 'Xona topilmadi yoki boshqa filialga tegishli',
+        });
+      }
     }
     if (dto.teacherId) {
       group.teacher = await this.userRepo.findOneBy({
         id: dto.teacherId,
+        center: { id: effectiveCenterId },
       });
-      if (!group.teacher) throw new NotFoundException('Teacher not found');
+      if (!group.teacher) {
+        throw new ValidationException({
+          teacherId: "O'qituvchi topilmadi yoki boshqa filialga tegishli",
+        });
+      }
+    }
+    if (dto.lessonDurationMinutes !== undefined) {
+      group.lessonDurationMinutes = dto.lessonDurationMinutes;
     }
 
     const nextStartDate = this.toDateOnly(group.startDate);
@@ -445,16 +478,20 @@ export class GroupsService {
       this.applyEndDateStatusRules(group);
     }
 
-    // Re-check room availability against the effective room + schedule.
+    // Xona/o'qituvchi bandligi yangi holat bo'yicha qayta tekshiriladi
+    // (jadval berilmagan bo'lsa guruhning mavjud jadvali olinadi).
     const effectiveDays =
       dto.days ??
       (group.schedules ?? []).map((s) => ({
         day: s.day,
         startTime: s.startTime,
       }));
-    await this.assertRoomScheduleAvailable({
+    await this.assertScheduleAvailable({
+      organizationId,
       roomId: group.room?.id,
+      teacherId: group.teacher?.id,
       days: effectiveDays,
+      durationMinutes: group.lessonDurationMinutes,
       excludeGroupId: id,
     });
 
@@ -523,6 +560,10 @@ export class GroupsService {
    *
    * Tugash sanasi (endDate) bu yerda MAJBURIY: status va sana doim mos
    * bo'lishi kerak, aks holda darslar/to'lovlar cheksiz hisoblanadi.
+   * - `started` qilish uchun **xona** ham tanlangan bo'lishi shart (darslar
+   *   qayerda bo'lishi jadvalda ko'rinishi kerak). Yetishmagan maydonlar
+   *   bitta 422 xatosida qaytadi (`endDate`, `roomId`) — front tahrirlash
+   *   formasini ochib, xatoni aynan shu maydonlarga qo'yadi;
    * - `started` qilish uchun tugash sanasi o'tmagan bo'lishi kerak;
    * - `finished` qilinganda tugash sanasi bugundan keyin bo'lsa, bugunga
    *   tortiladi — shunda bugundan keyingi darslarga to'lov hisoblanmaydi;
@@ -547,7 +588,8 @@ export class GroupsService {
 
     const group = await this.groupRepo.findOne({
       where: { id },
-      relations: ['center'],
+      // `room` ham kerak: guruhni boshlash uchun xona majburiy.
+      relations: ['center', 'room'],
     });
     if (!group) throw new NotFoundException('Group not found');
     if (group.center?.organizationId !== organizationId) {
@@ -568,11 +610,19 @@ export class GroupsService {
       );
     }
 
+    // Guruhni boshlash uchun ikkala shart ham bajarilishi kerak: darslar
+    // tugash sanasi va xona. Ikkalasi bir xatoda qaytadi — foydalanuvchi
+    // tahrirlash formasida ikkalasini bir marta to'ldiradi.
+    const missing: Record<string, string> = {};
     if (!group.endDate) {
-      throw new ValidationException({
-        endDate:
-          "Statusni o'zgartirishdan oldin guruh darslari tugash sanasini kiriting",
-      });
+      missing.endDate =
+        "Statusni o'zgartirishdan oldin guruh darslari tugash sanasini kiriting";
+    }
+    if (nextStatus === GroupStatus.STARTED && !group.room?.id) {
+      missing.roomId = 'Guruhni boshlash uchun xona tanlang';
+    }
+    if (Object.keys(missing).length) {
+      throw new ValidationException(missing);
     }
 
     const endDate = this.toDateOnly(group.endDate) as string;

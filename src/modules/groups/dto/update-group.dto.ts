@@ -2,9 +2,12 @@ import {
   IsArray,
   IsDateString,
   IsIn,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Max,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -49,6 +52,20 @@ export class UpdateGroupDto {
   @IsOptional()
   @IsDateString()
   endDate?: string;
+
+  @ApiProperty({
+    example: 90,
+    required: false,
+    description:
+      "Bitta darsning davomiyligi (daqiqa). Xona va o'qituvchi bandligi shu " +
+      "qiymat bo'yicha tekshiriladi: [startTime .. startTime + davomiylik).",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(5)
+  @Max(600)
+  lessonDurationMinutes?: number;
 
   @ApiProperty({
     example: GroupStatus.NEW,

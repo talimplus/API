@@ -70,8 +70,18 @@ export class StaffAttendanceService {
    *
    * Hech qanday shart bloklamaydi — joylashuv berilmasa ham, markaz Wi-Fi'sida
    * bo'lmasa ham yozuv yaratiladi. Farq faqat `confidence` va `flags` da.
+   *
+   * Yagona shart — **rol**: ishga kelganini faqat o'qituvchining o'zi
+   * belgilaydi. Admin/menejer `'*'` ruxsatiga ega bo'lsa ham o'ziga davomat
+   * yoza olmaydi (hisobot ham faqat o'qituvchilar bo'yicha quriladi).
    */
   async checkIn(reqUser: any, dto: CheckInDto, req: any) {
+    if (reqUser?.role !== UserRole.TEACHER) {
+      throw new ForbiddenException(
+        "\"Keldim\" faqat o'qituvchilar uchun — davomatni o'qituvchining o'zi belgilaydi",
+      );
+    }
+
     const center = await this.loadCenter(reqUser.centerId);
     const timezone = center?.timezone || DEFAULT_TIMEZONE;
     const now = dayjs().tz(timezone);

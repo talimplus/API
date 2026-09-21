@@ -385,13 +385,59 @@ export class GroupPlanService {
     return this.getPlan(groupId, user);
   }
 
-  // ---------- O'qituvchining bugungi darslari ----------
+  // ---------- Bugungi darslar ----------
 
-  async getTeacherToday(user: any) {
-    const groups = await this.groupRepo.find({
-      where: { teacher: { id: user.userId } },
-      relations: ['schedules', 'center', 'subject', 'room', 'syllabus'],
+  /**
+   * Bugungi darslar ro'yxati. Kim so'raganiga qarab ikki xil doira:
+   *
+   * - **O'qituvchi** — faqat o'ziga biriktirilgan guruhlar. Ishga kelganini
+   *   ("Keldim") faqat shu holatda belgilash mumkin (`canCheckIn: true`).
+   * - **Boshqalar** (admin/menejer) — filialning **barcha** bugungi darslari,
+   *   o'qituvchi ismi bilan, **faqat ma'lumot sifatida**: davomat ham,
+   *   "Keldim" ham bu yerdan belgilanmaydi.
+   *
+   * Filial admin uchun `centerId` orqali tanlanadi (header'dagi tanlagich,
+   * "barcha filiallar" bo'lsa — butun tashkilot). Boshqa xodim o'z filialida
+   * qamalgan.
+   */
+  async getTeacherToday(user: any, centerIdRaw?: number) {
+    const isTeacher = user?.role === UserRole.TEACHER;
+    const isAdmin =
+      user?.role === UserRole.ADMIN || user?.role === UserRole.SUPER_ADMIN;
+
+    const qb = this.groupRepo
+      .createQueryBuilder('group')
+      .leftJoinAndSelect('group.schedules', 'schedules')
+      .leftJoinAndSelect('group.center', 'center')
+      .leftJoinAndSelect('group.subject', 'subject')
+      .leftJoinAndSelect('group.room', 'room')
+      .leftJoinAndSelect('group.syllabus', 'syllabus')
+      .leftJoinAndSelect('group.teacher', 'teacher')
+      .leftJoin('center.organization', 'organization')
+      .where('organization.id = :organizationId', {
+        organizationId: user.organizationId,
+      });
+
+    if (isTeacher) {
+      qb.andWhere('teacher.id = :teacherId', { teacherId: user.userId });
+    } else {
+      const centerId = isAdmin ? centerIdRaw : user.centerId;
+      if (centerId) qb.andWhere('center.id = :centerId', { centerId });
+    }
+
+    // Bugun darsi bo'lishi mumkin bo'lmagan guruhlarni SQL darajasida
+    // chiqarib tashlaymiz (admin ko'rinishida guruhlar ko'p bo'lishi mumkin,
+    // har biri uchun dars sanalari alohida hisoblanadi). Timezone farqini
+    // qoplash uchun chegara bir kunga kengaytirilgan — bugungi dars hech
+    // qachon tushib qolmaydi.
+    const utcToday = dayjs().utc();
+    qb.andWhere('group.startDate <= :maxStart', {
+      maxStart: utcToday.add(1, 'day').format('YYYY-MM-DD'),
+    }).andWhere('(group.endDate IS NULL OR group.endDate >= :minEnd)', {
+      minEnd: utcToday.subtract(1, 'day').format('YYYY-MM-DD'),
     });
+
+    const groups = await qb.getMany();
 
     const result = [];
 
@@ -439,6 +485,14 @@ export class GroupPlanService {
             ? { id: group.room.id, name: group.room.name }
             : null,
         },
+        // Admin ro'yxatida kimning darsi ekani ko'rinib turishi uchun.
+        teacher: group.teacher
+          ? {
+              id: group.teacher.id,
+              firstName: group.teacher.firstName,
+              lastName: group.teacher.lastName,
+            }
+          : null,
         date: today,
         startTime: schedule?.startTime ?? null,
         lessonNumber,
@@ -450,6 +504,10 @@ export class GroupPlanService {
 
     return {
       date: dayjs().format('YYYY-MM-DD'),
+      // `center` — kuzatuvchi ko'rinishi: front shu bayroqqa qarab
+      // "Keldim" kartasini va tahrir imkoniyatlarini yashiradi.
+      scope: isTeacher ? 'teacher' : 'center',
+      canCheckIn: isTeacher,
       lessons: result.sort((a, b) =>
         String(a.startTime ?? '').localeCompare(String(b.startTime ?? '')),
       ),

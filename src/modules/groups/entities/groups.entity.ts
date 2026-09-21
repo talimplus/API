@@ -48,6 +48,14 @@ export class Group {
   @Column({ type: 'date', nullable: true })
   endDate?: Date | null;
 
+  /**
+   * Bitta darsning davomiyligi (daqiqa). Guruhning barcha darslari bir xil
+   * uzunlikda deb hisoblanadi — xona/o'qituvchi bandligi va dars jadvali
+   * panjarasi shu qiymatga tayanadi (`startTime` + shu daqiqa = tugash vaqti).
+   */
+  @Column({ type: 'int', default: 90 })
+  lessonDurationMinutes: number;
+
   @Column({ type: 'enum', enum: GroupStatus, default: GroupStatus.NEW })
   status: GroupStatus;
 
@@ -66,8 +74,13 @@ export class Group {
   @ManyToOne(() => Center, { onDelete: 'CASCADE' })
   center: Center;
 
-  @ManyToOne(() => Room, { onDelete: 'CASCADE' })
-  room: Room;
+  /**
+   * Guruh xonasi. Xona o'chirilsa guruh o'chmaydi — faqat xona uziladi
+   * (`SET NULL`), guruh esa "xonasiz" bo'lib qoladi va jadvalda shunday
+   * ko'rinadi. Xona har doim guruhning **o'z filialidan** bo'lishi kerak.
+   */
+  @ManyToOne(() => Room, { onDelete: 'SET NULL', nullable: true })
+  room?: Room | null;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   teacher: User;

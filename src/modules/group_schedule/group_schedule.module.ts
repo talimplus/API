@@ -5,10 +5,12 @@ import { GroupScheduleService } from './group_schedule.service';
 import { GroupScheduleController } from './group_schedule.controller';
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { ScheduleBoardModule } from './schedule-board.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([GroupSchedule, Group]),
+    ScheduleBoardModule,
     forwardRef(() => GroupsModule),
   ],
   controllers: [GroupScheduleController],
