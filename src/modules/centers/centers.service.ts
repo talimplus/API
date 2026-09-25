@@ -175,7 +175,9 @@ export class CentersService {
         center.longitude =
           dto.longitude === null ? null : Number(dto.longitude);
       }
-      if (dto.checkInRadiusMeters !== undefined) {
+      // Radius cannot be cleared (non-null column, default 150): `null` is
+      // ignored instead of becoming Number(null) = 0 (a 0 m geofence).
+      if (dto.checkInRadiusMeters != null) {
         center.checkInRadiusMeters = Number(dto.checkInRadiusMeters);
       }
       if (dto.publicIp !== undefined) {
