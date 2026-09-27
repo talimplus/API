@@ -13,7 +13,7 @@ export interface SystemRolePreset {
   name: { uz: string; ru: string };
   baseRole: UserRole;
   permissions: string[];
-  /** `true` — o'chirib/tahrirlab bo'lmaydi (faqat admin roli uchun) */
+  /** `true` — o'chirib/tahrirlab bo'lmaydi (admin va student rollari) */
   locked: boolean;
 }
 
@@ -147,6 +147,16 @@ export const SYSTEM_ROLE_PRESETS: SystemRolePreset[] = [
       'staffAttendance.viewOwn',
     ],
     locked: false,
+  },
+  {
+    // O'quvchining kabinet akkaunti (`POST /students` yaratadi). CRM'ga ruxsati
+    // yo'q — faqat ochiq endpointlar (`/users/me`). Xodimlarga berilmaydi va
+    // rollar ro'yxatida ko'rsatilmaydi (`RolesService.findAll`).
+    key: 'student',
+    name: { uz: 'O‘quvchi', ru: 'Ученик' },
+    baseRole: UserRole.STUDENT,
+    permissions: [],
+    locked: true,
   },
 ];
 

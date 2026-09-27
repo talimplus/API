@@ -5,6 +5,11 @@ import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-date
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
 import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import {
+  ensureGroupHolidays,
+  ensureGroupPauses,
+  ensureSchedulePeriods,
+} from '@/modules/group_schedule/schedule-periods.util';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { Student } from '@/modules/students/entities/students.entity';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
@@ -59,6 +64,13 @@ export class AttendanceService {
       relations: ['teacher', 'center', 'schedules', 'students'],
     });
     if (!group) throw new NotFoundException('Group not found');
+    // Jadval tarixi: jadval o'zgargandan keyin ham o'tgan darslar eski
+    // kunlarda ko'rinadi va ularga davomat yozish mumkin.
+    await ensureSchedulePeriods(this.groupRepo.manager, group);
+    // To'xtatilgan kunlardagi darslar jurnalda ko'rinmaydi va ularga davomat
+    // yozilmaydi.
+    await ensureGroupPauses(this.groupRepo.manager, group);
+    await ensureGroupHolidays(this.groupRepo.manager, group);
     return group;
   }
 
@@ -275,6 +287,9 @@ export class AttendanceService {
         groupStartDate: startDate,
         groupEndDate: endDate,
         schedules: group.schedules ?? [],
+        schedulePeriods: group.schedulePeriods ?? null,
+        pauses: group.pauses ?? null,
+        holidays: group.holidays ?? null,
         window: { mode: 'last', count },
       });
     }
@@ -295,6 +310,9 @@ export class AttendanceService {
       groupStartDate: startDate,
       groupEndDate: endDate,
       schedules: group.schedules ?? [],
+      schedulePeriods: group.schedulePeriods ?? null,
+      pauses: group.pauses ?? null,
+      holidays: group.holidays ?? null,
       window: { mode: 'range', from, to },
     });
   }
@@ -315,6 +333,17 @@ export class AttendanceService {
     const joinDates = await this.getJoinDatesByStudent(groupId, timezone);
 
     const lessonDates = this.computeLessonDatesForGroup(group, query);
+
+    // Ko'rsatilayotgan oraliqqa tushgan bayramlar — jurnalda "nega bu kuni dars
+    // yo'q" degan savolga javob (dars sanalari ro'yxatiga kirmaydi).
+    const viewFrom =
+      query.from ??
+      lessonDates[0] ??
+      dayjs(group.startDate).format('YYYY-MM-DD');
+    const viewTo = query.to ?? lessonDates[lessonDates.length - 1] ?? today;
+    const holidays = (group.holidays ?? []).filter(
+      (h) => h.fromDate <= viewTo && h.toDate >= viewFrom,
+    );
 
     // Ro'yxatga guruhdan chiqib ketgan (boshqa guruhga ko'chirilgan) o'quvchilar
     // ham kiradi — agar ular ko'rsatilayotgan oraliqda o'qigan bo'lsa. Aks holda
@@ -367,6 +396,7 @@ export class AttendanceService {
           lessonDates: uniqueDates,
           overridesByDate,
           attendanceByDate,
+          holidays,
         };
       }
 
@@ -376,6 +406,7 @@ export class AttendanceService {
         students,
         lessonDates: [],
         attendanceByDate: {},
+        holidays,
       };
     }
 
@@ -457,6 +488,7 @@ export class AttendanceService {
       lessonDates: combinedDates,
       overridesByDate,
       attendanceByDate: byDate,
+      holidays,
     };
   }
 
@@ -527,6 +559,9 @@ export class AttendanceService {
         groupStartDate,
         groupEndDate,
         schedules: group.schedules,
+        schedulePeriods: group.schedulePeriods ?? null,
+        pauses: group.pauses ?? null,
+        holidays: group.holidays ?? null,
         window: { mode: 'range', from: dto.lessonDate, to: dto.lessonDate },
       });
       if (!valid.includes(dto.lessonDate)) {
@@ -796,6 +831,9 @@ export class AttendanceService {
       groupStartDate,
       groupEndDate,
       schedules: group.schedules ?? [],
+      schedulePeriods: group.schedulePeriods ?? null,
+      pauses: group.pauses ?? null,
+      holidays: group.holidays ?? null,
       window: { mode: 'range', from: fromDate, to: fromDate },
     });
     if (!fromValid.includes(fromDate)) {
@@ -807,6 +845,9 @@ export class AttendanceService {
       groupStartDate,
       groupEndDate,
       schedules: group.schedules ?? [],
+      schedulePeriods: group.schedulePeriods ?? null,
+      pauses: group.pauses ?? null,
+      holidays: group.holidays ?? null,
       window: { mode: 'range', from: dto.toDate, to: dto.toDate },
     });
     if (toIsScheduled.includes(dto.toDate)) {

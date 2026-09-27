@@ -14,6 +14,7 @@ import { GroupsModule } from '@/modules/groups/groups.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { StaffSalariesModule } from '@/modules/staff-salaries/staff-salaries.module';
 import { StaffAttendanceModule } from '@/modules/staff-attendance/staff-attendance.module';
+import { HolidaysModule } from '@/modules/holidays/holidays.module';
 import { StatisticsModule } from '@/modules/statistics/statistics.module';
 import { LeadsModule } from '@/modules/leads/leads.module';
 import { SyllabusModule } from '@/modules/syllabus/syllabus.module';
@@ -41,6 +42,7 @@ import { Module } from '@nestjs/common';
     UsersModule,
     StaffSalariesModule,
     StaffAttendanceModule,
+    HolidaysModule,
     CentersModule,
     StudentsModule,
     SubjectsModule,

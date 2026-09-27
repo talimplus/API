@@ -6,6 +6,7 @@ import { TeacherEarningsService } from '@/modules/teacher-earnings/teacher-earni
 import { User } from '@/modules/users/entities/user.entity';
 import { Payment } from '@/modules/payments/entities/payment.entity';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
+import { UserPayModule } from '@/modules/users/user-pay.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.enti
       Payment,
       StaffSalary,
     ]),
+    UserPayModule,
   ],
   providers: [TeacherEarningsService],
   controllers: [],

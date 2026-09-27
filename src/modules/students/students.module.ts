@@ -18,6 +18,7 @@ import { Payment } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
+import { StudentBaseDiscountModule } from '@/modules/students/student-base-discount.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
     UsersModule,
     OrganizationsModule,
     EnrollmentsModule,
+    StudentBaseDiscountModule,
     forwardRef(() => GroupsModule),
     forwardRef(() => ReferralsModule),
     forwardRef(() => AttendanceModule),

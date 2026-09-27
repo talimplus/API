@@ -10,6 +10,12 @@ export class StudentDiscountPeriodResponseDto {
   @ApiProperty({ example: 15 })
   percent: number;
 
+  @ApiProperty({ example: 0, description: "so'm/oy; percent yoki amount" })
+  amount: number;
+
+  @ApiProperty({ required: false, nullable: true, example: 12 })
+  groupId?: number | null;
+
   @ApiProperty({ example: '2026-01-01' })
   fromMonth: string;
 

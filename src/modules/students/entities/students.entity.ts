@@ -84,6 +84,13 @@ export class Student {
   @Column({ type: 'numeric', default: 0 })
   discountPercent: number;
 
+  /**
+   * Doimiy chegirma summada (so'm/oy) — `discountPercent` ning jufti. Faqat
+   * to'liq oylarga qo'llanadi (oy o'rtasida kelsa — keyingi oydan).
+   */
+  @Column({ type: 'numeric', default: 0 })
+  discountAmount: number;
+
   @Column({ type: 'text', nullable: true })
   discountReason?: string | null;
 

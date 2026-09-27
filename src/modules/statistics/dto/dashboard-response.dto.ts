@@ -69,6 +69,41 @@ class ExpensesDashboardDto {
   totalCount: number;
 }
 
+class MonthPaymentsDto extends MoneySummaryDto {
+  @ApiProperty({ example: 0 })
+  refundedAmount: number;
+}
+
+class MonthExpensesDto {
+  @ApiProperty({ example: 250000 })
+  totalAmount: number;
+}
+
+/** Oraliqdagi bitta oy — `payments.forMonth` / `expenses.forMonth` / `staff_salaries.forMonth` bo'yicha. */
+export class DashboardMonthRow {
+  @ApiProperty({ example: '2026-08' })
+  month: string;
+
+  @ApiProperty({ type: () => MonthPaymentsDto })
+  payments: MonthPaymentsDto;
+
+  @ApiProperty({ type: () => MonthExpensesDto })
+  expenses: MonthExpensesDto;
+
+  @ApiProperty({
+    type: () => MoneySummaryDto,
+    description: 'forMonth = to‘lov oyi (o‘tgan oy ishi uchun)',
+  })
+  payroll: MoneySummaryDto;
+
+  @ApiProperty({
+    example: 150000,
+    description:
+      'payments.amountPaid - payments.refundedAmount - expenses.totalAmount - payroll.amountPaid',
+  })
+  netCashflow: number;
+}
+
 export class DashboardResponseDto {
   @ApiProperty({ example: 1 })
   centerId: number | null;
@@ -107,4 +142,12 @@ export class DashboardResponseDto {
       'payments.amountPaid - expenses.totalAmount - payroll.amountPaid',
   })
   netCashflow: number;
+
+  @ApiProperty({
+    type: () => [DashboardMonthRow],
+    description:
+      'Oraliqdagi har bir oy alohida (fromMonth..toMonth, ikkalasi ham kiradi). ' +
+      'Yuqoridagi umumiy qiymatlar — shu qatorlar yig‘indisi.',
+  })
+  byMonth: DashboardMonthRow[];
 }

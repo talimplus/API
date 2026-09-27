@@ -131,4 +131,13 @@ export class LessonDatesViewDto {
       'Keyed by lessonDate. Missing attendance rows are expected and represented as exists=false.',
   })
   attendanceByDate: Record<string, AttendanceByDateDto>;
+
+  @ApiProperty({
+    example: [
+      { fromDate: '2026-03-21', toDate: '2026-03-23', name: "Navro'z" },
+    ],
+    description:
+      "Ko'rsatilgan oraliqqa tushgan bayram kunlari (bu kunlarda dars yo'q, `lessonDates` ga kirmaydi).",
+  })
+  holidays: { fromDate: string; toDate: string; name: string }[];
 }

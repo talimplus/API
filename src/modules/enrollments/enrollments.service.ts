@@ -129,6 +129,45 @@ export class EnrollmentsService {
   }
 
   /**
+   * Oy bilan kesishgan BARCHA oynalar (o'quvchi shu oyda chiqib qayta
+   * qo'shilgan bo'lsa ikkita). To'lov proratsiyasi dars sanalarini shu
+   * oynalar birlashmasi bo'yicha filtrlaydi — oradagi uzilish uchun pul
+   * so'ralmaydi. Oyna umuman bo'lmasa `null`.
+   */
+  async resolveWindowsForMonth(
+    studentId: number,
+    groupId: number,
+    forMonth: string, // YYYY-MM-01
+  ): Promise<EnrollmentWindow[] | null> {
+    const windows = await this.getWindows(studentId, groupId);
+    if (!windows.length) return null;
+    const monthStart = dayjs(forMonth).startOf('month').format('YYYY-MM-DD');
+    const monthEnd = dayjs(forMonth).endOf('month').format('YYYY-MM-DD');
+    return windows.filter(
+      (w) => w.joinedAt <= monthEnd && (!w.leftAt || w.leftAt > monthStart),
+    );
+  }
+
+  /**
+   * O'quvchining barcha ochiq oynalarini yopadi (o'quvchi to'xtatilganda).
+   * Qayta faollashganda yangi oyna ochiladi — shuning uchun to'xtab turgan
+   * davr hech qachon to'lovga kirmaydi va eski oylar proratsiyasi saqlanadi.
+   */
+  async closeAllForStudent(
+    studentId: number,
+    leftAt: string,
+    reason?: string | null,
+  ): Promise<number[]> {
+    const open = await this.repo.find({
+      where: { studentId, leftAt: IsNull() },
+    });
+    for (const w of open) {
+      await this.close(studentId, w.groupId, leftAt, { reason });
+    }
+    return open.map((w) => w.groupId);
+  }
+
+  /**
    * Guruhga qo'shilishni yozadi. Ochiq oyna allaqachon bo'lsa — hech narsa
    * qilinmaydi (idempotent), lekin `joinedAt` erta sanaga tuzatilishi mumkin.
    */

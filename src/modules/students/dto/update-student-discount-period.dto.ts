@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class UpdateStudentDiscountPeriodDto {
@@ -14,6 +21,29 @@ export class UpdateStudentDiscountPeriodDto {
   @Min(0)
   @Max(100)
   percent?: number;
+
+  @ApiProperty({
+    required: false,
+    example: 20000,
+    description:
+      "Fixed discount per month (so'm). Sending percent OR amount replaces the value type.",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  amount?: number;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 12,
+    description: 'Limit to one group; null — all groups.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  groupId?: number | null;
 
   @ApiProperty({
     required: false,

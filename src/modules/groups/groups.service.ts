@@ -16,6 +16,8 @@ import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
+import { GroupSchedulePeriod } from '@/modules/group_schedule/entities/group-schedule-period.entity';
+import { GroupTeacherPeriod } from '@/modules/groups/entities/group-teacher-period.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
@@ -27,7 +29,7 @@ import { GroupFeeService } from '@/modules/groups/group-fee.service';
 import { ScheduleBoardService } from '@/modules/group_schedule/schedule-board.service';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
-import { MoreThan } from 'typeorm';
+import { MoreThanOrEqual } from 'typeorm';
 
 /** To'qnashuv xabarini o'zbekcha yozish uchun (xabar backendda yig'iladi). */
 const DAY_LABELS_UZ: Record<WeekDay, string> = {
@@ -57,6 +59,10 @@ export class GroupsService {
     private readonly roomRepo: Repository<Room>,
     @InjectRepository(GroupSchedule)
     private readonly scheduleRepo: Repository<GroupSchedule>,
+    @InjectRepository(GroupSchedulePeriod)
+    private readonly schedulePeriodRepo: Repository<GroupSchedulePeriod>,
+    @InjectRepository(GroupTeacherPeriod)
+    private readonly teacherPeriodRepo: Repository<GroupTeacherPeriod>,
     @InjectRepository(AttendanceLessonOverride)
     private readonly overrideRepo: Repository<AttendanceLessonOverride>,
     @InjectRepository(Student)
@@ -199,15 +205,115 @@ export class GroupsService {
     return false;
   }
 
+  /** Jadvalni solishtirish uchun kalit: kun + HH:mm, tartibdan qat'i nazar. */
+  private scheduleKey(days: { day: WeekDay; startTime: string }[]): string {
+    return (days ?? [])
+      .map((d) => `${d.day}@${String(d.startTime ?? '').slice(0, 5)}`)
+      .sort()
+      .join(',');
+  }
+
+  /**
+   * Jadval tarixiga yozadi: `fromDate` dan boshlab yangi jadval. Shu sanadan
+   * keyin rejalashtirilgan (hali kuchga kirmagan) davrlar bekor bo'ladi.
+   * O'tgan sanalar eski davrda qoladi — davomat va to'lov proratsiyasi
+   * o'zgarmaydi.
+   */
+  private async writeSchedulePeriod(
+    groupId: number,
+    fromDate: string,
+    days: { day: WeekDay; startTime: string }[],
+  ) {
+    await this.schedulePeriodRepo.delete({
+      groupId,
+      fromDate: MoreThanOrEqual(fromDate) as any,
+    });
+    await this.schedulePeriodRepo.save(
+      this.schedulePeriodRepo.create({
+        groupId,
+        fromDate: fromDate as unknown as Date,
+        days: days.map((d) => ({ day: d.day, startTime: d.startTime })),
+      }),
+    );
+  }
+
+  /**
+   * O'qituvchi tarixiga yozadi: `fromDate` dan boshlab `teacherId` guruhni
+   * oladi. Komissiya shu tarix bo'yicha bo'linadi.
+   */
+  private async writeTeacherPeriod(
+    groupId: number,
+    fromDate: string,
+    teacherId: number | null,
+  ) {
+    await this.teacherPeriodRepo.delete({
+      groupId,
+      fromDate: MoreThanOrEqual(fromDate) as any,
+    });
+    await this.teacherPeriodRepo.save(
+      this.teacherPeriodRepo.create({
+        groupId,
+        fromDate: fromDate as unknown as Date,
+        teacherId,
+      }),
+    );
+  }
+
+  private async assertScheduleKeepsRecordedLessons(
+    groupId: number,
+    effectiveFrom: string,
+    days: { day: WeekDay; startTime: string }[],
+  ) {
+    const dowByDay: Record<string, number> = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6,
+    };
+    const allowed = new Set(days.map((d) => dowByDay[d.day]));
+    const rows: { d: string; extra: boolean }[] =
+      await this.groupRepo.manager.query(
+        `SELECT DISTINCT TO_CHAR(a."lessonDate", 'YYYY-MM-DD') AS "d",
+              EXISTS (SELECT 1 FROM "attendance_lesson_overrides" o
+                       WHERE o."groupId" = a."groupId" AND o."toDate" = a."lessonDate") AS "extra"
+         FROM "attendance" a
+        WHERE a."groupId" = $1 AND a."lessonDate" >= $2::date
+        ORDER BY 1`,
+        [groupId, effectiveFrom],
+      );
+    const lost = rows.filter((r) => !r.extra && !allowed.has(dayjs(r.d).day()));
+    if (lost.length) {
+      throw new ValidationException({
+        scheduleEffectiveFrom:
+          `${dayjs(lost[0].d).format('DD.MM.YYYY')} kungi darsga davomat yozilgan, ` +
+          "yangi jadvalda bu kun yo'q. Yangi jadval shu kundan keyin kuchga kirsin.",
+      });
+    }
+  }
+
+  /** O'qituvchi sifatida faqat `teacher` turidagi xodim biriktiriladi. */
+  private assertTeacherRole(teacher: User | null | undefined) {
+    if (teacher && teacher.role !== UserRole.TEACHER) {
+      throw new ValidationException({
+        teacherId:
+          "Tanlangan xodim o'qituvchi emas — guruhga faqat o'qituvchi biriktiriladi",
+      });
+    }
+  }
+
   /**
    * Guruh sanasi/jadvali/narxi o'zgargach shu guruhning ochiq to'lovlarini
    * qayta hisoblaydi: tugash sanasidan keyingi oylar o'chadi, guruh oy
    * o'rtasida tugasa o'sha oy faqat haqiqiy dars kunlari uchun hisoblanadi.
    */
-  private async recalcGroupPayments(groupId: number) {
+  private async recalcGroupPayments(groupId: number, includePaid = false) {
     try {
       await this.paymentsService.recalculateOpenPaymentsForGroup(groupId, {
         maxMonthsBack: 3,
+        includePaid,
       });
     } catch (e) {
       this.logger.warn(
@@ -311,6 +417,7 @@ export class GroupsService {
           'Ushbu o‘qituvchi bu markazga tegishli emas yoki mavjud emas',
         );
       }
+      this.assertTeacherRole(teacher);
     }
 
     await this.assertScheduleAvailable({
@@ -360,10 +467,21 @@ export class GroupsService {
         }),
       );
       await this.scheduleRepo.save(schedules);
+      await this.writeSchedulePeriod(
+        savedGroup.id,
+        startDate ?? dayjs().format('YYYY-MM-DD'),
+        dto.days,
+      );
     }
 
     // Narx tarixining birinchi qatori — keyingi barcha hisob-kitob shundan.
     await this.groupFeeService.initFeeForGroup(savedGroup);
+    // O'qituvchi tarixining birinchi qatori (komissiya shundan).
+    await this.writeTeacherPeriod(
+      savedGroup.id,
+      startDate ?? dayjs().format('YYYY-MM-DD'),
+      teacher?.id ?? null,
+    );
 
     return savedGroup;
   }
@@ -400,6 +518,7 @@ export class GroupsService {
     const prevStartDate = this.toDateOnly(group.startDate);
     const prevEndDate = this.toDateOnly(group.endDate);
     const prevStatus = group.status;
+    const prevTeacherId = group.teacher?.id ?? null;
 
     if (dto.name) group.name = dto.name;
     if (dto.timezone) group.timezone = dto.timezone;
@@ -460,6 +579,9 @@ export class GroupsService {
           teacherId: "O'qituvchi topilmadi yoki boshqa filialga tegishli",
         });
       }
+      if (group.teacher.id !== prevTeacherId) {
+        this.assertTeacherRole(group.teacher);
+      }
     }
     if (dto.lessonDurationMinutes !== undefined) {
       group.lessonDurationMinutes = dto.lessonDurationMinutes;
@@ -495,9 +617,32 @@ export class GroupsService {
       excludeGroupId: id,
     });
 
+    // Yangi jadval o'tgan sanadan kuchga kirsa, o'sha oraliqda davomat
+    // yozilgan darslar yangi jadvalda ham dars kuni bo'lishi shart — aks holda
+    // ular jurnaldan yo'qolib, proratsiya o'zgarib ketardi.
+    if (
+      dto.days?.length &&
+      this.scheduleKey(dto.days) !== this.scheduleKey(group.schedules ?? [])
+    ) {
+      await this.assertScheduleKeepsRecordedLessons(
+        id,
+        dto.scheduleEffectiveFrom
+          ? dayjs(dto.scheduleEffectiveFrom).format('YYYY-MM-DD')
+          : this.todayInGroupTz(group),
+        dto.days,
+      );
+    }
+
     const savedGroup = await this.groupRepo.save(group);
 
-    if (dto.days && dto.days.length > 0) {
+    // Forma har saqlashda jadvalni qayta yuboradi — faqat haqiqatan
+    // o'zgargan bo'lsa tegamiz. Aks holda har tahrirda kelajakdagi ko'chirilgan
+    // darslar o'chib ketardi va tarixga keraksiz davr yozilardi.
+    const daysChanged = Boolean(
+      dto.days?.length &&
+        this.scheduleKey(dto.days) !== this.scheduleKey(group.schedules ?? []),
+    );
+    if (daysChanged) {
       await this.scheduleRepo.delete({ group: { id } });
 
       const newSchedules = dto.days.map((day) =>
@@ -509,11 +654,43 @@ export class GroupsService {
       );
       await this.scheduleRepo.save(newSchedules);
 
-      const today = dayjs().format('YYYY-MM-DD');
+      // Yangi jadval `scheduleEffectiveFrom` dan (default — bugun) kuchga
+      // kiradi; undan oldingi darslar eski jadvalda qoladi.
+      const today = this.todayInGroupTz(group);
+      const effectiveFrom = dto.scheduleEffectiveFrom
+        ? dayjs(dto.scheduleEffectiveFrom).format('YYYY-MM-DD')
+        : today;
+      await this.writeSchedulePeriod(id, effectiveFrom, dto.days);
+
+      // Yangi jadval kuchga kirgandan keyingi ko'chirishlar eski jadvalga
+      // tegishli edi — ularni tozalaymiz. O'tgan kunlardagilar tarix.
+      const tomorrow = dayjs(today).add(1, 'day').format('YYYY-MM-DD');
+      const cutoff = effectiveFrom > tomorrow ? effectiveFrom : tomorrow;
       await this.overrideRepo.delete({
         groupId: id,
-        fromDate: MoreThan(today) as any,
+        fromDate: MoreThanOrEqual(cutoff) as any,
       });
+    }
+
+    // O'qituvchi almashdi: tarixga yozamiz va ta'sirlangan oylar komissiyasini
+    // (eski ham, yangi o'qituvchi ham) qayta hisoblaymiz.
+    const nextTeacherId = group.teacher?.id ?? null;
+    if (nextTeacherId !== prevTeacherId) {
+      const teacherFrom = dto.teacherEffectiveFrom
+        ? dayjs(dto.teacherEffectiveFrom).format('YYYY-MM-DD')
+        : this.todayInGroupTz(group);
+      await this.writeTeacherPeriod(id, teacherFrom, nextTeacherId);
+      const current = dayjs().startOf('month');
+      let cursor = dayjs(teacherFrom).startOf('month');
+      if (cursor.isBefore(current.subtract(12, 'month'))) {
+        cursor = current.subtract(12, 'month');
+      }
+      while (!cursor.isAfter(current)) {
+        await this.paymentsService
+          .recalcTeacherEarningsForGroupMonth(id, cursor.format('YYYY-MM-01'))
+          .catch(() => undefined);
+        cursor = cursor.add(1, 'month');
+      }
     }
 
     // Status o'zgargan bo'lsa — o'quvchilar statusini ham moslaymiz.
@@ -539,14 +716,20 @@ export class GroupsService {
     }
 
     // Sana / jadval / narx o'zgarsa — to'lovlarni qayta hisoblaymiz.
-    const daysChanged = Boolean(dto.days && dto.days.length);
     if (
       endDateChanged ||
       daysChanged ||
       feeAppliedNow ||
       nextStartDate !== prevStartDate
     ) {
-      await this.recalcGroupPayments(id);
+      // Tugash sanasi oldinga tortildi (guruh erta yopildi) — to'liq
+      // to'langan oylar ham o'tmagan darslar uchun to'g'rilanadi.
+      const endMovedEarlier = Boolean(
+        endDateChanged &&
+          nextEndDate &&
+          (!prevEndDate || nextEndDate < prevEndDate),
+      );
+      await this.recalcGroupPayments(id, endMovedEarlier);
     }
 
     await this.groupFeeService.attachFeeInfo([savedGroup]);
@@ -656,7 +839,7 @@ export class GroupsService {
     const saved = await this.groupRepo.save(group);
 
     await this.syncStudentStatusesForGroups([id]);
-    await this.recalcGroupPayments(id);
+    await this.recalcGroupPayments(id, nextStatus === GroupStatus.FINISHED);
 
     return saved;
   }
@@ -801,8 +984,39 @@ export class GroupsService {
     return group;
   }
 
-  async remove(id: number) {
-    const group = await this.groupRepo.findOneByOrFail({ id });
+  /**
+   * Guruhni o'chirish.
+   *
+   * Faqat o'z tashkiloti (va filiali) ichida. Guruhda to'lov yoki davomat
+   * tarixi bo'lsa o'chirilmaydi: davomat, a'zolik oynalari va narx tarixi
+   * CASCADE bilan yo'qolardi, to'lovlar esa guruhsiz (`groupId = NULL`)
+   * qolib, hech bir qayta hisoblashga va o'qituvchi komissiyasiga kirmasdi.
+   * Bunday guruh `finished` qilinadi — tarix saqlanadi.
+   */
+  async remove(id: number, organizationId: number, centerId?: number) {
+    const group = await this.groupRepo.findOne({
+      where: { id },
+      relations: ['center'],
+    });
+    if (!group || group.center?.organizationId !== organizationId) {
+      throw new NotFoundException('Group not found');
+    }
+    if (centerId && group.center?.id !== centerId) {
+      throw new NotFoundException('Group not found');
+    }
+
+    const [usage] = await this.groupRepo.manager.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM "payments" WHERE "groupId" = $1) AS "hasPayments",
+         EXISTS (SELECT 1 FROM "attendance" WHERE "groupId" = $1) AS "hasAttendance"`,
+      [id],
+    );
+    if (usage?.hasPayments || usage?.hasAttendance) {
+      throw new BadRequestException(
+        "Guruhda to'lov yoki davomat tarixi bor — uni o'chirib bo'lmaydi. " +
+          'Guruhni yopish uchun statusini "tugagan" qiling.',
+      );
+    }
     return this.groupRepo.remove(group);
   }
 }

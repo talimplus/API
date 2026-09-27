@@ -16,6 +16,7 @@ import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.enti
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { StudentStatus } from '@/common/enums/students-status.enums';
+import { DashboardMonthRow } from '@/modules/statistics/dto/dashboard-response.dto';
 
 @Injectable()
 export class StatisticsService {
@@ -194,15 +195,91 @@ export class StatisticsService {
       .where(studentScope.clause, studentScope.params)
       .setParameters({ fromTs: fromMonthStart, toTs: endExclusive });
 
-    const [paymentsRaw, expensesRaw, payrollRaw, studentsRaw] =
-      await Promise.all([
-        paymentsAggQb.getRawOne<any>(),
-        expensesAggQb.getRawOne<any>(),
-        payrollAggQb.getRawOne<any>(),
-        studentsAggQb.getRawOne<any>(),
-      ]);
+    // Oylar kesimi: yuqoridagi so'rovlarning o'zi, faqat oy bo'yicha guruhlangan —
+    // shuning uchun filial/tashkilot chegarasi va oraliq aynan bir xil.
+    const monthOf = (col: string) => `TO_CHAR(${col}, 'YYYY-MM')`;
+    const paymentsByMonthQb = paymentsAggQb
+      .clone()
+      .select([
+        `${monthOf('p.forMonth')} as "month"`,
+        'COALESCE(SUM(p.amountDue), 0) as "amountDue"',
+        'COALESCE(SUM(p.amountPaid), 0) as "amountPaid"',
+        'COALESCE(SUM(p.amountDue - p.amountPaid), 0) as "remainingAmount"',
+        'COALESCE(SUM(p.refundedAmount), 0) as "refundedAmount"',
+      ])
+      .groupBy(monthOf('p.forMonth'));
+    const expensesByMonthQb = expensesAggQb
+      .clone()
+      .select([
+        `${monthOf('e.forMonth')} as "month"`,
+        'COALESCE(SUM(e.amount), 0) as "totalAmount"',
+      ])
+      .groupBy(monthOf('e.forMonth'));
+    const payrollByMonthQb = payrollAggQb
+      .clone()
+      .select([
+        `${monthOf('ss.forMonth')} as "month"`,
+        'COALESCE(SUM(ss.baseSalary), 0) as "amountDue"',
+        'COALESCE(SUM(ss.paidAmount), 0) as "amountPaid"',
+        'COALESCE(SUM(ss.baseSalary - ss.paidAmount), 0) as "remainingAmount"',
+      ])
+      .groupBy(monthOf('ss.forMonth'));
+
+    const [
+      paymentsRaw,
+      expensesRaw,
+      payrollRaw,
+      studentsRaw,
+      paymentsByMonthRaw,
+      expensesByMonthRaw,
+      payrollByMonthRaw,
+    ] = await Promise.all([
+      paymentsAggQb.getRawOne<any>(),
+      expensesAggQb.getRawOne<any>(),
+      payrollAggQb.getRawOne<any>(),
+      studentsAggQb.getRawOne<any>(),
+      paymentsByMonthQb.getRawMany<any>(),
+      expensesByMonthQb.getRawMany<any>(),
+      payrollByMonthQb.getRawMany<any>(),
+    ]);
 
     const n = (v: any) => Number(v ?? 0);
+
+    // Oraliqdagi har bir oy — ma'lumoti bo'lmasa ham 0 bilan (grafik/jadval uchun)
+    const byMonth: DashboardMonthRow[] = [];
+    for (
+      let m = dayjs(fromMonthStart);
+      m.isBefore(dayjs(endExclusive));
+      m = m.add(1, 'month')
+    ) {
+      const month = m.format('YYYY-MM');
+      const p = paymentsByMonthRaw.find((r) => r.month === month);
+      const e = expensesByMonthRaw.find((r) => r.month === month);
+      const s = payrollByMonthRaw.find((r) => r.month === month);
+      const row: DashboardMonthRow = {
+        month,
+        payments: {
+          amountDue: n(p?.amountDue),
+          amountPaid: n(p?.amountPaid),
+          remainingAmount: n(p?.remainingAmount),
+          refundedAmount: n(p?.refundedAmount),
+        },
+        expenses: { totalAmount: n(e?.totalAmount) },
+        payroll: {
+          amountDue: n(s?.amountDue),
+          amountPaid: n(s?.amountPaid),
+          remainingAmount: n(s?.remainingAmount),
+        },
+        netCashflow: 0,
+      };
+      // `amountPaid` qaytariladigan pul ayirilgandan keyingi summa — refund
+      // ikkinchi marta ayirilmaydi.
+      row.netCashflow =
+        row.payments.amountPaid -
+        row.expenses.totalAmount -
+        row.payroll.amountPaid;
+      byMonth.push(row);
+    }
 
     const payments = {
       statusEnum: PaymentStatus,
@@ -240,10 +317,7 @@ export class StatisticsService {
     };
 
     const netCashflow = n(
-      payments.amountPaid -
-        payments.refundedAmount -
-        expenses.totalAmount -
-        payroll.amountPaid,
+      payments.amountPaid - expenses.totalAmount - payroll.amountPaid,
     );
 
     const paymentsByMethodRaw = await this.receiptRepo
@@ -281,6 +355,7 @@ export class StatisticsService {
       payroll,
       students,
       netCashflow,
+      byMonth,
     };
   }
 }

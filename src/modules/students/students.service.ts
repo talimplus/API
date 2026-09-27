@@ -24,12 +24,10 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { StudentDiscountPeriod } from '@/modules/students/entities/student-discount-period.entity';
+import { PaymentReceiptStatus } from '@/modules/payments/entities/payment-receipt.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { Referral } from '@/modules/referrals/entities/referal.entity';
-import {
-  Payment,
-  PaymentStatus,
-} from '@/modules/payments/entities/payment.entity';
+import { Payment } from '@/modules/payments/entities/payment.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { CurrentUser } from '@/common/types/current.user';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
@@ -39,6 +37,7 @@ import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
 import { GroupsService } from '@/modules/groups/groups.service';
+import { StudentBaseDiscountService } from '@/modules/students/student-base-discount.service';
 import {
   TransferPreviewDto,
   TransferStudentsDto,
@@ -71,6 +70,7 @@ export class StudentsService {
     @Inject(forwardRef(() => GroupsService))
     private readonly groupsService: GroupsService,
     private readonly enrollmentsService: EnrollmentsService,
+    private readonly baseDiscountService: StudentBaseDiscountService,
   ) {}
   async findAll(
     organizationId: number,
@@ -230,15 +230,7 @@ export class StudentsService {
       });
       for (const p of periods as any[]) {
         const list = discountPeriodsByStudent.get(p.studentId) ?? [];
-        list.push({
-          ...instanceToPlain(p),
-          fromMonth: p.fromMonth
-            ? dayjs(p.fromMonth).format('YYYY-MM-DD')
-            : null,
-          toMonth: p.toMonth ? dayjs(p.toMonth).format('YYYY-MM-DD') : null,
-          createdAt: p.createdAt?.toISOString?.() ?? String(p.createdAt),
-          percent: Number(p.percent ?? 0),
-        });
+        list.push(this.toDiscountPeriodView(p));
         discountPeriodsByStudent.set(p.studentId, list);
       }
     }
@@ -361,7 +353,8 @@ export class StudentsService {
 
     const result: any = instanceToPlain(student);
 
-    result.login = student.user.login;
+    // Import qilingan o‘quvchida kabinet akkaunti bo‘lmasligi mumkin
+    result.login = student.user?.login ?? null;
 
     const referral = await this.referralRepo.findOne({
       where: { referredStudentId: student.id as any },
@@ -377,13 +370,7 @@ export class StudentsService {
     result.groupIds = (student as any).groups?.map((g: any) => g.id) ?? [];
     result.referrerId = referral?.referrerStudentId ?? null;
     result.discountPeriods = ((student as any).discountPeriods ?? []).map(
-      (d: any) => ({
-        ...instanceToPlain(d),
-        fromMonth: d.fromMonth ? dayjs(d.fromMonth).format('YYYY-MM-DD') : null,
-        toMonth: d.toMonth ? dayjs(d.toMonth).format('YYYY-MM-DD') : null,
-        createdAt: d.createdAt?.toISOString?.() ?? String(d.createdAt),
-        percent: Number(d.percent ?? 0),
-      }),
+      (d: any) => this.toDiscountPeriodView(d),
     );
 
     return result;
@@ -442,15 +429,75 @@ export class StudentsService {
     return centerId;
   }
 
+  /** Chegirma davrining API ko'rinishi (ro'yxat, kartochka, CRUD javoblari). */
+  private toDiscountPeriodView(d: any) {
+    return {
+      ...instanceToPlain(d),
+      fromMonth: d.fromMonth ? dayjs(d.fromMonth).format('YYYY-MM-DD') : null,
+      toMonth: d.toMonth ? dayjs(d.toMonth).format('YYYY-MM-DD') : null,
+      createdAt: d.createdAt?.toISOString?.() ?? String(d.createdAt),
+      percent: Number(d.percent ?? 0),
+      amount: Number(d.amount ?? 0),
+      groupId: d.groupId ?? null,
+    };
+  }
+
+  /**
+   * Bitta davr: foiz (0..100) YOKI summa (so'm/oy) — ikkalasidan aynan bittasi.
+   * `groupId` — chegirma qaysi fanga (bo'sh — barcha guruhlarga).
+   */
+  private normalizeDiscountValue(p: {
+    percent?: number | null;
+    amount?: number | null;
+  }): { percent: number; amount: number } {
+    const percent = Math.max(0, Math.min(100, Number(p.percent ?? 0)));
+    const amount = Math.max(0, Number(p.amount ?? 0));
+    if (percent > 0 && amount > 0) {
+      throw new ValidationException({
+        amount:
+          'Chegirma foizda yoki summada bo‘lishi kerak, ikkalasi birga emas',
+      });
+    }
+    if (!percent && !amount) {
+      throw new ValidationException({
+        percent: 'Chegirma foizi yoki summasini kiriting',
+      });
+    }
+    return { percent, amount };
+  }
+
+  /** Chegirma bog'lanadigan guruh o'quvchining tashkilotiga tegishli bo'lishi shart (IDOR). */
+  private async assertDiscountGroupsInStudentOrg(
+    studentId: number,
+    groupIds: Array<number | null | undefined>,
+  ) {
+    const ids = Array.from(new Set(groupIds.filter((g): g is number => !!g)));
+    if (!ids.length) return;
+    const rows = await this.studentRepo.query(
+      `SELECT g.id FROM groups g
+         JOIN centers gc ON gc.id = g."centerId"
+         JOIN students s ON s.id = $1
+         JOIN centers sc ON sc.id = s."centerId"
+        WHERE g.id = ANY($2) AND gc."organizationId" = sc."organizationId"`,
+      [studentId, ids],
+    );
+    if (rows.length !== ids.length) {
+      throw new ValidationException({ groupId: 'Guruh topilmadi' });
+    }
+  }
+
   private normalizeDiscountPeriodsInput(
     periods: Array<{
-      percent: number;
+      percent?: number;
+      amount?: number;
+      groupId?: number | null;
       fromMonth: string;
       toMonth?: string | null;
       reason?: string;
     }>,
   ) {
-    const normalized = periods.map((p) => {
+    // NOTE: overlaps are ALLOWED (stacking discounts). Only dates and values are validated.
+    return periods.map((p) => {
       const from = this.normalizeMonth(p.fromMonth);
       const to = p.toMonth ? this.normalizeMonth(p.toMonth) : null;
       // Exclusive end: toMonth must be > fromMonth
@@ -460,48 +507,64 @@ export class StudentsService {
       ) {
         throw new BadRequestException('toMonth must be > fromMonth');
       }
-      const percent = Math.max(0, Math.min(100, Number(p.percent)));
       return {
         fromMonth: from,
         toMonth: to,
-        percent,
+        ...this.normalizeDiscountValue(p),
+        groupId: p.groupId ?? null,
         reason: p.reason ?? null,
       };
     });
-
-    // Validate overlaps within the payload itself
-    const sorted = [...normalized].sort((a, b) =>
-      a.fromMonth.localeCompare(b.fromMonth),
-    );
-    let prevTo = '0000-00-01';
-    for (const p of sorted) {
-      const pTo = p.toMonth ?? '9999-12-01';
-      if (dayjs(p.fromMonth).isBefore(dayjs(prevTo).add(0, 'month'))) {
-        // This condition is conservative; overlap check below handles real overlaps
-      }
-      if (sorted.length > 1) {
-        // overlap if previous to >= current from
-      }
-      prevTo = pTo;
-    }
-
-    // NOTE: overlaps are ALLOWED (stacking discounts). We only validate date correctness above.
-
-    return normalized;
   }
 
   private async replaceDiscountPeriodsForStudent(
     studentId: number,
     periods: Array<{
-      percent: number;
+      percent?: number;
+      amount?: number;
+      groupId?: number | null;
       fromMonth: string;
       toMonth?: string | null;
       reason?: string;
     }>,
   ) {
     const normalized = this.normalizeDiscountPeriodsInput(periods);
+    await this.assertDiscountGroupsInStudentOrg(
+      studentId,
+      normalized.map((p) => p.groupId),
+    );
 
-    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, normalized);
+    // Forma har saqlashda BARCHA davrlarni qayta yuboradi. O'zgarmagan davr
+    // (masalan to'langan oyga tegadigan eski chegirma) tekshirilmaydi — aks holda
+    // o'quvchining ismini tuzatish ham "payment already has money" bilan yiqilardi.
+    const periodKey = (p: {
+      fromMonth: string;
+      toMonth: string | null;
+      percent: number;
+      amount: number;
+      groupId: number | null;
+    }) =>
+      [p.fromMonth, p.toMonth ?? '', p.percent, p.amount, p.groupId ?? ''].join(
+        '|',
+      );
+    const existing = await this.discountPeriodRepo.find({
+      where: { studentId },
+    });
+    const unchanged = new Set(
+      existing.map((e) =>
+        periodKey({
+          fromMonth: dayjs(e.fromMonth).format('YYYY-MM-01'),
+          toMonth: e.toMonth ? dayjs(e.toMonth).format('YYYY-MM-01') : null,
+          percent: Number(e.percent ?? 0),
+          amount: Number(e.amount ?? 0),
+          groupId: e.groupId ?? null,
+        }),
+      ),
+    );
+    await this.assertNoPaidPaymentsInDiscountPeriods(
+      studentId,
+      normalized.filter((p) => !unchanged.has(periodKey(p))),
+    );
 
     await this.discountPeriodRepo.delete({ studentId });
 
@@ -511,6 +574,8 @@ export class StudentsService {
       this.discountPeriodRepo.create({
         studentId,
         percent: p.percent as any,
+        amount: p.amount as any,
+        groupId: p.groupId,
         fromMonth: p.fromMonth as any,
         toMonth: (p.toMonth as any) ?? null,
         reason: p.reason,
@@ -522,10 +587,9 @@ export class StudentsService {
   private async assertNoPaidPaymentsInDiscountPeriods(
     studentId: number,
     normalized: Array<{
-      percent: number;
       fromMonth: string; // YYYY-MM-01
       toMonth: string | null; // YYYY-MM-01 (exclusive) or null=infinite
-      reason?: string | null;
+      groupId?: number | null;
     }>,
   ) {
     if (!normalized.length) return;
@@ -535,14 +599,21 @@ export class StudentsService {
         .createQueryBuilder('pay')
         .select(['pay.id as id', 'pay.forMonth as "forMonth"'])
         .where('pay.studentId = :studentId', { studentId })
-        .andWhere('pay.amountPaid > 0')
-        .andWhere('pay.status IN (:...st)', {
-          st: [PaymentStatus.PAID, PaymentStatus.PARTIAL],
-        })
+        // Pul olingan oy: tasdiqlangan pul yoki tasdiq kutayotgan chek bor.
+        .andWhere(
+          `(pay.amountPaid > 0 OR EXISTS (
+             SELECT 1 FROM payment_receipts r
+              WHERE r."paymentId" = pay.id AND r.status = :pendingStatus))`,
+          { pendingStatus: PaymentReceiptStatus.PENDING },
+        )
         .andWhere('pay.forMonth >= :from', { from: p.fromMonth });
 
       if (p.toMonth) {
         qb.andWhere('pay.forMonth < :to', { to: p.toMonth });
+      }
+      // Bitta fanga bog'langan chegirma faqat o'sha guruh to'lovlariga tegadi
+      if (p.groupId) {
+        qb.andWhere('pay.groupId = :groupId', { groupId: p.groupId });
       }
 
       const found = await qb.getRawOne<{ id: number; forMonth: string }>();
@@ -561,13 +632,7 @@ export class StudentsService {
       where: { studentId },
       order: { fromMonth: 'DESC', createdAt: 'DESC' },
     });
-    return rows.map((r: any) => ({
-      ...r,
-      fromMonth: r.fromMonth ? dayjs(r.fromMonth).format('YYYY-MM-DD') : null,
-      toMonth: r.toMonth ? dayjs(r.toMonth).format('YYYY-MM-DD') : null,
-      createdAt: r.createdAt?.toISOString?.() ?? String(r.createdAt),
-      percent: Number(r.percent ?? 0),
-    }));
+    return rows.map((r) => this.toDiscountPeriodView(r));
   }
 
   // Overlaps are allowed; we validate 0..100 cap during payment calculation.
@@ -576,47 +641,54 @@ export class StudentsService {
     organizationId: number,
     studentId: number,
     dto: {
-      percent: number;
+      percent?: number;
+      amount?: number;
+      groupId?: number | null;
       fromMonth: string;
       toMonth?: string | null;
       reason?: string;
     },
   ) {
     await this.assertStudentInOrganization(organizationId, studentId);
-
-    const from = this.normalizeMonth(dto.fromMonth);
-    const to = dto.toMonth ? this.normalizeMonth(dto.toMonth) : null;
-    if (
-      to &&
-      (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))
-    ) {
-      throw new BadRequestException('toMonth must be > fromMonth');
-    }
-
-    const row = this.discountPeriodRepo.create({
-      studentId,
-      percent: Number(dto.percent),
-      fromMonth: from as any,
-      toMonth: (to as any) ?? null,
-      reason: dto.reason ?? null,
-    });
-
-    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [
-      {
-        percent: Number(dto.percent),
-        fromMonth: from,
-        toMonth: to,
-        reason: dto.reason ?? null,
-      },
+    const [normalized] = this.normalizeDiscountPeriodsInput([dto]);
+    await this.assertDiscountGroupsInStudentOrg(studentId, [
+      normalized.groupId,
     ]);
+    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [normalized]);
 
-    const saved = await this.discountPeriodRepo.save(row);
+    const saved = await this.discountPeriodRepo.save(
+      this.discountPeriodRepo.create({
+        studentId,
+        percent: normalized.percent,
+        amount: normalized.amount,
+        groupId: normalized.groupId,
+        fromMonth: normalized.fromMonth as any,
+        toMonth: (normalized.toMonth as any) ?? null,
+        reason: normalized.reason,
+      }),
+    );
+    await this.recalcAfterDiscountChange(studentId);
+    return this.toDiscountPeriodView(saved);
+  }
+
+  /**
+   * Chegirma davri o'zgargach ochiq to'lovlarni darhol yangilaymiz — aks holda
+   * qabulxona eski (to'liq) summani olib qo'yardi.
+   */
+  private async recalcAfterDiscountChange(studentId: number) {
+    await this.paymentsService
+      .recalculateOpenPaymentsForStudent(studentId)
+      .catch(() => undefined);
+  }
+
+  /** Mavjud davrning oralig'i (tekshiruv uchun). */
+  private existingDiscountRange(existing: StudentDiscountPeriod) {
     return {
-      ...saved,
-      fromMonth: dayjs(saved.fromMonth).format('YYYY-MM-DD'),
-      toMonth: saved.toMonth ? dayjs(saved.toMonth).format('YYYY-MM-DD') : null,
-      createdAt: saved.createdAt?.toISOString?.() ?? String(saved.createdAt),
-      percent: Number(saved.percent ?? 0),
+      fromMonth: dayjs(existing.fromMonth).format('YYYY-MM-01'),
+      toMonth: existing.toMonth
+        ? dayjs(existing.toMonth).format('YYYY-MM-01')
+        : null,
+      groupId: existing.groupId ?? null,
     };
   }
 
@@ -626,6 +698,8 @@ export class StudentsService {
     periodId: number,
     dto: {
       percent?: number;
+      amount?: number;
+      groupId?: number | null;
       fromMonth?: string;
       toMonth?: string | null;
       reason?: string;
@@ -638,48 +712,46 @@ export class StudentsService {
     });
     if (!existing) throw new NotFoundException('Discount period not found');
 
-    const from = dto.fromMonth
-      ? this.normalizeMonth(dto.fromMonth)
-      : dayjs(existing.fromMonth).format('YYYY-MM-01');
-    const to =
-      dto.toMonth !== undefined
-        ? dto.toMonth
-          ? this.normalizeMonth(dto.toMonth)
-          : null
-        : existing.toMonth
-          ? dayjs(existing.toMonth).format('YYYY-MM-01')
-          : null;
-
-    if (
-      to &&
-      (dayjs(to).isSame(dayjs(from)) || dayjs(to).isBefore(dayjs(from)))
-    ) {
-      throw new BadRequestException('toMonth must be > fromMonth');
-    }
-
-    if (dto.percent !== undefined)
-      existing.percent = Number(dto.percent) as any;
-    existing.fromMonth = from as any;
-    existing.toMonth = (to as any) ?? null;
-    if (dto.reason !== undefined) existing.reason = dto.reason ?? null;
-
-    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [
+    // Qiymat turi almashtirilishi mumkin: faqat percent kelsa — summa nolga, va aksincha
+    const valueChanged = dto.percent !== undefined || dto.amount !== undefined;
+    const [normalized] = this.normalizeDiscountPeriodsInput([
       {
-        percent: Number(existing.percent ?? 0),
-        fromMonth: from,
-        toMonth: to,
-        reason: existing.reason ?? null,
+        percent: valueChanged ? dto.percent : Number(existing.percent ?? 0),
+        amount: valueChanged ? dto.amount : Number(existing.amount ?? 0),
+        groupId: dto.groupId !== undefined ? dto.groupId : existing.groupId,
+        fromMonth: dto.fromMonth ?? dayjs(existing.fromMonth).format('YYYY-MM'),
+        toMonth:
+          dto.toMonth !== undefined
+            ? dto.toMonth
+            : existing.toMonth
+              ? dayjs(existing.toMonth).format('YYYY-MM')
+              : null,
+        reason:
+          dto.reason !== undefined
+            ? dto.reason
+            : (existing.reason ?? undefined),
       },
     ]);
+    await this.assertDiscountGroupsInStudentOrg(studentId, [
+      normalized.groupId,
+    ]);
+    // Yangi oraliq ham, eski oraliq ham tekshiriladi: pul olingan oydan
+    // chegirmani olib tashlash ham qarzni o'zgartiradi.
+    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [
+      normalized,
+      this.existingDiscountRange(existing),
+    ]);
+
+    existing.percent = normalized.percent as any;
+    existing.amount = normalized.amount as any;
+    existing.groupId = normalized.groupId;
+    existing.fromMonth = normalized.fromMonth as any;
+    existing.toMonth = (normalized.toMonth as any) ?? null;
+    existing.reason = normalized.reason;
 
     const saved = await this.discountPeriodRepo.save(existing);
-    return {
-      ...saved,
-      fromMonth: dayjs(saved.fromMonth).format('YYYY-MM-DD'),
-      toMonth: saved.toMonth ? dayjs(saved.toMonth).format('YYYY-MM-DD') : null,
-      createdAt: saved.createdAt?.toISOString?.() ?? String(saved.createdAt),
-      percent: Number(saved.percent ?? 0),
-    };
+    await this.recalcAfterDiscountChange(studentId);
+    return this.toDiscountPeriodView(saved);
   }
 
   async deleteDiscountPeriod(
@@ -692,7 +764,11 @@ export class StudentsService {
       where: { id: periodId, studentId },
     });
     if (!existing) throw new NotFoundException('Discount period not found');
+    await this.assertNoPaidPaymentsInDiscountPeriods(studentId, [
+      this.existingDiscountRange(existing),
+    ]);
     await this.discountPeriodRepo.delete({ id: periodId });
+    await this.recalcAfterDiscountChange(studentId);
     return { success: true };
   }
 
@@ -844,6 +920,7 @@ export class StudentsService {
       secondPhone: (dto as any).secondPhone ?? null,
       monthlyFee: dto.monthlyFee,
       discountPercent: dto.discountPercent ?? 0,
+      discountAmount: dto.discountAmount ?? 0,
       discountReason: dto.discountReason ?? null,
       birthDate: dto.birthDate ? (dto.birthDate as any) : null,
       comment: (dto as any).comment ?? null,
@@ -918,29 +995,31 @@ export class StudentsService {
     await this.assertStudentInOrganization(organizationId, id);
 
     const student = await this.findEntityByIdOrThrow(id);
-    const user = await this.userService.findOne((student as any).user?.id);
-    if (!user)
-      throw new BadRequestException('Bunday foydalanuvchi mavjud emas');
 
-    if (dto.password) {
+    // O'quvchining kabinet akkaunti (users, role=student) bo'lmasligi mumkin —
+    // masalan tashqi manbadan import qilinganlar. Unda faqat o'quvchi yoziladi.
+    // (Ilgari findOne(undefined) jadvaldagi birinchi foydalanuvchini qaytarib,
+    // BEGONA akkauntni shu o'quvchi nomi/telefoniga qayta yozib yuborardi.)
+    const linkedUserId: number | undefined = (student as any).user?.id;
+    if (linkedUserId) {
       if (dto.password) {
         dto.password = await bcrypt.hash(dto.password, 10);
       }
+
+      const updatedUser = await this.userService.update(linkedUserId, {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        login: dto.login,
+        phone: dto.phone,
+        centerId: dto.centerId,
+        password: dto.password,
+      });
+
+      if (!updatedUser)
+        throw new BadRequestException(
+          "Bunday foydalanuvchi mavjud emas Yoki nomalum Xato ro'y berdi",
+        );
     }
-
-    const updatedUser = await this.userService.update(user.id, {
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      login: dto.login,
-      phone: dto.phone,
-      centerId: dto.centerId,
-      password: dto.password,
-    });
-
-    if (!updatedUser)
-      throw new BadRequestException(
-        "Bunday foydalanuvchi mavjud emas Yoki nomalum Xato ro'y berdi",
-      );
 
     // group assignment update (ManyToMany)
     const shouldEnsureCurrentMonthPayments =
@@ -1075,11 +1154,48 @@ export class StudentsService {
     delete (dto as any).referrerId;
     delete (dto as any).userId;
     delete (dto as any).id;
+    const previousDiscount = {
+      percent: Number(student.discountPercent ?? 0),
+      amount: Number(student.discountAmount ?? 0),
+      reason: student.discountReason ?? null,
+      monthlyFee: Number(student.monthlyFee ?? 0),
+    };
     Object.assign(student, dto);
     const saved = await this.studentRepo.save(student);
 
+    // Doimiy chegirma yoki shaxsiy narx o'zgarsa: shu oy uchun pul berilmagan
+    // bo'lsa — shu oydan, berilgan bo'lsa — keyingi oydan kuchga kiradi
+    // (o'tgan oylar tegilmaydi).
+    const discountTouched =
+      dto.discountPercent !== undefined ||
+      dto.discountAmount !== undefined ||
+      dto.monthlyFee !== undefined;
+    let discountChanged = false;
+    if (discountTouched) {
+      const { effectiveFrom } = await this.baseDiscountService.setDiscount(
+        saved.id,
+        previousDiscount,
+        {
+          percent: Number(saved.discountPercent ?? 0),
+          amount: Number(saved.discountAmount ?? 0),
+          reason: saved.discountReason ?? null,
+          monthlyFee: Number(saved.monthlyFee ?? 0),
+        },
+      );
+      discountChanged = effectiveFrom !== null;
+    }
+
     if (Array.isArray(discountPeriods)) {
       await this.replaceDiscountPeriodsForStudent(saved.id, discountPeriods);
+    }
+
+    // Guruhlar yuborilgan faol o'quvchi pastda baribir qayta hisoblanadi.
+    const recalcBelow =
+      shouldEnsureCurrentMonthPayments && saved.status === StudentStatus.ACTIVE;
+    if (discountChanged && !recalcBelow) {
+      await this.paymentsService
+        .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
+        .catch(() => undefined);
     }
 
     if (
@@ -1460,26 +1576,69 @@ export class StudentsService {
       );
     }
 
-    // When student becomes ACTIVE, they start paying from that moment.
-    // Always set activatedAt on transition into ACTIVE (so proration is based on the real activation moment).
+    const prevStatus = student.status;
+    const groupIds: number[] = ((student as any).groups ?? []).map(
+      (g: any) => g.id,
+    );
+    const today = this.todayInGroupTz((student as any).groups?.[0] ?? null);
+
+    // ACTIVE ga o'tish:
+    // - birinchi marta (new/ignored) — `activatedAt` shu payt, to'lov shundan;
+    // - qaytib kelish (stopped/finished) — `activatedAt` TEGILMAYDI (u
+    //   o'tgan oylarning quyi chegarasi, qayta yozilsa eski qarzlar o'chib
+    //   ketardi). Buning o'rniga har bir guruhda yangi a'zolik oynasi
+    //   ochiladi: to'xtab turgan davr to'lovga kirmaydi.
+    const isReturn =
+      prevStatus === StudentStatus.STOPPED ||
+      prevStatus === StudentStatus.FINISHED;
     if (
       status === StudentStatus.ACTIVE &&
-      student.status !== StudentStatus.ACTIVE
+      prevStatus !== StudentStatus.ACTIVE
     ) {
-      student.activatedAt = new Date();
+      if (!isReturn || !student.activatedAt) {
+        student.activatedAt = new Date();
+      }
       student.stoppedAt = null;
     }
 
-    // When student becomes STOPPED, remember stop time (used for refunds/proration end boundary).
+    // STOPPED — to'xtatilgan sana saqlanadi va barcha a'zolik oynalari shu
+    // kuni yopiladi (keyingi darslar to'lovga kirmaydi).
     if (
       status === StudentStatus.STOPPED &&
-      student.status !== StudentStatus.STOPPED
+      prevStatus !== StudentStatus.STOPPED
     ) {
       student.stoppedAt = new Date();
     }
 
     student.status = status;
     const saved = await this.studentRepo.save(student);
+
+    if (
+      status === StudentStatus.STOPPED &&
+      prevStatus !== StudentStatus.STOPPED
+    ) {
+      await this.enrollmentsService.closeAllForStudent(
+        saved.id,
+        today,
+        "O'quvchi to'xtatildi",
+      );
+    }
+    if (status === StudentStatus.ACTIVE && isReturn) {
+      for (const gid of groupIds) {
+        await this.enrollmentsService.open(saved.id, gid, today);
+      }
+      // Shu oyning o'zida qaytdi: to'xtatishda joriy oy to'xtagan kungacha
+      // hisoblanib (ko'pincha PAID bo'lib) qolgan — yangi oyna bo'yicha
+      // majburan qayta hisoblaymiz, aks holda oyning qolgan darslari bepul
+      // qolardi. Avval "qaytariladigan" deb yozilgan pul qarzni yopishga qaytadi.
+      await this.paymentsService
+        .recalculateOpenPaymentsForStudent(saved.id, {
+          maxMonthsBack: 1,
+          includePaid: true,
+          force: true,
+        })
+        .catch(() => undefined);
+    }
 
     if (status === StudentStatus.ACTIVE) {
       // Create/ensure payments for current month for all groups the student belongs to.

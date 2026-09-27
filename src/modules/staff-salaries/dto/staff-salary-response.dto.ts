@@ -12,7 +12,8 @@ export class StaffSalaryResponseDto {
 
   @ApiProperty({
     example: '2026-01-01',
-    description: 'First day of month (DATE)',
+    description:
+      'Work month (first day). The salary for this month is usually paid in the next one, but stays here.',
   })
   forMonth: string;
 
@@ -50,9 +51,9 @@ export class StaffSalaryResponseDto {
   @ApiProperty({
     required: false,
     nullable: true,
-    example: '2025-12-01',
+    example: '2026-01-01',
     description:
-      'For teachers only: earnings month that this salary payment corresponds to (month offset rule).',
+      'For teachers only: earnings month — always equal to forMonth (kept for older clients).',
   })
   earningForMonth?: string | null;
 

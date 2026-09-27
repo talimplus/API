@@ -4,7 +4,8 @@ Ta'lim markazlari uchun multi-tenant CRM backendi. NestJS 10 + TypeORM 0.3 + Pos
 Bu fayl loyihani qaytadan o'qib chiqmaslik uchun: modul xaritasi, domen qoidalari
 va konvensiyalar shu yerda.
 
-> Frontend — `../cabinet_front/` (o'z `CLAUDE.md` si bor). API kontrakti
+> Frontend — `../cabinet_front_new/` (faol; qoidalari `.claude/rules/*.md` da).
+> `../cabinet_front/` — eski versiya, faqat o'qish/namuna uchun. API kontrakti
 > o'zgarsa ikkalasi **bir vaqtda** to'g'rilanadi.
 
 ---
@@ -72,7 +73,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 - Katalog: `src/common/permissions/permission.catalog.ts` — **yagona manba** (~76 ta kalit,
   `<modul>.<amal>` ko'rinishida, UI uchun uz/ru label bilan, guruhlarga bo'lingan).
   `GET /roles/permissions` shu ro'yxatni frontga beradi.
-- Boshlang'ich rollar: `src/common/permissions/role.presets.ts` (manager/reception/teacher...).
+- Boshlang'ich rollar: `src/common/permissions/role.presets.ts` (manager/reception/teacher/other + qulflangan `admin` va `student`).
   Ro'yxatdan o'tishda seed qilinadi.
 - `admin` roli — `permissions = ['*']`, `isLocked`, o'zgartirib bo'lmaydi.
 - Endpoint himoyasi: `@RequirePermissions('students.create')`. Bir nechta kalit — **OR**.
@@ -91,7 +92,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `organizations` | `/organizations` | tenant, obuna holati |
 | `subscriptions` | `/subscriptions` | obuna/tarif |
 | `centers` | `/centers` | filiallar (`/centers/all` — ochiq) |
-| `users` | `/users` | xodimlar, `/users/me`, maosh/foiz sozlamalari |
+| `users` | `/users` | xodimlar, `/users/me`, maosh/foiz sozlamalari, **bloklash** (`PUT /users/:id/active`) |
 | `roles` | `/roles` | dinamik rollar, `/roles/permissions` |
 | `rooms`, `subjects` | `/rooms`, `/subjects` | ma'lumotnomalar |
 | `groups` | `/groups`, `/group` | guruh CRUD, status, **narx tarixi** (`group-fee.service.ts`), `groups-lifecycle.service.ts` (kunlik 03:00 auto-finish) |
@@ -128,8 +129,49 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 - Kunlik cron (03:00) `endDate` o'tgan guruhlarni yopadi va o'quvchilar statusini moslaydi
   (`syncStudentStatusesForGroups`: hamma guruhi tugagan o'quvchi → `finished`).
 - Sana/jadval o'zgarsa → shu guruhning **ochiq** to'lovlari qayta hisoblanadi.
+  Tugash sanasi **oldinga tortilsa** (yoki `finished` qilinsa) to'liq to'langan
+  oylar ham qayta hisoblanadi — o'tmagan darslar puli `refundedAmount` ga.
 - `lessonDurationMinutes` (default 90) — bitta darsning uzunligi. Guruhning
   barcha darslari bir xil uzunlikda deb hisoblanadi.
+- **O'chirish:** faqat o'z tashkiloti/filiali ichida; to'lov yoki davomat tarixi
+  bor guruh o'chirilmaydi (400) — `finished` qilinadi.
+- **O'qituvchi** faqat `teacher` turidagi xodim bo'ladi (422 `teacherId`).
+
+### 6.1.2 Jadval, o'qituvchi tarixi va pauza (MUHIM, 2026-09-27)
+
+Uchalasi ham "o'tgan darslar o'tgan holicha qoladi" tamoyili bo'yicha:
+
+| Jadval | Ma'no | Kim o'qiydi |
+|---|---|---|
+| `group_schedule_periods` (`groupId, fromDate, days jsonb`) | sana uchun jadval = `fromDate <= sana` ga mos eng oxirgisi, yo'q bo'lsa eng birinchisi | `computeLessonDates({ schedulePeriods })`: to'lov, jurnal, davomat tekshiruvi, kechikish, syllabus, komissiya |
+| `group_teacher_periods` (`groupId, teacherId, fromDate`) | sana uchun o'qituvchi (xuddi shu qoida) | `TeacherEarningsService.computeCommissionAmount` |
+| `group_pauses` (`fromDate..toDate` inclusive, `reason`) | bu kunlarda dars **o'tkazilmaydi** | `computeLessonDates({ pauses })` + to'lovda `lessonsBillable` dan chiqariladi |
+
+- `group_schedule` — faqat HOZIRGI jadval (dars jadvali sahifasi, bandlik). Jadval
+  `PUT /groups/:id` da **haqiqatan o'zgarganda** (kun+vaqt kaliti solishtiriladi —
+  forma har saqlashda `days` yuboradi) yangi davr `scheduleEffectiveFrom` (default
+  bugun) dan yoziladi, undan keyingi davrlar o'chadi. O'tgan oylar proratsiyasi va
+  eski kunlardagi davomat saqlanadi. Tarix yuklanmagan joyda (`schedulePeriods`
+  undefined) eski xatti-harakat — `group_schedule`.
+- Yuklash: `ensureSchedulePeriods` / `ensureGroupPauses`
+  (`group_schedule/schedule-periods.util.ts`) — guruh obyektiga bir marta yuklaydi.
+- O'qituvchi almashsa (`teacherEffectiveFrom`, default bugun) — tarixga yoziladi va
+  o'sha oydan joriy oygacha ikkala o'qituvchining komissiyasi qayta hisoblanadi.
+  Oy o'rtasida almashgan guruhda har bir to'lov o'quvchining shu oydagi darslari
+  (a'zolik oynasi bilan) soniga qarab bo'linadi. Oylik berilgan (muzlatilgan) oy
+  eski o'qituvchidan qaytarib olinmaydi — faqat yangisiga carryover.
+- **Bayram kunlari** (`holidays`, `HolidaysModule`, `GET/POST/DELETE /holidays`):
+  butun tashkilot (`centerId = null`) yoki bitta filial. Bu kunlarda hech bir
+  guruhda dars yo'q (jurnal, davomat, kechikish, syllabus). To'lovda bayram
+  darslari **rejadan ham** chiqariladi — oylik narx **o'zgarmaydi** (pauzadan
+  farqi shu). `ensureGroupHolidays` guruhga yuklaydi; lesson-dates javobida
+  `holidays` (oraliqdagi). Ruxsat: ko'rish `schedule.view|groups.view|attendance.view`,
+  boshqarish `schedule.manage`. Davomat yozilgan kun — 422.
+- Pauza: `GET/POST/DELETE /groups/:id/pauses` (`groups.view` / `groups.update`),
+  `GroupPausesService`. Sabab majburiy, davrlar kesishmaydi, davomat yozilgan kunni
+  to'xtatib bo'lmaydi (422). Qo'shilganda/o'chirilganda guruh to'lovlari (PAID ham)
+  qayta hisoblanadi. `lessonsPlanned` o'zgarmaydi — oylik narx to'xtatilgan
+  darslar ulushiga kamayadi.
 
 ### 6.1.1 Dars jadvali va bandlik (`group_schedule`)
 
@@ -197,16 +239,86 @@ amountDue = baseMonthlyFee
 - `lessonsExcused` (sababli) — **to'lovni kamaytirmaydi**, faqat ma'lumot (Req1).
   Kamaytirish faqat qo'lda: `manualExcludedAmount` (+ sabab majburiy).
 - Chegirma — `student_discount_periods` (oy oralig'i, stacking, 100% cap) +
-  eski `students.discountPercent` fallback.
+  doimiy `students.discountPercent` / `students.discountAmount`.
+- **Doimiy chegirma oyga bog'langan** (`student_base_discounts`, `StudentBaseDiscountService`,
+  guruh narxi davrlari bilan bir xil uslub). `PUT /students/:id` da qiymat o'zgarsa:
+  shu oy uchun o'quvchidan pul olinmagan bo'lsa (`amountPaid = 0` va `pending` chek
+  yo'q, istalgan guruhda) — **shu oydan**, olingan bo'lsa — **keyingi oydan** kuchga
+  kiradi. O'tgan oylar hech qachon qayta narxlanmaydi (davomat o'zgarishida ham).
+  Oy uchun qiymat = `fromMonth <= forMonth` ga mos eng oxirgi qator, bo'lmasa eng
+  birinchisi, jadval bo'sh bo'lsa — `students` ustunlari. `students.discountPercent/Amount`
+  — admin oxirgi kiritgan qiymat (forma/ro'yxat uchun), pul undan emas, tarixdan.
+  Birinchi o'zgarishda eski qiymat `from − 1 oy` qatori sifatida yoziladi.
+  Davr **foizda** (`percent`) yoki **summada** (`amount`, so'm/oy) — aynan bittasi
+  (aks holda 422). `groupId` bo'lsa faqat o'sha guruh to'loviga (ikki fanda
+  o'qiganga chegirma odatda arzonroq fanga); bo'sh — barcha guruhlarga.
+  Formula: `... × (1 − percent/100) − amount − manualExcludedAmount`.
+  **Summa faqat to'liq oyga** (`lessonsBillable >= lessonsPlanned`): oy o'rtasida
+  qo'shilgan/chiqqan o'quvchiga chegirma keyingi oydan. Pul tushgan oyga yangi
+  yoki o'zgargan davr qo'yib bo'lmaydi; forma qayta yuborgan o'zgarmagan davrlar
+  bu tekshiruvdan o'tkaziladi.
+- O'quvchining kabinet akkaunti (`users`, role=student) **bo'lmasligi mumkin**
+  (import qilinganlar) — `student.user` ni doim null-tekshirib o'qing.
+  `UsersService.findOne/update` bo'sh id da 404 beradi: TypeORM `where: { id: undefined }`
+  shartsiz bo'lib, birinchi foydalanuvchini qaytaradi.
 - Muddatlar: `dueDate` = oyning 10-sanasi, `hardDueDate` = 15-sanasi (guruh timezone'ida).
+- **Cheklar va parallellik:** `submitReceipt` to'lov qatorini `FOR UPDATE` qulflab
+  qoldiqni qayta tekshiradi (ikki xodim bir vaqtda ortiqcha qabul qila olmaydi;
+  `available < 0` bo'lsa ham rad etiladi). `confirmReceipt` chekni qulflab holatini
+  qayta tekshiradi, chek holati va pul **bitta tranzaksiyada** — ikki marta
+  tasdiqlab bo'lmaydi. Tasdiqlashda qarzdan ortiq pul `refundedAmount` ga.
 - Status: `UNPAID` / `PARTIAL` / `PAID` — `amountPaid` va `amountDue` nisbatidan chiqadi.
 
 **Yaratish va qayta hisoblash:**
 - `ensurePayments*` — yetishmayotgan oylik qatorlarni yaratadi. **Kelajak oy uchun
   qator yaratilmaydi** (chegara — joriy oy), shuning uchun keyingi oy narxi tabiiy ravishda
-  yangi narxda hisoblanadi. `@Cron` har oyning 1-sanasida (`generateMonthlyPayments`).
-- `recalcOpenPaymentRows` — faqat `status != PAID` qatorlarni yangilaydi.
-  Dars qolmagan va puli tushmagan oy qatori **o'chiriladi**. To'liq to'langanlarga tegilmaydi.
+  yangi narxda hisoblanadi. `@Cron` **har kuni 00:10 Toshkent** (`generateMonthlyPayments`,
+  idempotent — server 1-sanada o'chiq bo'lsa ham keyingi kuni yaratiladi). Yozish
+  `INSERT … ON CONFLICT DO NOTHING` (bitta to'qnashuv to'plamni bekor qilmaydi),
+  har bir o'quvchi/guruh hisobi alohida try/catch.
+- `recalcOpenPaymentRows` — odatda faqat `status != PAID` qatorlarni yangilaydi.
+  PAID qator faqat `includePaid` bilan keladi va faqat **dars soni kamayganda**
+  qayta hisoblanadi (guruh erta yopildi, pauza); `force` (ko'chirishda maqsad guruh,
+  pauza o'chirilganda) — shartsiz.
+  - Dars qolmagan oy: pul ham, rad etilmagan **chek** ham bo'lmasa — **o'chiriladi**;
+    aks holda qarz 0, to'langan pul `refundedAmount` ga.
+  - Yangi qarz to'langandan kam bo'lsa farq **`refundedAmount` ga** (jimgina kesilmaydi).
+- `recalcOpenPaymentRows` faqat **o'zgargan** qatorlarni yozadi; har birini
+  `FOR UPDATE` bilan qulflab, o'qilgandan beri `amountPaid/refundedAmount`
+  o'zgarmaganini tekshiradi (parallel tasdiqlangan chekni ustidan yozmaydi).
+  O'qituvchi komissiyasi faqat pul o'zgargan (guruh, oy) juftliklari uchun, bir
+  martadan va ketma-ket qayta hisoblanadi. Guruh taqvimi (jadval tarixi, pauza,
+  bayram), chegirma tarixi va asosiy guruh bitta operatsiya davomida keshlanadi
+  (`resetBillingCaches`). Oyligi berilgan oyning carryover'i `pg_advisory_xact_lock`
+  ostida yoziladi (ikki marta yozilmaydi).
+- Jadvalni o'tgan sanadan o'zgartirish (`scheduleEffectiveFrom`) shu oraliqda
+  davomati bor dars yangi jadvalda yo'qolsa — 422.
+- O'quvchi shu oyning o'zida qaytsa joriy oy (PAID ham) majburan qayta hisoblanadi.
+- **Pul hech qachon izsiz yo'qolmaydi** (2026-09-27): qarzdan ortiq pul har doim
+  `refundedAmount` (kassadan chiqadi/qaytariladi) yoki `transferredOutAmount`
+  (boshqa guruhga o'tdi) ga yoziladi. Cheki bor qator o'chirilmaydi
+  (`payment_receipts` FK `ON DELETE CASCADE` — chek ham o'chib ketardi).
+- **Davomat to'lovni o'zgartirmaydi**: `recalcPaymentForAttendanceChange` faqat
+  `lessonsExcused` (ma'lumot) ni yangilaydi. Ilgari u PAID qatorni ham bugungi
+  narx/oyna bilan qayta hisoblab, soxta "qaytariladigan pul" yozardi.
+- **Shaxsiy narx ham oyga bog'langan**: `student_base_discounts.monthlyFee`
+  (doimiy chegirma bilan bitta tarix, bir xil qoida — pul olinmagan bo'lsa shu
+  oydan, olingan bo'lsa keyingi oydan). `resolvePersonalFeeForMonth`; NULL —
+  `students.monthlyFee`.
+- **Summadagi chegirma fanga bog'lanmagan bo'lsa** (doimiy `discountAmount` yoki
+  `groupId` siz davr) — o'quvchining umumiy to'lovidan **bir marta**: shu oydagi
+  "asosiy" guruh (a'zolik oynasi eng erta boshlangani, teng bo'lsa kichik id)
+  to'loviga yoziladi (`primaryGroupForMonth`); boshqa guruh qatorlarida 0.
+  `discountAmountApplied` / summary `discountAmount` shuni ko'rsatadi. Foizli
+  chegirma har guruhda qoladi.
+- **Qarz qayta oshsa** (pauza bekor qilindi, sana uzaytirildi) shu qatordagi
+  `refundedAmount` avval qarzni yopishga qaytadi (to'lov tizimi pulni
+  qaytarganini kuzatmaydi — `refundedAmount` "o'quvchining haqi").
+- Chegirma yig'indisi 100% dan oshsa xato **tashlanmaydi** — 100% qo'llanib log
+  yoziladi (aks holda bitta o'quvchi oylik cron'ni to'xtatardi). Chegirma davri
+  qo'shilganda/o'zgarganda/o'chirilganda o'quvchining ochiq to'lovlari darhol
+  qayta hisoblanadi; pul (yoki `pending` chek) bor oyga tegadigan o'zgarish — eski
+  oraliq ham, yangisi ham — bloklanadi.
 - Oyna: oxirgi 3 oy (`maxMonthsBack`, `openPaymentsWindow`).
 - Chaqiruv nuqtalari: guruh sanasi/jadvali o'zgarganda, o'quvchi tahrirlanganda,
   davomat o'zgarganda (`recalcPaymentForAttendanceChange` — bu **PAID** larga ham tegadi
@@ -226,13 +338,32 @@ amountDue = baseMonthlyFee
 
 ### 6.4 O'qituvchi daromadi va maoshlar
 
+**Oy — ISH oyi** (migratsiya `…053-SalaryWorkMonth`, 2026-09 dan). `staff_salaries.forMonth`,
+`teacher_monthly_earnings.forMonth` va o'quvchi to'lovining `payments.forMonth` — bitta oy:
+iyun oyligi iyunda turadi, pul iyulda berilsa ham. Ilgari bu to'lov oyi edi (iyun ishi →
+"Iyul" qatori) — chalg'itgani uchun o'zgartirildi.
+
 - `teacher_monthly_earnings` (unique: teacher+forMonth):
   `totalEarning = baseSalarySnapshot + commissionAmount + carryOverCommission`.
-  Komissiya faqat **to'langan (PAID)** o'quvchi to'lovlaridan hisoblanadi.
-- Kech to'langan pul — `teacher_commission_carryovers` orqali keyingi oyga o'tadi
-  (`sourceForMonth` → `appliedForMonth`). Qayta hisoblashda (`force`) allaqachon
+  Komissiya — shu oy uchun o'quvchilardan **tushgan pul** (PAID + PARTIAL `amountPaid`) × foiz.
+- **Har to'lovda qayta hisoblanadi** (`triggerTeacherEarningsRecalcForPayment`, fire-and-forget).
+  Joriy oy o'quvchilar to'lagan sari o'sib boradi; kelajak oyga oldindan to'lov o'sha oy
+  ochilganda hisoblanadi.
+- **Oylik berilgan (PAID) oy muzlatiladi.** Keyin shu oy uchun o'quvchi pul olib kelsa,
+  ulushi `teacher_commission_carryovers` ga yoziladi (`sourceForMonth` = o'quvchi to'lagan oy)
+  va **keyingi to'lanmagan oyga** qo'shiladi (`appliedForMonth`, joriy oydan oshmaydi).
+  Hisoblangan-bo'lgan summa = snapshot komissiyasi + shu oydan chiqqan carryover'lar,
+  shuning uchun bitta pul ikki marta sanalmaydi. Qayta hisoblashda (`force`) allaqachon
   qo'llangan carryover'lar saqlanadi.
-- `staff-salaries` — xodim oylik maoshi va unga qilingan to'lovlar (alohida modul).
+- Qisman to'langan / to'lanmagan oy — daromad bilan sinxronlanadi (`baseSalary = totalEarning`).
+- **Oylik va komissiya foizi oyga bog'langan** (`user_pay_periods`, `UserPayService`,
+  `UserPayModule`): `PUT /users/:id` da o'zgarsa **shu oydan** kuchga kiradi,
+  oldingi oylar (keyin kech to'langan o'quvchi puli — carryover ham) eski foizda.
+  Jadval bo'sh — `users.salary/commissionPercentage`; birinchi o'zgarishda eski
+  qiymat oldingi oy uchun yoziladi.
+- `staff-salaries` — xodim oylik maoshi va unga qilingan to'lovlar. Statik maoshli xodim
+  (qabulxona) — tizimga qo'shilgan oyidan boshlab; menejer/qabulxona komissiyasi —
+  shu oyda tasdiqlangan cheklardan.
 
 ### 6.5 O'quvchi (`students`)
 
@@ -247,7 +378,12 @@ finished→ active
 ```
 
 - `stopped`/`ignored` ga o'tishda `returnLikelihood` **majburiy**; izoh mavjudiga qo'shiladi.
-- `activatedAt` / `stoppedAt` — to'lov proratsiyasining chegaralari.
+- `activatedAt` — **birinchi** faollashish (new/ignored → active) sanasi, o'tgan
+  oylarning quyi chegarasi. **Qaytishda (stopped/finished → active) qayta
+  yozilmaydi** — ilgari yozilardi va to'xtashdan oldingi oylar qarzi o'chib ketardi.
+- To'xtatishda (`stopped`) o'quvchining **barcha a'zolik oynalari yopiladi**
+  (`leftAt` = bugun), qaytishda har bir guruhda **yangi oyna** ochiladi — to'xtab
+  turgan davr to'lovga kirmaydi. `stoppedAt` ham saqlanadi (joriy oy chegarasi).
 - Guruhga qo'shilgan/chiqqan sana — `student_group_enrollments` (pastda 6.5.1).
   `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
@@ -269,6 +405,9 @@ tarixni saqlaydi va **to'lov proratsiyasining chegaralarini beradi**:
 
 - Bir juftlik uchun bir nechta oyna bo'lishi mumkin (chiqib, qaytib kelgan);
   ochiq oyna (`leftAt IS NULL`) esa bittadan ortiq emas (partial unique index).
+  Bir oyda ikkita oyna bo'lsa (A→B→A) to'lov darslari **oynalar birlashmasi**
+  bo'yicha filtrlanadi (`resolveWindowsForMonth`) — oradagi uzilish uchun pul
+  so'ralmaydi; ko'chirishda maqsad guruhning mavjud qatori majburan qayta hisoblanadi.
 - `computeMonthBilling` har doim shu oynani o'qiydi (`resolveEnrollmentWindow`)
   va `joinedAt`/`leftAt` ni chegara qilib qo'yadi. Shu sabab **qayta hisoblash
   (`recalcOpenPaymentRows`) ketgan guruhning proratsiyasini bekor qilmaydi**.
@@ -305,6 +444,15 @@ eski o'qituvchi o'tgan darslar uchun foizini saqlaydi.
 Orqaga sanalangan ko'chirishda `ensurePayments` oynasi ko'chirish oyidan
 bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
 
+### 6.5.2 Xodimni bloklash (`users.isActive`)
+
+- Ishdan ketgan xodim **o'chirilmaydi, bloklanadi**: login rad etiladi, amaldagi
+  token `JwtStrategy` da `UsersService.isActiveCached` (15 s kesh) orqali o'ladi.
+- `DELETE /users/:id`: admin akkaunti o'chirilmaydi (ilgari boshqa admin o'chirilsa
+  **butun tashkilot** CASCADE bilan o'chardi); oylik/komissiya/chek/guruh tarixi
+  bor xodim — 400 ("bloklang"). CASCADE bu tarixni yo'qotardi.
+- `GET /users/:id` endi tashkilot bilan chegaralangan.
+
 ### 6.6 Lead va referral
 
 - `leads` — potentsial mijoz; `transferToStudent` uni o'quvchiga aylantiradi.
@@ -318,7 +466,14 @@ bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
 - `AttendanceLessonOverride` — darsni bekor qilish yoki boshqa kunga ko'chirish.
   Jadval o'zgarganda kelajakdagi override'lar tozalanadi.
 - Davomat statuslari: `present`, `absent`, `late`, `excused` (sababli — izoh majburiy).
-- Davomat o'zgarsa to'lov qayta hisoblanadi.
+- Davomat to'lov summasini o'zgartirmaydi (faqat `lessonsExcused` ma'lumoti).
+- **Kelmaganlar ro'yxati** (qabulxona): `GET /attendance/absences`
+  (`attendance.view`, `centerId` qabul qiladi) — barcha guruhlar bo'yicha `absent` /
+  `excused` qatorlari, filtrlar (sana, guruh, o'qituvchi, tur, qo'ng'iroq
+  qilingan/qilinmagan, ism/telefon), `absencesInRange`, `summary`.
+  `PUT /attendance/absences/:id/follow-up` (`attendance.manage`) — qo'ng'iroq natijasi
+  (`attendance.followUpNote/followedUpAt/followedUpById`). `AttendanceAbsencesService`.
+  O'qituvchi faqat o'z guruhlarini ko'radi.
 
 ### 6.8 Xodim davomati (`staff-attendance`)
 
@@ -495,6 +650,14 @@ logotipini ko'rsatadi: `organizations.name` + `logoUrl` + `faviconUrl`.
 - O'zgarishdan keyin: `npm run build` (yoki `npm run lint`).
 
 ## 9. Ma'lum muammolar (tegmasangiz ham bilib turing)
+
+- **Ochiq biznes savollari (2026-09-27 auditidan):** doimiy chegirma **summada**
+  masalalari 2026-09-27 da hal qilindi (yuqorida). Proratsiya tiyinli summalar
+  beradi (`round2`).
+- **Ssenariy testlari** (jest ishlamagani uchun) nusxa bazada API orqali yuritilgan:
+  74 holat (bayram, foiz tarixi, summadagi chegirma, qo'shimcha guruh, ko'chirish, A→B→A, jadval 3→5, to'xtatish/qaytish,
+  kutilayotgan chek, parallel tasdiqlash, o'qituvchi almashuvi, pauza, shaxsiy narx,
+  chegirma). Kod o'zgarsa shu holatlarni qayta tekshiring.
 
 - **Testlar ishlamaydi:** `jest` konfiguratsiyasida `@/` uchun `moduleNameMapper` yo'q —
   26 ta suite'dan 25 tasi "Cannot find module '@/...'" bilan yiqiladi. Tuzatish uchun

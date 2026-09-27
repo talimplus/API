@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { Role } from './entities/role.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
@@ -109,10 +109,16 @@ export class RolesService {
 
   // ───────────────────────────── CRUD ─────────────────────────────
 
-  /** Organizationdagi barcha rollar + har biriga biriktirilgan xodimlar soni. */
+  /**
+   * Organizationdagi xodim rollari + har biriga biriktirilgan xodimlar soni.
+   * `student` roli ko'rsatilmaydi — u xodimga berilmaydi.
+   */
   async findAll(organizationId: number) {
     const roles = await this.roleRepo.find({
-      where: { organization: { id: organizationId } },
+      where: {
+        organization: { id: organizationId },
+        baseRole: Not(UserRole.STUDENT),
+      },
       order: { id: 'ASC' },
     });
 
@@ -182,7 +188,9 @@ export class RolesService {
 
     if (role.isLocked) {
       throw new ForbiddenException(
-        'Administrator rolini o‘zgartirib bo‘lmaydi — unda barcha ruxsatlar bor',
+        role.baseRole === UserRole.STUDENT
+          ? 'O‘quvchi rolini o‘zgartirib bo‘lmaydi'
+          : 'Administrator rolini o‘zgartirib bo‘lmaydi — unda barcha ruxsatlar bor',
       );
     }
 
@@ -253,6 +261,9 @@ export class RolesService {
         throw new BadRequestException(
           'Administrator roli faqat markaz egasiga tegishli',
         );
+      }
+      if (role.baseRole === UserRole.STUDENT) {
+        throw new BadRequestException('O‘quvchi roli xodimga berilmaydi');
       }
       return role;
     }

@@ -13,6 +13,7 @@ import { PaymentReceipt } from '@/modules/payments/entities/payment-receipt.enti
 import { User } from '@/modules/users/entities/user.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { GroupFeeModule } from '@/modules/groups/group-fee.module';
+import { StudentBaseDiscountModule } from '@/modules/students/student-base-discount.module';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
 import { TelegramModule } from '@/modules/telegram/telegram.module';
 
@@ -29,6 +30,7 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
       Attendance,
     ]),
     GroupFeeModule,
+    StudentBaseDiscountModule,
     EnrollmentsModule,
     TelegramModule,
     forwardRef(() => StudentsModule),

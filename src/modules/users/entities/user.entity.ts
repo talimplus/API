@@ -54,6 +54,14 @@ export class User {
   })
   userRole: Role;
 
+  /**
+   * Bloklangan xodim (`false`) tizimga kira olmaydi, lekin tarixi (oyliklar,
+   * komissiya, qabul qilgan cheklari) saqlanadi. Ishdan ketgan xodim
+   * o'chirilmaydi — bloklanadi.
+   */
+  @Column({ type: 'boolean', default: true })
+  isActive: boolean;
+
   @Column({ nullable: true })
   salary: number;
 

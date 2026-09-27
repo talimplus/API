@@ -16,6 +16,11 @@ import {
 import { dayjs } from '@/shared/utils/dayjs';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
+import { Group } from '@/modules/groups/entities/groups.entity';
+import { UserPayService } from '@/modules/users/user-pay.service';
+import { GroupTeacherPeriod } from '@/modules/groups/entities/group-teacher-period.entity';
+import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import { ensureGroupHolidays } from '@/modules/group_schedule/schedule-periods.util';
 
 @Injectable()
 export class TeacherEarningsService {
@@ -30,36 +35,37 @@ export class TeacherEarningsService {
     private readonly paymentRepo: Repository<Payment>,
     @InjectRepository(StaffSalary)
     private readonly staffSalaryRepo: Repository<StaffSalary>,
+    private readonly userPayService: UserPayService,
   ) {}
 
   private round2(n: number): number {
     return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
+  /**
+   * Kech tushgan pul ulushini (carryover) keyingi to'lanmagan oyga qo'shadi.
+   * Joriy oydan keyingi oy hali ochilmagan — u yerga yetib borsa carryover
+   * qo'llanmay qoladi va o'sha oy hisoblanganda o'zi olinadi.
+   */
   private async applyCarryoverToNextUnpaidEarningMonth(
     organizationId: number,
     teacherId: number,
-    sourceEarningMonth: string, // YYYY-MM-01
+    sourceMonth: string, // YYYY-MM-01
   ) {
-    // We only look ahead a limited window to prevent pathological loops.
-    // Next unpaid month is usually the immediate next month.
+    const currentStart = dayjs().startOf('month');
     for (let i = 1; i <= 12; i++) {
-      const candidate = dayjs(sourceEarningMonth)
-        .add(i, 'month')
-        .startOf('month')
-        .format('YYYY-MM-01');
+      const candidate = dayjs(sourceMonth).add(i, 'month').startOf('month');
+      if (candidate.isAfter(currentStart)) return;
+      const month = candidate.format('YYYY-MM-01');
 
-      // If the pay month (candidate + 1) is already paid, we cannot change it; move forward.
       // eslint-disable-next-line no-await-in-loop
-      const paidOut = await this.isSalaryPaidOut(teacherId, candidate);
-      if (paidOut) continue;
+      if (await this.isSalaryPaidOut(teacherId, month)) continue;
 
-      // Recalculate to apply any unapplied carryovers into this candidate month.
       // eslint-disable-next-line no-await-in-loop
       await this.calculateTeacherEarningsForMonth(
         organizationId,
         teacherId,
-        dayjs(candidate).format('YYYY-MM'),
+        candidate.format('YYYY-MM'),
         { force: true },
       );
       return;
@@ -81,57 +87,246 @@ export class TeacherEarningsService {
   }
 
   /**
-   * Month offset rule:
-   * - earnings month = M
-   * - salary is paid in M+1 (pay month)
-   *
-   * StaffSalary.forMonth stores the PAY month for teachers.
+   * Oy — ISH oyi: `teacher_monthly_earnings.forMonth`, `staff_salaries.forMonth`
+   * va o'quvchi to'lovlarining `payments.forMonth` bir xil oy. Pul keyingi oyda
+   * berilsa ham oylik o'zi ishlangan oyda turadi (to'lanmagan bo'lib).
    */
   private async isSalaryPaidOut(
     teacherId: number,
-    payMonth: string, // YYYY-MM-01
+    month: string, // YYYY-MM-01
   ): Promise<boolean> {
     const row = await this.staffSalaryRepo.findOne({
-      where: { userId: teacherId, forMonth: payMonth as any },
+      where: { userId: teacherId, forMonth: month as any },
     });
     return row?.status === StaffSalaryStatus.PAID;
   }
 
+  /**
+   * Guruhning o'qituvchi davrlari. Sana uchun o'qituvchi — `fromDate <= sana`
+   * ga mos eng oxirgi davr, mos kelmasa eng birinchisi. Tarix bo'lmasa (eski
+   * ma'lumot) `null` — chaqiruvchi hozirgi `groups.teacher` ga qaytadi.
+   */
+  private async loadTeacherResolver(
+    groupId: number,
+  ): Promise<((date: string) => number | null) | null> {
+    const periods = await this.paymentRepo.manager
+      .getRepository(GroupTeacherPeriod)
+      .find({ where: { groupId }, order: { fromDate: 'ASC' } });
+    if (!periods.length) return null;
+    const list = periods.map((p) => ({
+      from: dayjs(p.fromDate).format('YYYY-MM-DD'),
+      teacherId: p.teacherId ?? null,
+    }));
+    return (date: string) => {
+      let picked = list[0];
+      for (const p of list) {
+        if (p.from <= date) picked = p;
+        else break;
+      }
+      return picked.teacherId;
+    };
+  }
+
+  /**
+   * Shu oyda guruhda dars bergan o'qituvchilar (komissiyani qayta hisoblash
+   * kerak bo'lganlar). Tarix bo'lmasa — hozirgi o'qituvchi.
+   */
+  async teachersForGroupMonth(
+    groupId: number,
+    month: string, // YYYY-MM-01
+  ): Promise<number[]> {
+    const resolver = await this.loadTeacherResolver(groupId);
+    if (!resolver) {
+      const [row] = await this.paymentRepo.manager.query(
+        `SELECT "teacherId" FROM "groups" WHERE "id" = $1`,
+        [groupId],
+      );
+      return row?.teacherId ? [Number(row.teacherId)] : [];
+    }
+    const ids = new Set<number>();
+    const start = dayjs(month).startOf('month');
+    const days = start.daysInMonth();
+    for (let i = 0; i < days; i++) {
+      const t = resolver(start.add(i, 'day').format('YYYY-MM-DD'));
+      if (t) ids.add(t);
+    }
+    return Array.from(ids);
+  }
+
+  /**
+   * O'qituvchi komissiyasi uchun shu oyda tushgan pul (PAID + PARTIAL).
+   *
+   * Guruh bo'yicha o'qituvchi tarixi (`group_teacher_periods`) hisobga
+   * olinadi: butun oy shu o'qituvchida bo'lsa — to'liq summa; oy o'rtasida
+   * almashgan bo'lsa — har bir to'lov o'quvchining shu oydagi darslari
+   * soniga qarab bo'linadi (eski o'qituvchi o'tgan darslari uchun ulushini
+   * saqlaydi, o'quvchi almashuvdan keyin qo'shilgan bo'lsa — hammasi yangisiga).
+   */
   private async computeCommissionAmount(
     teacherId: number,
-    earningMonth: string, // YYYY-MM-01
+    month: string, // YYYY-MM-01
   ): Promise<number> {
-    // Only PAID student payments count; paid late will be included when recalculated.
+    const manager = this.paymentRepo.manager;
+    const groupRows: { id: number }[] = await manager.query(
+      `SELECT g."id" FROM "groups" g WHERE g."teacherId" = $1
+       UNION
+       SELECT tp."groupId" FROM "group_teacher_periods" tp WHERE tp."teacherId" = $1`,
+      [teacherId],
+    );
+
+    let total = 0;
+    for (const { id: groupId } of groupRows) {
+      const resolver = await this.loadTeacherResolver(Number(groupId));
+      const monthStart = dayjs(month).startOf('month');
+      const monthDays = Array.from(
+        { length: monthStart.daysInMonth() },
+        (_, i) => monthStart.add(i, 'day').format('YYYY-MM-DD'),
+      );
+
+      if (!resolver) {
+        // Tarix yo'q (eski ma'lumot) — hozirgi o'qituvchi butun oyni oladi.
+        const [row] = await manager.query(
+          `SELECT "teacherId" FROM "groups" WHERE "id" = $1`,
+          [groupId],
+        );
+        if (Number(row?.teacherId) === teacherId) {
+          total += await this.sumPaidForGroupMonth(Number(groupId), month);
+        }
+        continue;
+      }
+
+      const owners = new Set(monthDays.map((d) => resolver(d)));
+      if (!owners.has(teacherId)) continue;
+      if (owners.size === 1) {
+        total += await this.sumPaidForGroupMonth(Number(groupId), month);
+        continue;
+      }
+
+      total += await this.splitPaidForGroupMonth(
+        Number(groupId),
+        month,
+        teacherId,
+        resolver,
+        monthDays,
+      );
+    }
+
+    return this.round2(total);
+  }
+
+  private async sumPaidForGroupMonth(
+    groupId: number,
+    month: string,
+  ): Promise<number> {
     const raw = await this.paymentRepo
       .createQueryBuilder('p')
       .select('COALESCE(SUM(p.amountPaid), 0)', 'sum')
-      .leftJoin('p.group', 'g')
-      .leftJoin('g.teacher', 't')
-      .where('p.forMonth = :forMonth', { forMonth: earningMonth })
-      // Count commission on all money actually received (partial payments included)
+      .where('p.groupId = :groupId', { groupId })
+      .andWhere('p.forMonth = :forMonth', { forMonth: month })
       .andWhere('p.status IN (:...statuses)', {
         statuses: [PaymentStatus.PAID, PaymentStatus.PARTIAL],
       })
       .andWhere('p.amountPaid > 0')
-      .andWhere('t.id = :teacherId', { teacherId })
       .getRawOne<{ sum: string }>();
-
     return Number(raw?.sum ?? 0);
   }
 
+  /** Oy o'rtasida o'qituvchi almashgan guruh: har bir to'lovni darslar bo'yicha bo'lamiz. */
+  private async splitPaidForGroupMonth(
+    groupId: number,
+    month: string,
+    teacherId: number,
+    teacherAt: (date: string) => number | null,
+    monthDays: string[],
+  ): Promise<number> {
+    const manager = this.paymentRepo.manager;
+    const payments = await this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.groupId = :groupId', { groupId })
+      .andWhere('p.forMonth = :forMonth', { forMonth: month })
+      .andWhere('p.status IN (:...statuses)', {
+        statuses: [PaymentStatus.PAID, PaymentStatus.PARTIAL],
+      })
+      .andWhere('p.amountPaid > 0')
+      .getMany();
+    if (!payments.length) return 0;
+
+    const group = await manager.getRepository(Group).findOne({
+      where: { id: groupId },
+      relations: ['schedules', 'schedulePeriods', 'pauses'],
+    });
+    if (group) await ensureGroupHolidays(manager, group);
+    const lessonDates = group
+      ? computeLessonDates({
+          timezone: group.timezone || 'Asia/Tashkent',
+          groupStartDate: dayjs(group.startDate).format('YYYY-MM-DD'),
+          groupEndDate: group.endDate
+            ? dayjs(group.endDate).format('YYYY-MM-DD')
+            : null,
+          schedules: group.schedules ?? [],
+          schedulePeriods: group.schedulePeriods ?? null,
+          pauses: group.pauses ?? null,
+          holidays: group.holidays ?? null,
+          window: {
+            mode: 'range',
+            from: monthDays[0],
+            to: monthDays[monthDays.length - 1],
+          },
+        })
+      : [];
+
+    const windowRows: {
+      studentId: number;
+      joinedAt: Date | string;
+      leftAt: Date | string | null;
+    }[] = await manager.query(
+      `SELECT "studentId", "joinedAt", "leftAt" FROM "student_group_enrollments"
+        WHERE "groupId" = $1 AND "studentId" = ANY($2)`,
+      [groupId, payments.map((p) => p.studentId)],
+    );
+    const windowsByStudent = new Map<
+      number,
+      { joinedAt: string; leftAt: string | null }[]
+    >();
+    for (const w of windowRows) {
+      const list = windowsByStudent.get(Number(w.studentId)) ?? [];
+      list.push({
+        joinedAt: dayjs(w.joinedAt).format('YYYY-MM-DD'),
+        leftAt: w.leftAt ? dayjs(w.leftAt).format('YYYY-MM-DD') : null,
+      });
+      windowsByStudent.set(Number(w.studentId), list);
+    }
+
+    let sum = 0;
+    for (const p of payments) {
+      const windows = windowsByStudent.get(p.studentId) ?? [];
+      let dates = windows.length
+        ? lessonDates.filter((d) =>
+            windows.some((w) => w.joinedAt <= d && (!w.leftAt || d < w.leftAt)),
+          )
+        : lessonDates;
+      // Dars topilmasa (jadval yo'q va h.k.) — kalendar kunlari bo'yicha.
+      if (!dates.length) dates = monthDays;
+      const mine = dates.filter((d) => teacherAt(d) === teacherId).length;
+      sum += Number(p.amountPaid ?? 0) * (mine / dates.length);
+    }
+    return sum;
+  }
+
   /**
-   * Calculates and stores monthly earning snapshot for a teacher.
-   * - commission based on PAID student payments for that month
-   * - salary snapshot is teacher.salary at calculation time
-   * - carryover applies only when current month is not already paid out
+   * O'qituvchining ish oyi uchun daromadini hisoblaydi va saqlaydi.
+   * - komissiya — shu oy uchun o'quvchilardan tushgan pul (PAID + PARTIAL);
+   * - oylik berib bo'lingan (PAID) oy **muzlatiladi**: undan keyin tushgan pul
+   *   ulushi carryover bo'lib keyingi to'lanmagan oyga qo'shiladi;
+   * - to'lanmagan oy har to'lovda qayta hisoblanadi va `staff_salaries` bilan sinxronlanadi.
    */
   async calculateTeacherEarningsForMonth(
     organizationId: number,
     teacherId: number,
-    payMonthYM: string,
+    monthYM: string,
     opts?: { force?: boolean },
   ) {
-    const payMonth = this.normalizeForMonthYM(payMonthYM);
+    const month = this.normalizeForMonthYM(monthYM);
     const force = !!opts?.force;
 
     const teacher = await this.userRepo
@@ -147,79 +342,98 @@ export class TeacherEarningsService {
     }
 
     const existing = await this.earningRepo.findOne({
-      where: { teacherId, forMonth: payMonth as any },
+      where: { teacherId, forMonth: month as any },
       relations: ['teacher'],
     });
     if (existing && !force) return existing;
 
-    const earningMonth = dayjs(payMonth)
-      .subtract(1, 'month')
-      .startOf('month')
-      .format('YYYY-MM-01');
-
-    const baseSalary = Number(teacher.salary ?? 0);
+    // Oylik va foiz oyga bog'langan: shu OY uchun amaldagi qiymat (keyin
+    // o'zgartirilgan foiz o'tgan oylarga ta'sir qilmaydi).
+    const pay = await this.userPayService.getForMonth(teacher, month);
+    const baseSalary = Number(pay.salary ?? 0);
     const commissionPct = Math.max(
       0,
-      Math.min(100, Number(teacher.commissionPercentage ?? 0)),
+      Math.min(100, Number(pay.commissionPercentage ?? 0)),
     );
-    const grossPaid = await this.computeCommissionAmount(
-      teacherId,
-      earningMonth,
-    );
+    const grossPaid = await this.computeCommissionAmount(teacherId, month);
     const commissionAmount = this.round2(
       Math.max(0, grossPaid * (commissionPct / 100)),
     );
 
-    const paidOut = await this.isSalaryPaidOut(teacherId, payMonth);
+    const paidOut = await this.isSalaryPaidOut(teacherId, month);
 
-    // If pay month was already marked PAID and commission increased (late payments),
-    // record the incremental commission as a carryover applied to THIS SAME pay month.
+    // Oylik berib bo'lingan oy o'zgarmaydi. Kech tushgan pul ulushi — shu oydan
+    // allaqachon hisoblangan (snapshot + avvalgi carryover'lar) summadan ortig'i.
     if (paidOut && existing) {
-      const prevCommission = Number(existing.commissionAmount ?? 0);
-      const diff = this.round2(commissionAmount - prevCommission);
+      // "Hisoblangan" summani o'qish va farqni yozish bitta qulf ostida:
+      // bir vaqtda ikki qayta hisoblash (masalan chek tasdig'i + ro'yxat) bir
+      // xil farqni ikki marta carryover qilib yozib yubormasligi uchun.
+      const diff = await this.carryRepo.manager.transaction(async (m) => {
+        await m.query('SELECT pg_advisory_xact_lock($1, $2)', [
+          teacherId,
+          Number(month.slice(0, 4) + month.slice(5, 7)),
+        ]);
+        const carried = await m
+          .getRepository(TeacherCommissionCarryOver)
+          .createQueryBuilder('c')
+          .select('COALESCE(SUM(c.amount), 0)', 'sum')
+          .where('c.teacherId = :teacherId', { teacherId })
+          .andWhere('c.sourceForMonth = :month', { month })
+          .getRawOne<{ sum: string }>();
+        const counted =
+          Number(existing.commissionAmount ?? 0) + Number(carried?.sum ?? 0);
+        const d = this.round2(commissionAmount - counted);
+        if (d > 0) {
+          await m.getRepository(TeacherCommissionCarryOver).save(
+            m.getRepository(TeacherCommissionCarryOver).create({
+              teacherId,
+              sourceForMonth: month as any,
+              amount: d as any,
+              appliedForMonth: null,
+              appliedAt: null,
+            }),
+          );
+        }
+        return d;
+      });
       if (diff > 0) {
-        await this.carryRepo.save(
-          this.carryRepo.create({
-            teacherId,
-            sourceForMonth: earningMonth as any,
-            amount: diff as any,
-            appliedForMonth: null,
-            appliedAt: null,
-          }),
-        );
-
         await this.applyCarryoverToNextUnpaidEarningMonth(
           organizationId,
           teacherId,
-          earningMonth,
+          month,
         );
       }
+      return existing;
     }
 
-    // Carryover semantics:
-    // - carryover rows are immutable amounts
-    // - appliedForMonth marks which earnings month received that carryover
-    // On recalculation (force=true), we MUST preserve already-applied carryovers for this month.
+    // Carryover'lar o'zgarmas summalar; `appliedForMonth` — qaysi oyga qo'shilgani.
+    // Qayta hisoblashda (force) shu oyga allaqachon qo'shilganlari saqlanadi.
     const alreadyApplied = await this.carryRepo
       .createQueryBuilder('c')
       .select('COALESCE(SUM(c.amount), 0)', 'sum')
       .where('c.teacherId = :teacherId', { teacherId })
-      .andWhere('c.appliedForMonth = :forMonth', { forMonth: payMonth })
+      .andWhere('c.appliedForMonth = :month', { month })
       .getRawOne<{ sum: string }>();
     const alreadyAppliedSum = Number(alreadyApplied?.sum ?? 0);
 
-    // Apply any currently-unapplied carryovers into this month (only when not paid out)
-    const toApply = await this.carryRepo.find({
-      where: { teacherId, appliedForMonth: null },
-      order: { createdAt: 'ASC' },
-    });
+    // Hali qo'llanmagan carryover'lar — faqat o'zidan oldingi oylardan kelganlari.
+    // Oylik berilgan oyga qo'shilmaydi (u muzlatilgan, yuqorida qaytib ketadi).
+    const toApply = paidOut
+      ? []
+      : await this.carryRepo
+          .createQueryBuilder('c')
+          .where('c.teacherId = :teacherId', { teacherId })
+          .andWhere('c.appliedForMonth IS NULL')
+          .andWhere('c.sourceForMonth < :month', { month })
+          .orderBy('c.createdAt', 'ASC')
+          .getMany();
     const toApplySum = this.round2(
       toApply.reduce((sum, c) => sum + Number(c.amount ?? 0), 0),
     );
     if (toApply.length) {
       const now = new Date();
       for (const c of toApply) {
-        c.appliedForMonth = payMonth as any;
+        c.appliedForMonth = month as any;
         c.appliedAt = now;
       }
       await this.carryRepo.save(toApply);
@@ -236,7 +450,7 @@ export class TeacherEarningsService {
       this.earningRepo.create({
         teacherId,
         teacher: teacher as any,
-        forMonth: payMonth as any,
+        forMonth: month as any,
       });
 
     snapshot.baseSalarySnapshot = baseSalary as any;
@@ -247,15 +461,21 @@ export class TeacherEarningsService {
 
     const savedSnapshot = await this.earningRepo.save(snapshot);
 
-    // Keep StaffSalary row for this pay month in sync, even if it was previously marked PAID.
-    const salaryRow = await this.staffSalaryRepo.findOne({
-      where: { userId: teacherId, forMonth: payMonth as any },
-    });
+    // To'lanmagan (yoki qisman to'langan) oylik qatori daromad bilan sinxronlanadi
+    const salaryRow = paidOut
+      ? null
+      : await this.staffSalaryRepo.findOne({
+          where: { userId: teacherId, forMonth: month as any },
+        });
     if (salaryRow) {
       salaryRow.baseSalary = savedSnapshot.totalEarning as any;
-      const paidAmount = Number((salaryRow as any).paidAmount ?? 0);
-      const base = Number((salaryRow as any).baseSalary ?? 0);
-      if (paidAmount >= base) {
+      const paidAmount = Number(salaryRow.paidAmount ?? 0);
+      const net = Math.max(
+        0,
+        Number(salaryRow.baseSalary ?? 0) -
+          Number(salaryRow.deductionAmount ?? 0),
+      );
+      if (net > 0 && paidAmount >= net) {
         salaryRow.status = StaffSalaryStatus.PAID;
         salaryRow.paidAt = salaryRow.paidAt ?? new Date();
       } else if (paidAmount > 0) {

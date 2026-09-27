@@ -15,6 +15,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import { ensureGroupHolidays } from '@/modules/group_schedule/schedule-periods.util';
 import { StaffAttendance } from './entities/staff-attendance.entity';
 import {
   AttendanceConfidence,
@@ -657,8 +658,11 @@ export class StaffAttendanceService {
 
     const groups = await this.groupRepo.find({
       where: { teacher: { id: teacherId } },
-      relations: ['schedules'],
+      relations: ['schedules', 'schedulePeriods', 'pauses'],
     });
+    for (const g of groups) {
+      await ensureGroupHolidays(this.groupRepo.manager, g);
+    }
     if (!groups.length) return result;
 
     const overrides = await this.overrideRepo.find({
@@ -697,6 +701,9 @@ export class StaffAttendanceService {
       groupStartDate: startDate,
       groupEndDate: endDate,
       schedules,
+      schedulePeriods: group.schedulePeriods ?? null,
+      pauses: group.pauses ?? null,
+      holidays: group.holidays ?? null,
       window: { mode: 'range', from, to },
     });
 
@@ -729,6 +736,25 @@ export class StaffAttendanceService {
     }));
   }
 
+  /** Sanada amalda bo'lgan jadval (tarix bo'lmasa — hozirgi jadval). */
+  private schedulesForDate(
+    group: Group,
+    date: string,
+  ): { day: WeekDay; startTime: string }[] {
+    const periods = [...(group.schedulePeriods ?? [])].sort((a, b) =>
+      dayjs(a.fromDate).format('YYYY-MM-DD') <
+      dayjs(b.fromDate).format('YYYY-MM-DD')
+        ? -1
+        : 1,
+    );
+    if (!periods.length) return group.schedules ?? [];
+    let picked = periods[0];
+    for (const p of periods) {
+      if (dayjs(p.fromDate).format('YYYY-MM-DD') <= date) picked = p;
+    }
+    return picked.days ?? [];
+  }
+
   /** Shu sanadagi (hafta kuniga mos) eng erta dars vaqti */
   private earliestTimeForDate(
     group: Group,
@@ -736,7 +762,9 @@ export class StaffAttendanceService {
     timezone: string,
   ): string | null {
     const dow = dayjs.tz(date, timezone).day();
-    const times = (group.schedules ?? [])
+    // Kechikish o'sha kungi jadval vaqtidan hisoblanadi (jadval keyin
+    // o'zgargan bo'lsa ham).
+    const times = this.schedulesForDate(group, date)
       .filter((s) => weekDayToDow[s.day] === dow)
       .map((s) => s.startTime)
       .sort();
@@ -750,8 +778,11 @@ export class StaffAttendanceService {
   ): Promise<number> {
     const groups = await this.groupRepo.find({
       where: { teacher: { id: teacherId } },
-      relations: ['schedules'],
+      relations: ['schedules', 'schedulePeriods', 'pauses'],
     });
+    for (const g of groups) {
+      await ensureGroupHolidays(this.groupRepo.manager, g);
+    }
     if (!groups.length) return 0;
 
     const overrides = await this.overrideRepo.find({

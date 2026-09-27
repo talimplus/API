@@ -143,6 +143,18 @@ export class CreateStudentDto {
   discountPercent?: number;
 
   @ApiProperty({
+    example: 20000,
+    description:
+      "Permanent fixed discount per month (so'm) — the amount counterpart of discountPercent. Full months only.",
+    required: false,
+    default: 0,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discountAmount?: number;
+
+  @ApiProperty({
     example: 'Referral discount',
     description: 'Discount reason (optional)',
     required: false,

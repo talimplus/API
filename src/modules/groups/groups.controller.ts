@@ -11,6 +11,8 @@ import {
   Req,
 } from '@nestjs/common';
 import { GroupsService } from './groups.service';
+import { GroupPausesService } from './group-pauses.service';
+import { CreateGroupPauseDto } from './dto/group-pause.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -26,7 +28,10 @@ import { ApiBody } from '@nestjs/swagger';
 @ApiTags('Groups')
 @Controller('groups')
 export class GroupsController {
-  constructor(private readonly groupsService: GroupsService) {}
+  constructor(
+    private readonly groupsService: GroupsService,
+    private readonly groupPausesService: GroupPausesService,
+  ) {}
 
   @Post()
   @RequirePermissions('groups.create')
@@ -176,6 +181,78 @@ export class GroupsController {
     );
   }
 
+  /** Admin bo'lmasa — o'z filialida qamalgan. */
+  private scopedCenterId(req: any): number | undefined {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
+    return isAdmin ? undefined : req.user.centerId;
+  }
+
+  @Get(':id/pauses')
+  @RequirePermissions('groups.view')
+  @ApiOperation({
+    summary: "Guruhning to'xtatilgan davrlari",
+    description:
+      "Bu kunlardagi darslar o'tkazilmaydi: jurnalda ko'rinmaydi va to'lovga kirmaydi.",
+  })
+  @ApiResponse({
+    description: '[{ id, groupId, fromDate, toDate, reason, createdAt }]',
+  })
+  listPauses(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.groupPausesService.list(
+      id,
+      req.user.organizationId,
+      this.scopedCenterId(req),
+    );
+  }
+
+  @Post(':id/pauses')
+  @RequirePermissions('groups.update')
+  @ApiOperation({
+    summary: "Guruhni vaqtincha to'xtatish",
+    description:
+      "[fromDate..toDate] oralig'idagi darslar o'tkazilmaydi va o'quvchi ular " +
+      "uchun to'lamaydi. Davomat yozilgan kunni to'xtatib bo'lmaydi (422). " +
+      "Guruh to'lovlari darhol qayta hisoblanadi.",
+  })
+  @ApiBody({ type: CreateGroupPauseDto })
+  @ApiResponse({
+    description: '{ id, groupId, fromDate, toDate, reason, createdAt }',
+  })
+  createPause(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateGroupPauseDto,
+    @Req() req: any,
+  ) {
+    return this.groupPausesService.create(
+      id,
+      dto,
+      req.user,
+      this.scopedCenterId(req),
+    );
+  }
+
+  @Delete(':id/pauses/:pauseId')
+  @RequirePermissions('groups.update')
+  @ApiOperation({
+    summary: "To'xtatishni bekor qilish",
+    description: "Darslar qaytadi, to'lovlar qayta hisoblanadi.",
+  })
+  @ApiResponse({ description: '{ success: true }' })
+  removePause(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('pauseId', ParseIntPipe) pauseId: number,
+    @Req() req: any,
+  ) {
+    return this.groupPausesService.remove(
+      id,
+      pauseId,
+      req.user.organizationId,
+      this.scopedCenterId(req),
+    );
+  }
+
   @Get(':id')
   @RequirePermissions('groups.view')
   @ApiOperation({ summary: 'Get one group' })
@@ -188,7 +265,19 @@ export class GroupsController {
   @RequirePermissions('groups.delete')
   @ApiOperation({ summary: 'Delete group' })
   @ApiResponse({ type: GroupResponseDto })
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.groupsService.remove(id);
+  @ApiResponse({
+    status: 400,
+    description:
+      "Guruhda to'lov yoki davomat tarixi bor — o'chirib bo'lmaydi, " +
+      'yopish (finished) kerak',
+  })
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.groupsService.remove(
+      id,
+      req.user.organizationId,
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.SUPER_ADMIN
+        ? undefined
+        : req.user.centerId,
+    );
   }
 }

@@ -4,6 +4,8 @@ import { Attendance } from './entities/attendance.entity';
 import { AttendanceLessonOverride } from './entities/attendance-lesson-override.entity';
 import { AttendanceService } from './attendance.service';
 import { GroupAttendanceController } from './group-attendance.controller';
+import { AttendanceAbsencesController } from './attendance-absences.controller';
+import { AttendanceAbsencesService } from './attendance-absences.service';
 import { StudentsModule } from '@/modules/students/students.module';
 import { GroupsModule } from '@/modules/groups/groups.module';
 import { Group } from '@/modules/groups/entities/groups.entity';
@@ -24,8 +26,8 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
     forwardRef(() => PaymentsModule),
     TelegramModule,
   ],
-  controllers: [GroupAttendanceController],
-  providers: [AttendanceService],
+  controllers: [GroupAttendanceController, AttendanceAbsencesController],
+  providers: [AttendanceService, AttendanceAbsencesService],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}

@@ -24,7 +24,7 @@ export class StaffSalary {
   userId: number;
 
   /**
-   * First day of month (DATE).
+   * ISH oyi (oyning 1-kuni). Pul keyingi oyda berilsa ham oylik shu oyda turadi.
    */
   @Column({ type: 'date' })
   forMonth: Date;

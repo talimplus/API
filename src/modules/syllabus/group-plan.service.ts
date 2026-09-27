@@ -9,6 +9,7 @@ import { In, Repository } from 'typeorm';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
+import { ensureGroupHolidays } from '@/modules/group_schedule/schedule-periods.util';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { dayjs } from '@/shared/utils/dayjs';
@@ -50,6 +51,8 @@ export class GroupPlanService {
       where: { id: groupId },
       relations: [
         'schedules',
+        'schedulePeriods',
+        'pauses',
         'center',
         'subject',
         'room',
@@ -107,6 +110,9 @@ export class GroupPlanService {
       groupStartDate: startDate,
       groupEndDate: endDate,
       schedules: group.schedules ?? [],
+      schedulePeriods: group.schedulePeriods ?? null,
+      pauses: group.pauses ?? null,
+      holidays: await ensureGroupHolidays(this.groupRepo.manager, group),
       window: { mode: 'range', from: startDate, to: toDate },
     });
 
@@ -408,6 +414,8 @@ export class GroupPlanService {
     const qb = this.groupRepo
       .createQueryBuilder('group')
       .leftJoinAndSelect('group.schedules', 'schedules')
+      .leftJoinAndSelect('group.schedulePeriods', 'schedulePeriods')
+      .leftJoinAndSelect('group.pauses', 'pauses')
       .leftJoinAndSelect('group.center', 'center')
       .leftJoinAndSelect('group.subject', 'subject')
       .leftJoinAndSelect('group.room', 'room')

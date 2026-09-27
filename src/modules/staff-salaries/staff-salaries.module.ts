@@ -1,3 +1,4 @@
+import { UserPayModule } from '@/modules/users/user-pay.module';
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
@@ -25,6 +26,7 @@ import { StaffAttendanceModule } from '@/modules/staff-attendance/staff-attendan
       User,
     ]),
     forwardRef(() => TeacherEarningsModule),
+    UserPayModule,
     StaffAttendanceModule,
   ],
   providers: [

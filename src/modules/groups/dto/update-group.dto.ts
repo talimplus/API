@@ -96,6 +96,18 @@ export class UpdateGroupDto {
   teacherId?: number;
 
   @ApiProperty({
+    example: '2026-10-05',
+    required: false,
+    description:
+      "Yangi o'qituvchi qaysi kundan guruhni olgani (inclusive). Default — bugun. " +
+      "Shu kundan oldingi darslar uchun komissiya eski o'qituvchida qoladi. " +
+      "Faqat `teacherId` haqiqatan o'zgarganda o'qiladi.",
+  })
+  @IsOptional()
+  @IsDateString()
+  teacherEffectiveFrom?: string;
+
+  @ApiProperty({
     example: 2,
     description: 'Guruxga biriktirilgan xona idsi',
   })
@@ -147,6 +159,18 @@ export class UpdateGroupDto {
   @ValidateNested({ each: true })
   @Type(() => ScheduleDayDto)
   days?: ScheduleDayDto[];
+
+  @ApiProperty({
+    example: '2026-10-05',
+    required: false,
+    description:
+      "Yangi jadval qaysi kundan kuchga kirsin (guruh timezone'ida, inclusive). " +
+      "Default — bugun. Shu kundan oldingi darslar (davomat, to'lov " +
+      "proratsiyasi) eski jadvalda qoladi. Faqat `days` haqiqatan o'zgarganda o'qiladi.",
+  })
+  @IsOptional()
+  @IsDateString()
+  scheduleEffectiveFrom?: string;
 
   @ApiProperty({
     example: 3,

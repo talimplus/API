@@ -61,4 +61,21 @@ export class Attendance {
 
   @Column({ type: 'timestamp', default: () => 'now()' })
   updatedAt: Date;
+
+  /**
+   * Qabulxona kelmagan o'quvchiga qo'ng'iroq qilib yozgan natija
+   * ("kasal edi", "ko'chib ketdi" ...). Faqat `absent`/`excused` uchun.
+   */
+  @Column({ type: 'text', nullable: true })
+  followUpNote?: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  followedUpAt?: Date | null;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'followedUpById' })
+  followedUpBy?: User | null;
+
+  @Column({ type: 'int', nullable: true })
+  followedUpById?: number | null;
 }

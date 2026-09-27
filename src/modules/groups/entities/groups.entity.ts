@@ -8,6 +8,8 @@ import {
   OneToMany,
 } from 'typeorm';
 import { GroupSchedule } from '@/modules/group_schedule/entities/group-schedule.entity';
+import { GroupSchedulePeriod } from '@/modules/group_schedule/entities/group-schedule-period.entity';
+import { GroupPause } from '@/modules/groups/entities/group-pause.entity';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { Student } from '@/modules/students/entities/students.entity';
@@ -96,6 +98,23 @@ export class Group {
 
   @OneToMany(() => GroupSchedule, (schedule) => schedule.group)
   schedules: GroupSchedule[];
+
+  /**
+   * Jadval tarixi — o'tgan sanalardagi darslar shundan hisoblanadi
+   * (`group_schedule` esa faqat hozirgi jadval).
+   */
+  @OneToMany(() => GroupSchedulePeriod, (period) => period.group)
+  schedulePeriods?: GroupSchedulePeriod[];
+
+  /** Vaqtincha to'xtatilgan davrlar — bu kunlardagi darslar o'tkazilmaydi. */
+  @OneToMany(() => GroupPause, (pause) => pause.group)
+  pauses?: GroupPause[];
+
+  /**
+   * Guruhga tegishli bayram kunlari — ustun emas, `ensureGroupHolidays`
+   * yuklaydi (TypeORM dekoratorsiz xususiyatga tegmaydi).
+   */
+  holidays?: { fromDate: string; toDate: string; name: string }[];
 
   @OneToMany(() => Attendance, (a) => a.group)
   attendance: Attendance[];

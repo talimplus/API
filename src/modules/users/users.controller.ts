@@ -4,6 +4,7 @@ import {
   Param,
   Req,
   ParseIntPipe,
+  ParseBoolPipe,
   Post,
   Query,
   Body,
@@ -172,8 +173,30 @@ export class UsersController {
   @RequirePermissions('users.view')
   @ApiOperation({ summary: 'Find user by id' })
   @ApiResponse({ type: UserResponseDto })
-  async findOneById(@Param('id', ParseIntPipe) id: number) {
-    return this.usersService.findOne(id);
+  async findOneById(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.usersService.findOne(id, req.user.organizationId);
+  }
+
+  /**
+   * 🔒 Xodimni bloklash / blokdan chiqarish. Ishdan ketgan xodim o'chirilmaydi
+   * (oylik va komissiya tarixi yo'qoladi) — bloklanadi.
+   */
+  @Put(':id/active')
+  @RequirePermissions('users.update')
+  @ApiOperation({ summary: 'Block / unblock staff member' })
+  @ApiBody({
+    schema: {
+      required: ['isActive'],
+      properties: { isActive: { type: 'boolean' } },
+    },
+  })
+  @ApiResponse({ type: UserResponseDto })
+  async setActive(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('isActive', ParseBoolPipe) isActive: boolean,
+    @Req() req: any,
+  ) {
+    return this.usersService.setActive(id, isActive, req.user);
   }
 
   /**

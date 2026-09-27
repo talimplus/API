@@ -1,3 +1,4 @@
+import { UserPayService } from '@/modules/users/user-pay.service';
 import {
   BadRequestException,
   Injectable,
@@ -33,6 +34,7 @@ export class StaffSalariesService {
     private readonly receiptRepo: Repository<PaymentReceipt>,
     private readonly teacherEarningsService: TeacherEarningsService,
     private readonly deductionsService: StaffDeductionsService,
+    private readonly userPayService: UserPayService,
   ) {}
 
   private normalizeForMonth(forMonth?: string): string {
@@ -92,9 +94,12 @@ export class StaffSalariesService {
     centerId?: number,
   ) {
     const month = this.normalizeForMonth(forMonth);
-    // pay month start boundary (salary for this pay-month is for previous month work)
-    // If employee was created in the pay month, they should NOT get a salary row for this pay month.
-    const monthStart = dayjs(month).startOf('month').toDate();
+    // Oy — ISH oyi. Pul keyingi oyda berilsa ham oylik shu oyda turadi.
+    // Oy davomida qo'shilgan xodim shu oydan boshlab ko'rinadi.
+    const nextMonthStart = dayjs(month)
+      .add(1, 'month')
+      .startOf('month')
+      .toDate();
 
     const employees = await this.userRepo.find({
       where: [
@@ -106,21 +111,27 @@ export class StaffSalariesService {
       relations: ['organization', 'center'],
     });
 
+    // Oylik/foiz shu OY uchun amaldagi qiymatdan (tarix) — keyin o'zgartirilgan
+    // oylik o'tgan oylarga ta'sir qilmaydi.
+    const payByUser = new Map<
+      number,
+      { salary: number; commissionPercentage: number }
+    >();
+    for (const u of employees) {
+      payByUser.set(u.id, await this.userPayService.getForMonth(u, month));
+    }
     const eligible = employees.filter((u) => {
+      const pay = payByUser.get(u.id)!;
       if (u.organization?.id !== organizationId) return false;
       if (centerId && (u as any).center?.id !== centerId) return false;
-      // Do not create salaries for months before the employee existed in the system.
-      // Example: user created in 2026-01 must not get a salary row for 2025-05.
-      // Also: if user was created within the pay month, they will appear starting next month.
-      if (u.createdAt && !dayjs(u.createdAt).isBefore(monthStart)) {
+      // Xodim tizimda bo'lmagan oylarga oylik yozilmaydi
+      if (u.createdAt && !dayjs(u.createdAt).isBefore(nextMonthStart)) {
         return false;
       }
       if (u.role === UserRole.TEACHER) {
-        return (
-          Number(u.salary ?? 0) > 0 || Number(u.commissionPercentage ?? 0) > 0
-        );
+        return pay.salary > 0 || pay.commissionPercentage > 0;
       }
-      return Number(u.salary ?? 0) > 0;
+      return pay.salary > 0;
     });
     if (!eligible.length) return;
 
@@ -133,15 +144,11 @@ export class StaffSalariesService {
       .getMany();
     const existingByUserId = new Map(existing.map((r) => [r.userId, r]));
 
-    const payYm = month.slice(0, 7);
-    const earningYmForTeachers = dayjs(month)
-      .subtract(1, 'month')
-      .startOf('month')
-      .format('YYYY-MM');
+    const monthYm = month.slice(0, 7);
 
     const toCreate: StaffSalary[] = [];
     for (const u of eligible) {
-      let baseSalary = Number(u.salary ?? 0);
+      let baseSalary = Number(payByUser.get(u.id)?.salary ?? 0);
       if (u.role === UserRole.TEACHER) {
         const existingRow = existingByUserId.get(u.id);
         const force =
@@ -151,22 +158,14 @@ export class StaffSalariesService {
           await this.teacherEarningsService.calculateTeacherEarningsForMonth(
             organizationId,
             u.id,
-            payYm,
+            monthYm,
             { force },
           );
         baseSalary = Number((earning as any).totalEarning ?? 0);
       } else if (u.role === UserRole.MANAGER || u.role === UserRole.RECEPTION) {
-        // Add commission from payment receipts (confirmed receipts from previous month)
-        const earningYm = dayjs(month)
-          .subtract(1, 'month')
-          .startOf('month')
-          .format('YYYY-MM');
-        const earningMonthStart = dayjs(`${earningYm}-01`)
-          .startOf('month')
-          .toDate();
-        const earningMonthEnd = dayjs(`${earningYm}-01`)
-          .endOf('month')
-          .toDate();
+        // Qabul qilgan pulidan ulush — shu oyda tasdiqlangan cheklar
+        const earningMonthStart = dayjs(month).startOf('month').toDate();
+        const earningMonthEnd = dayjs(month).endOf('month').toDate();
 
         const receipts = await this.receiptRepo
           .createQueryBuilder('r')
@@ -224,7 +223,10 @@ export class StaffSalariesService {
 
   async findAll(organizationId: number, forMonth?: string, centerId?: number) {
     const month = this.normalizeForMonth(forMonth);
-    const monthStart = dayjs(month).startOf('month').toDate();
+    const nextMonthStart = dayjs(month)
+      .add(1, 'month')
+      .startOf('month')
+      .toDate();
 
     // Ensure the month is populated so UI never sees an empty table.
     await this.ensureSalariesForMonth(
@@ -243,7 +245,7 @@ export class StaffSalariesService {
       .where('organization.id = :organizationId', { organizationId })
       .andWhere('salary.forMonth = :forMonth', { forMonth: month })
       .andWhere(centerId ? 'center.id = :centerId' : '1=1', { centerId })
-      .andWhere('user.createdAt < :monthStart', { monthStart })
+      .andWhere('user.createdAt < :nextMonthStart', { nextMonthStart })
       .orderBy('user.createdAt', 'DESC')
       .getMany();
 
@@ -262,12 +264,6 @@ export class StaffSalariesService {
         paymentHistoryMap.set(p.staffSalaryId, list);
       }
     }
-
-    const payYm = month.slice(0, 7);
-    const earningYmForTeachers = dayjs(month)
-      .subtract(1, 'month')
-      .startOf('month')
-      .format('YYYY-MM');
 
     // Ochiq jarimalarni shu oy oyligiga qo'llaymiz (o'tgan oylardan qolgani ham).
     // Idempotent — faqat sig'adigan va hali ushlanmagan qism qo'llanadi.
@@ -336,7 +332,8 @@ export class StaffSalariesService {
 
       // Enrich teacher rows with commission breakdown (so frontend can show it)
       if (r.user?.role === UserRole.TEACHER) {
-        out.earningForMonth = `${earningYmForTeachers}-01`;
+        // Ish oyi = oylik oyi (eski mijozlar uchun maydon saqlanadi)
+        out.earningForMonth = month;
         const earning = teacherEarningById.get(r.userId);
         if (earning) {
           out.earningBaseSalarySnapshot = Number(

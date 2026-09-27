@@ -18,6 +18,7 @@ import { OrganizationsService } from '@/modules/organizations/organizations.serv
 import { instanceToPlain } from 'class-transformer';
 import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 import { ValidationException } from '@/common/exceptions/validation.exception';
+import { UserPayService } from '@/modules/users/user-pay.service';
 import { RolesService } from '@/modules/roles/roles.service';
 
 @Injectable()
@@ -25,6 +26,7 @@ export class UsersService {
   constructor(
     private readonly organizationsService: OrganizationsService,
     private readonly rolesService: RolesService,
+    private readonly userPayService: UserPayService,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(Center)
@@ -112,6 +114,8 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto, organizationId?: number) {
+    // Bo'sh id bilan TypeORM birinchi foydalanuvchini qaytaradi (findOne ga qarang)
+    if (!id) throw new NotFoundException('Foydalanuvchi topilmadi');
     const user = await this.userRepo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
 
@@ -119,6 +123,10 @@ export class UsersService {
       dto.password = await bcrypt.hash(dto.password, 10);
     }
 
+    const previousPay = {
+      salary: Number(user.salary ?? 0),
+      commissionPercentage: Number(user.commissionPercentage ?? 0),
+    };
     const { roleId, role, ...rest } = dto;
     Object.assign(user, rest);
 
@@ -141,7 +149,14 @@ export class UsersService {
       this.rolesService.invalidateCache(user.id);
     }
 
-    return this.userRepo.save(user);
+    const saved = await this.userRepo.save(user);
+    // Oylik / foiz o'zgarsa — shu oydan kuchga kiradi, oldingi oylar eski
+    // qiymatda qoladi (kech to'langan o'quvchi puli ham eski foizdan).
+    await this.userPayService.recordChange(saved.id, previousPay, {
+      salary: Number(saved.salary ?? 0),
+      commissionPercentage: Number(saved.commissionPercentage ?? 0),
+    });
+    return saved;
   }
 
   /** Eski chaqiruvlar uchun: userning organization id'sini topadi. */
@@ -389,40 +404,110 @@ export class UsersService {
     };
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, organizationId?: number) {
+    // MUHIM: TypeORM `where: { id: undefined }` ni shartsiz deb o'qiydi va
+    // jadvaldagi BIRINCHI foydalanuvchini qaytaradi — chaqiruvchi esa uni
+    // yangilab yuborishi mumkin (boshqa tashkilot xodimi ham). Shuning uchun
+    // bo'sh id — "topilmadi".
+    if (!id) throw new NotFoundException('Foydalanuvchi topilmadi');
     const user = await this.userRepo.findOne({
-      where: { id },
+      where: organizationId
+        ? { id, organization: { id: organizationId } }
+        : { id },
     });
     if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
     return instanceToPlain(user);
   }
 
+  // userId -> { active, expiresAt }. JwtStrategy har so'rovda so'raydi.
+  private activeCache = new Map<number, { active: boolean; at: number }>();
+  private static readonly ACTIVE_TTL_MS = 15_000;
+
+  /** Xodim bloklanmaganmi (15 soniyalik kesh bilan). */
+  async isActiveCached(userId: number): Promise<boolean> {
+    const hit = this.activeCache.get(userId);
+    if (hit && Date.now() - hit.at < UsersService.ACTIVE_TTL_MS) {
+      return hit.active;
+    }
+    const row = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'isActive'],
+    });
+    // Foydalanuvchi o'chirilgan bo'lsa ham token ishlamasligi kerak.
+    const active = Boolean(row) && row.isActive !== false;
+    this.activeCache.set(userId, { active, at: Date.now() });
+    return active;
+  }
+
+  /**
+   * Xodimni bloklash / blokdan chiqarish. Ishdan ketgan xodim uchun
+   * o'chirish o'rniga shu ishlatiladi — oyliklar va komissiya tarixi qoladi.
+   */
+  async setActive(id: number, isActive: boolean, currentUser: CurrentUser) {
+    const user = await this.userRepo.findOne({
+      where: { id, organization: { id: currentUser.organizationId } },
+    });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+    if (user.id === currentUser.userId) {
+      throw new BadRequestException("O'zingizni bloklay olmaysiz");
+    }
+    if (user.role === UserRole.ADMIN && !isActive) {
+      throw new BadRequestException("Admin akkauntini bloklab bo'lmaydi");
+    }
+    user.isActive = isActive;
+    await this.userRepo.save(user);
+    this.activeCache.delete(user.id);
+    this.rolesService.invalidateCache(user.id);
+    return instanceToPlain(user);
+  }
+
+  /**
+   * Xodimni o'chirish.
+   *
+   * - Admin akkaunti o'chirilmaydi (ilgari bu butun TASHKILOTNI o'chirardi).
+   * - Tarixi bor xodim (oylik, komissiya, jarima, qabul qilgan cheklari,
+   *   guruh o'qituvchisi bo'lgan) o'chirilmaydi — CASCADE bu tarixni
+   *   yo'qotardi. Bunday xodim bloklanadi (`PUT /users/:id/active`).
+   */
   async remove(id: number, currentUser: CurrentUser) {
     const user = await this.userRepo.findOne({
       where: { id },
       relations: ['center', 'organization'],
     });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
 
     if (user.id === currentUser?.userId) {
       throw new BadRequestException("Siz o'zingizni o‘chira olmaysiz");
     }
 
-    if (user.organization.id !== currentUser?.organizationId) {
+    if (user.organization?.id !== currentUser?.organizationId) {
       throw new ForbiddenException('Siz bu foydalanuvchini o‘chira olmaysiz');
     }
 
     if (user.role === UserRole.ADMIN) {
-      const organizationId = user.center.organization.id;
+      throw new BadRequestException("Admin akkauntini o'chirib bo'lmaydi");
+    }
 
-      // Avval organizationni o‘chiramiz (CASCADE bo‘yicha center va userlar o‘chadi)
-      await this.organizationRepo.delete(organizationId);
-
-      return {
-        message: 'Admin va unga tegishli barcha maʼlumotlar o‘chirildi',
-      };
+    const [usage] = await this.userRepo.manager.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM "teacher_monthly_earnings" WHERE "teacherId" = $1)
+      OR EXISTS (SELECT 1 FROM "staff_salaries" WHERE "userId" = $1)
+      OR EXISTS (SELECT 1 FROM "payment_receipts"
+                  WHERE "receivedById" = $1 OR "confirmedById" = $1)
+      OR EXISTS (SELECT 1 FROM "groups" WHERE "teacherId" = $1)
+      OR EXISTS (SELECT 1 FROM "group_teacher_periods" WHERE "teacherId" = $1)
+         AS "hasHistory"`,
+      [user.id],
+    );
+    if (usage?.hasHistory) {
+      throw new BadRequestException(
+        "Xodimning oylik, komissiya yoki to'lov tarixi bor — uni o'chirib " +
+          "bo'lmaydi. Tizimga kirishini to'xtatish uchun xodimni bloklang.",
+      );
     }
 
     this.rolesService.invalidateCache(user.id);
+    this.activeCache.delete(user.id);
     return this.userRepo.remove(user);
   }
 
