@@ -19,6 +19,19 @@ npx ts-node -r tsconfig-paths/register --transpile-only \
 Prod'da `--org/--center/--admin` o'sha bazadagi qiymatlar bilan beriladi.
 Telegram bot **import tugagandan keyin** ulansin (skript botlarni o'zi o'chirib ishlaydi).
 
+### Bo'sh bo'lmagan tashkilotga (prod)
+
+1. Prod'ga shu branch kodi deploy qilinadi va migratsiyalar (052, 053) qo'llanadi.
+   Aks holda ishlab turgan eski server oylikni eski (to'lov oyi) ma'nosida yaratadi.
+2. `pg_dump` — zaxira nusxa.
+3. Butun tashkilotni tozalash (tashkilot, obuna, rollar, filiallar va adminlar qoladi):
+   ```bash
+   npx ts-node -r tsconfig-paths/register --transpile-only \
+     scripts/legacy-import/litech/purge-org.ts --org 27            # quruq yurish, faqat sanaydi
+   ... purge-org.ts --org 27 --apply --confirm "<tashkilot nomi>"
+   ```
+4. `import.ts ... --apply --org 27 --center <filial id> --admin <admin login>`.
+
 ## Qoidalar (markaz egasi bilan kelishilgan)
 
 | Sheet | Tizimda |
