@@ -772,6 +772,41 @@ export class StudentsService {
     return { success: true };
   }
 
+  /**
+   * Faqat qabuldagi (NEW) o'quvchini o'chirish. `students` ga bog'langan
+   * barcha FK'lar CASCADE — shu sabab to'lov yoki davomat tarixi bo'lsa,
+   * status NEW bo'lsa ham o'chirmaymiz.
+   */
+  async remove(organizationId: number, id: number) {
+    const student = await this.studentRepo.findOne({
+      where: { id, center: { organization: { id: organizationId } } },
+    });
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+
+    if (student.status !== StudentStatus.NEW) {
+      throw new BadRequestException(
+        "Faqat qabuldagi (NEW) o'quvchini o'chirish mumkin. " +
+          "Boshqa holatda statusni o'zgartiring.",
+      );
+    }
+
+    const [usage] = await this.studentRepo.manager.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM "payments" WHERE "studentId" = $1)
+      OR EXISTS (SELECT 1 FROM "attendance" WHERE "studentId" = $1)
+         AS "hasHistory"`,
+      [student.id],
+    );
+    if (usage?.hasHistory) {
+      throw new BadRequestException(
+        "O'quvchining to'lov yoki davomat tarixi bor — uni o'chirib bo'lmaydi.",
+      );
+    }
+
+    await this.studentRepo.remove(student);
+    return { success: true };
+  }
+
   async findByActiveStatus(organizationId: number): Promise<Student[]> {
     return await this.studentRepo.find({
       where: {

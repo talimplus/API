@@ -295,6 +295,16 @@ export class StudentsController {
     );
   }
 
+  @Delete(':id')
+  @RequirePermissions('students.delete')
+  @ApiOperation({
+    summary: 'Delete student (only NEW, without payments/attendance)',
+  })
+  @ApiResponse({ schema: { example: { success: true } } })
+  async remove(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.studentService.remove(req.user.organizationId, id);
+  }
+
   @Delete(':id/discount-periods/:periodId')
   @RequirePermissions('students.discounts')
   @ApiOperation({ summary: 'Delete student discount period' })
