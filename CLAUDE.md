@@ -389,6 +389,10 @@ finished→ active
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
 - `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
+- Fan: `subjectId` + ixtiyoriy `secondSubjectId` (qabulda ikki fan, migratsiya `…065`).
+  Faqat qabul uchun ma'lumot — to'lovga ta'sir qilmaydi; `subjectId` filtri ikkalasini ham tekshiradi.
+- Telefon bazada har xil yozilgan (`97-752-20-14`, `+998…`); yangi front `+998XXXXXXXXX`
+  yuboradi. `search` (o'quvchi) va lead `phone` filtri raqamlarni raqamlar bilan solishtiradi.
 
 ### 6.5.1 A'zolik oynasi va boshqa guruhga ko'chirish (MUHIM)
 

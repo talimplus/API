@@ -113,7 +113,15 @@ export class LeadsService {
     }
 
     if (phone?.trim()) {
-      query.andWhere('lead.phone ILIKE :phone', { phone: `%${phone.trim()}%` });
+      // Telefon bazada har xil yozilgan (97-752-20-14, +998977522014, ...) —
+      // raqamlar faqat raqamlar bilan solishtiriladi.
+      const digits = phone.replace(/\D/g, '');
+      query.andWhere(
+        digits.length >= 3
+          ? `(lead.phone ILIKE :phone OR regexp_replace(COALESCE(lead.phone, ''), '\\D', '', 'g') LIKE :digits)`
+          : 'lead.phone ILIKE :phone',
+        { phone: `%${phone.trim()}%`, digits: `%${digits}%` },
+      );
     }
 
     if (status) {

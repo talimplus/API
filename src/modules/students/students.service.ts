@@ -127,7 +127,8 @@ export class StudentsService {
       // load group ids without joining (keeps pagination stable)
       .loadRelationIdAndMap('student._groupIds', 'student.groups')
       // load subject relation
-      .leftJoinAndSelect('student.subject', 'subject');
+      .leftJoinAndSelect('student.subject', 'subject')
+      .leftJoinAndSelect('student.secondSubject', 'secondSubject');
 
     if (resolvedCenterId) {
       query.where('student.centerId = :centerId', {
@@ -161,16 +162,26 @@ export class StudentsService {
       query.andWhere('student.phone ILIKE :phone', { phone: `%${phone}%` });
 
     // Combined search: matches name (first/last/full) or phone numbers.
+    // Telefon bazada har xil yozilgan (97-752-20-14, +998977522014, ...),
+    // shuning uchun raqamlar faqat raqamlar bilan solishtiriladi.
     if (search && search.trim()) {
+      const searchDigits = search.replace(/\D/g, '');
       query.andWhere(
         `(
           student.firstName ILIKE :search
           OR student.lastName ILIKE :search
           OR (student.firstName || ' ' || student.lastName) ILIKE :search
+          OR (student.lastName || ' ' || student.firstName) ILIKE :search
           OR student.phone ILIKE :search
           OR student.secondPhone ILIKE :search
+          ${
+            searchDigits.length >= 3
+              ? `OR regexp_replace(COALESCE(student.phone, ''), '\\D', '', 'g') LIKE :searchDigits
+          OR regexp_replace(COALESCE(student.secondPhone, ''), '\\D', '', 'g') LIKE :searchDigits`
+              : ''
+          }
         )`,
-        { search: `%${search.trim()}%` },
+        { search: `%${search.trim()}%`, searchDigits: `%${searchDigits}%` },
       );
     }
 
@@ -199,7 +210,10 @@ export class StudentsService {
     }
 
     if (subjectId) {
-      query.andWhere('student.subjectId = :subjectId', { subjectId });
+      query.andWhere(
+        '(student.subjectId = :subjectId OR student.secondSubjectId = :subjectId)',
+        { subjectId },
+      );
     }
 
     const [data, total] = await query
@@ -249,6 +263,9 @@ export class StudentsService {
               id: s.subject.id,
               name: s.subject.name,
             }
+          : null,
+        secondSubject: s.secondSubject
+          ? { id: s.secondSubject.id, name: s.secondSubject.name }
           : null,
       };
 
@@ -346,7 +363,14 @@ export class StudentsService {
         id,
         center: { organization: { id: organizationId } },
       },
-      relations: ['user', 'center', 'groups', 'discountPeriods', 'subject'],
+      relations: [
+        'user',
+        'center',
+        'groups',
+        'discountPeriods',
+        'subject',
+        'secondSubject',
+      ],
     });
 
     if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
@@ -366,6 +390,9 @@ export class StudentsService {
           id: student.subject.id,
           name: student.subject.name,
         }
+      : null;
+    result.secondSubject = student.secondSubject
+      ? { id: student.secondSubject.id, name: student.secondSubject.name }
       : null;
     result.groupIds = (student as any).groups?.map((g: any) => g.id) ?? [];
     result.referrerId = referral?.referrerStudentId ?? null;
@@ -405,6 +432,22 @@ export class StudentsService {
       .andWhere('org.id = :organizationId', { organizationId })
       .getOne();
     if (!exists) throw new NotFoundException(`O'quvchi topilmadi`);
+  }
+
+  /** Fan shu filialga tegishli bo'lishi shart (boshqa filial fanini biriktirib bo'lmaydi). */
+  private async findSubjectInCenter(
+    subjectId: number,
+    centerId: number | null | undefined,
+  ): Promise<Subject> {
+    const subject = await this.subjectRepo.findOne({
+      where: { id: subjectId, center: { id: centerId as number } },
+    });
+    if (!subject) {
+      throw new BadRequestException(
+        "Bunday fan topilmadi yoki bu center'ga tegishli emas",
+      );
+    }
+    return subject;
   }
 
   private async resolveCenterIdOrThrow(
@@ -889,17 +932,14 @@ export class StudentsService {
     }
 
     // Validate and load subject if provided
-    let subject: Subject | null = null;
-    if (dto.subjectId) {
-      subject = await this.subjectRepo.findOne({
-        where: { id: dto.subjectId, center: { id: effectiveCenterId } },
-      });
-      if (!subject) {
-        throw new BadRequestException(
-          "Bunday fan topilmadi yoki bu center'ga tegishli emas",
-        );
-      }
-    }
+    const subject = dto.subjectId
+      ? await this.findSubjectInCenter(dto.subjectId, effectiveCenterId)
+      : null;
+    // Ikkinchi fan birinchisi bilan bir xil bo'lsa — yozilmaydi.
+    const secondSubject =
+      dto.secondSubjectId && dto.secondSubjectId !== subject?.id
+        ? await this.findSubjectInCenter(dto.secondSubjectId, effectiveCenterId)
+        : null;
 
     const groupIds = dto.groupIds;
     const safeGroupIds = Array.isArray(groupIds) ? groupIds : [];
@@ -972,6 +1012,8 @@ export class StudentsService {
       groups: groups,
       subject: subject ?? null,
       subjectId: subject?.id ?? null,
+      secondSubject,
+      secondSubjectId: secondSubject?.id ?? null,
     });
 
     const savedStudent = await this.studentRepo.save(student);
@@ -1161,23 +1203,31 @@ export class StudentsService {
 
     // Handle subjectId update
     if (dto.subjectId !== undefined) {
-      const effectiveCenterId = student.centerId;
-      if (dto.subjectId === null) {
-        student.subject = null;
-        student.subjectId = null;
-      } else {
-        const subject = await this.subjectRepo.findOne({
-          where: { id: dto.subjectId, center: { id: effectiveCenterId } },
-        });
-        if (!subject) {
-          throw new BadRequestException(
-            "Bunday fan topilmadi yoki bu center'ga tegishli emas",
-          );
-        }
-        student.subject = subject;
-        student.subjectId = subject.id;
-      }
+      const subject = dto.subjectId
+        ? await this.findSubjectInCenter(dto.subjectId, student.centerId)
+        : null;
+      student.subject = subject;
+      student.subjectId = subject?.id ?? null;
       delete (dto as any).subjectId; // Remove from dto to avoid Object.assign issues
+    }
+    if (dto.secondSubjectId !== undefined) {
+      const secondSubject =
+        dto.secondSubjectId && dto.secondSubjectId !== student.subjectId
+          ? await this.findSubjectInCenter(
+              dto.secondSubjectId,
+              student.centerId,
+            )
+          : null;
+      student.secondSubject = secondSubject;
+      student.secondSubjectId = secondSubject?.id ?? null;
+      delete (dto as any).secondSubjectId;
+    } else if (
+      student.secondSubjectId &&
+      student.secondSubjectId === student.subjectId
+    ) {
+      // Birinchi fan ikkinchisiga tenglashtirilgan bo'lsa — takror saqlanmaydi.
+      student.secondSubject = null;
+      student.secondSubjectId = null;
     }
 
     // Xavfsiz fieldlardan tashqarisini Object.assign qilmaslik uchun tozalash

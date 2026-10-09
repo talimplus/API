@@ -212,5 +212,16 @@ export class CreateStudentDto {
   })
   @IsOptional()
   @IsNumber()
-  subjectId?: number;
+  subjectId?: number | null;
+
+  @ApiProperty({
+    example: 2,
+    description:
+      "O'quvchining ikkinchi fani (optional). Birinchisi bilan bir xil bo'lsa e'tiborsiz qoldiriladi; null — olib tashlash",
+    required: false,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsNumber()
+  secondSubjectId?: number | null;
 }

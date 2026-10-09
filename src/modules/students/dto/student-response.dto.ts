@@ -152,4 +152,15 @@ export class StudentResponseDto {
     description: "O'quvchi fan ma'lumotlari (optional)",
   })
   subject?: SubjectResponseDto | null;
+
+  @ApiProperty({ required: false, nullable: true, example: 2 })
+  secondSubjectId?: number | null;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    type: () => SubjectResponseDto,
+    description: "O'quvchining ikkinchi fani (optional)",
+  })
+  secondSubject?: SubjectResponseDto | null;
 }

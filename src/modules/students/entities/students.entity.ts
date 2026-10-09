@@ -143,6 +143,14 @@ export class Student {
   @Column({ nullable: true })
   subjectId?: number | null;
 
+  // Qabulda ikkinchi fan (ixtiyoriy) — faqat ma'lumot, to'lovga ta'sir qilmaydi.
+  @ManyToOne(() => Subject, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'secondSubjectId' })
+  secondSubject?: Subject | null;
+
+  @Column({ nullable: true })
+  secondSubjectId?: number | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }
