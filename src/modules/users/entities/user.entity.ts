@@ -6,6 +6,7 @@ import {
   CreateDateColumn,
   OneToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
@@ -16,6 +17,12 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { IsNotEmpty, IsString, Min } from 'class-validator';
 
 @Entity('users')
+// Telefon faqat xodimlar orasida unique. O'quvchi akkauntlari (role=student)
+// bir xil raqamga ega bo'lishi mumkin — bir oiladan bir nechta o'quvchi.
+@Index('UQ_users_phone_staff', ['phone'], {
+  unique: true,
+  where: `"role" <> 'student'`,
+})
 export class User {
   @PrimaryGeneratedColumn()
   id: number;
@@ -32,7 +39,7 @@ export class User {
   @Min(6)
   login: string;
 
-  @Column({ unique: true })
+  @Column()
   phone: string;
 
   @Exclude()

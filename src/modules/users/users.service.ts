@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { CreateUserDto } from '@/modules/users/dto/create-user.dto';
@@ -68,11 +68,15 @@ export class UsersService {
       });
     }
 
-    // `users.phone` is globally unique (db constraint). Catch early to return a clear 400 error
-    // instead of an unhandled QueryFailedError.
-    const existingByPhone = await this.userRepo.findOne({
-      where: { phone: dto.phone },
-    });
+    // Telefon faqat xodimlar orasida unique (`UQ_users_phone_staff`).
+    // O'quvchi akkauntlari tekshirilmaydi: bir oiladan bir nechta o'quvchi
+    // bitta (ota-ona) raqami bilan yozilishi mumkin.
+    const existingByPhone =
+      dto.role === UserRole.STUDENT
+        ? null
+        : await this.userRepo.findOne({
+            where: { phone: dto.phone, role: Not(UserRole.STUDENT) },
+          });
     if (existingByPhone) {
       throw new ValidationException({
         phone: 'Bunday phone allaqachon mavjud',
@@ -313,9 +317,12 @@ export class UsersService {
     }
 
     if (dto.phone && dto.phone !== user.phone) {
-      const exists = await this.userRepo.findOne({
-        where: { phone: dto.phone },
-      });
+      const exists =
+        user.role === UserRole.STUDENT
+          ? null
+          : await this.userRepo.findOne({
+              where: { phone: dto.phone, role: Not(UserRole.STUDENT) },
+            });
       if (exists && exists.id !== user.id) {
         throw new ValidationException({
           phone: 'Bunday phone allaqachon mavjud',

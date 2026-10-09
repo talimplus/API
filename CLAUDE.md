@@ -391,6 +391,9 @@ finished→ active
 - `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
 - Fan: `subjectId` + ixtiyoriy `secondSubjectId` (qabulda ikki fan, migratsiya `…065`).
   Faqat qabul uchun ma'lumot — to'lovga ta'sir qilmaydi; `subjectId` filtri ikkalasini ham tekshiradi.
+- **Telefon o'quvchilarda unique emas** (migratsiya `…066`): bir oiladan bir nechta
+  o'quvchi bitta raqam bilan yoziladi. `users.phone` faqat xodimlar orasida unique
+  (`UQ_users_phone_staff`, `WHERE role <> 'student'`); kirish `login` orqali.
 - Telefon bazada har xil yozilgan (`97-752-20-14`, `+998…`); yangi front `+998XXXXXXXXX`
   yuboradi. `search` (o'quvchi) va lead `phone` filtri raqamlarni raqamlar bilan solishtiradi.
 
