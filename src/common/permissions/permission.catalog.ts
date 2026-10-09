@@ -145,6 +145,23 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     ],
   },
   {
+    key: 'candidates',
+    label: { uz: 'Ishga nomzodlar (HR)', ru: 'Кандидаты на работу (HR)' },
+    permissions: [
+      {
+        key: 'candidates.view',
+        label: { uz: 'Nomzodlarni ko‘rish', ru: 'Просмотр кандидатов' },
+      },
+      {
+        key: 'candidates.manage',
+        label: {
+          uz: 'Nomzod qo‘shish, tahrirlash va o‘chirish',
+          ru: 'Добавление, редактирование и удаление кандидатов',
+        },
+      },
+    ],
+  },
+  {
     key: 'groups',
     label: { uz: 'Guruhlar', ru: 'Группы' },
     permissions: [

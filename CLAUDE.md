@@ -102,6 +102,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `students` | `/students`, `/student` | o'quvchi CRUD, status, chegirma davrlari, **boshqa guruhga ko'chirish** |
 | `enrollments` | — | a'zolik oynalari (`joinedAt`/`leftAt`) — billing chegaralari uchun yagona manba |
 | `leads` | `/leads` | potentsial mijoz, `transferToStudent` |
+| `candidates` | `/candidates` | **ishga nomzodlar (HR)**: ish so'rab kelgan/topilgan odamlar bazasi (filialga bog'langan, fan ixtiyoriy, telefon unique emas). Ruxsat: `candidates.view` / `candidates.manage` |
 | `payments` | `/payments` | **eng katta modul** — oylik hisob, cheklar, eksport |
 | `teacher-earnings` | `/teacher-earnings` | o'qituvchi oylik daromadi + carryover |
 | `staff-salaries` | `/staff-salaries`, `/staff` | xodim maoshlari, to'lovlari, **jarimalar** va xodim sahifasi (overview) |

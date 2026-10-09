@@ -29,6 +29,8 @@ const MANAGER_PERMISSIONS = [
   'leads.update',
   'leads.delete',
   'leads.transfer',
+  'candidates.view',
+  'candidates.manage',
   'groups.view',
   'groups.create',
   'groups.update',
