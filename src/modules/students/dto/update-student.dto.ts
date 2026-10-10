@@ -125,13 +125,14 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
   subjectId?: number | null;
 
   @ApiProperty({
-    example: 2,
+    example: [1, 2, 5],
     description:
-      "O'quvchining ikkinchi fani (optional). Birinchisi bilan bir xil bo'lsa e'tiborsiz qoldiriladi; null — olib tashlash",
+      "O'quvchining fanlari (cheklanmagan). Berilsa `subjectId` dan ustun turadi; birinchisi `subjectId` ga yoziladi. [] — barcha fanlarni olib tashlash",
     required: false,
-    nullable: true,
+    type: [Number],
   })
   @IsOptional()
-  @IsNumber()
-  secondSubjectId?: number | null;
+  @IsArray()
+  @IsNumber({}, { each: true })
+  subjectIds?: number[];
 }

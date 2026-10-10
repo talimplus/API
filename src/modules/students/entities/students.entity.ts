@@ -94,6 +94,13 @@ export class Student {
   @Column({ type: 'text', nullable: true })
   discountReason?: string | null;
 
+  /**
+   * Birinchi N oy tekin (0 — yo'q). Davr o'quvchining birinchi darsi
+   * sanasidan N kalendar oy; shu oraliqdagi darslar to'lovga kirmaydi.
+   */
+  @Column({ type: 'smallint', default: 0 })
+  freeMonths: number;
+
   @Column({ type: 'enum', enum: StudentStatus, default: StudentStatus.NEW })
   status: StudentStatus;
 
@@ -143,13 +150,15 @@ export class Student {
   @Column({ nullable: true })
   subjectId?: number | null;
 
-  // Qabulda ikkinchi fan (ixtiyoriy) — faqat ma'lumot, to'lovga ta'sir qilmaydi.
-  @ManyToOne(() => Subject, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'secondSubjectId' })
-  secondSubject?: Subject | null;
-
-  @Column({ nullable: true })
-  secondSubjectId?: number | null;
+  // O'quvchining barcha fanlari (cheklanmagan) — faqat ma'lumot, to'lovga
+  // ta'sir qilmaydi. `subjectId` — shu ro'yxatdagi birinchi fanning nusxasi.
+  @ManyToMany(() => Subject)
+  @JoinTable({
+    name: 'student_subjects',
+    joinColumn: { name: 'studentId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'subjectId', referencedColumnName: 'id' },
+  })
+  subjects?: Subject[];
 
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;

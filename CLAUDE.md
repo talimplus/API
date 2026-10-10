@@ -390,8 +390,22 @@ finished→ active
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
 - `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
-- Fan: `subjectId` + ixtiyoriy `secondSubjectId` (qabulda ikki fan, migratsiya `…065`).
-  Faqat qabul uchun ma'lumot — to'lovga ta'sir qilmaydi; `subjectId` filtri ikkalasini ham tekshiradi.
+- **Birinchi N oy tekin** (`students.freeMonths`, migratsiya `…069`, 0 — yo'q):
+  davr o'quvchining birinchi darsidan (barcha guruhlar bo'yicha
+  `max(joinedAt, activatedAt, group.startDate)` ning eng ertasi) N kalendar oy,
+  `[from, from + N oy)` — 17-okt + 1 → 17-noyabrgacha. Bu oraliqdagi darslar
+  `lessonsBillable` ga kirmaydi (`lessonsPlanned` o'zgarmaydi), ya'ni chegara
+  oyi proratsiya bo'ladi; to'liq tekin oy uchun qator yaratilmaydi. Keyin
+  qo'shilgan guruh ham, to'xtab qaytgan o'quvchi ham davrni qayta boshlamaydi.
+  `PaymentsService.resolveFreeWindow`; `GET /students/:id` da `freeWindow`.
+  O'zgartirish eski/yangi oraliqqa pul (yoki `pending` chek) tushgan bo'lsa —
+  422 `freeMonths`. Tekin qismga o'qituvchi komissiyasi yo'q (pul tushmagan),
+  summadagi chegirma chegara oyida qo'llanmaydi (to'liq oy emas).
+- Fan: cheklanmagan ro'yxat — `student_subjects` (migratsiya `…068`, `secondSubjectId`
+  o'chirildi). DTO: `subjectIds: number[]` (birinchisi `subjectId` ga nusxa);
+  faqat `subjectId` kelsa (eski front) asosiy fan almashadi, qolganlari saqlanadi.
+  Javobda `subjects: {id,name}[]` (asosiysi birinchi). Faqat qabul uchun ma'lumot —
+  to'lovga ta'sir qilmaydi; `subjectId` filtri barcha fanlarni tekshiradi.
 - **Telefon o'quvchilarda unique emas** (migratsiya `…066`): bir oiladan bir nechta
   o'quvchi bitta raqam bilan yoziladi. `users.phone` faqat xodimlar orasida unique
   (`UQ_users_phone_staff`, `WHERE role <> 'student'`); kirish `login` orqali.

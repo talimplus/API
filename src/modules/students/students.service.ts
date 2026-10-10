@@ -127,8 +127,7 @@ export class StudentsService {
       // load group ids without joining (keeps pagination stable)
       .loadRelationIdAndMap('student._groupIds', 'student.groups')
       // load subject relation
-      .leftJoinAndSelect('student.subject', 'subject')
-      .leftJoinAndSelect('student.secondSubject', 'secondSubject');
+      .leftJoinAndSelect('student.subject', 'subject');
 
     if (resolvedCenterId) {
       query.where('student.centerId = :centerId', {
@@ -211,7 +210,10 @@ export class StudentsService {
 
     if (subjectId) {
       query.andWhere(
-        '(student.subjectId = :subjectId OR student.secondSubjectId = :subjectId)',
+        `(student.subjectId = :subjectId OR EXISTS (
+          SELECT 1 FROM student_subjects ss
+          WHERE ss."studentId" = student.id AND ss."subjectId" = :subjectId
+        ))`,
         { subjectId },
       );
     }
@@ -249,6 +251,10 @@ export class StudentsService {
       }
     }
 
+    const subjectsByStudent = await this.loadSubjectsByStudent(
+      data as Student[],
+    );
+
     const enriched = data.map((s: any) => {
       const row: any = {
         ...instanceToPlain(s),
@@ -264,9 +270,7 @@ export class StudentsService {
               name: s.subject.name,
             }
           : null,
-        secondSubject: s.secondSubject
-          ? { id: s.secondSubject.id, name: s.secondSubject.name }
-          : null,
+        subjects: subjectsByStudent.get(s.id) ?? [],
       };
 
       // Sensitive fields: only ADMIN/SUPER_ADMIN should see in list responses
@@ -369,7 +373,7 @@ export class StudentsService {
         'groups',
         'discountPeriods',
         'subject',
-        'secondSubject',
+        'subjects',
       ],
     });
 
@@ -391,14 +395,19 @@ export class StudentsService {
           name: student.subject.name,
         }
       : null;
-    result.secondSubject = student.secondSubject
-      ? { id: student.secondSubject.id, name: student.secondSubject.name }
-      : null;
+    result.subjects = this.orderSubjects(
+      student.subjects ?? [],
+      student.subjectId,
+    );
     result.groupIds = (student as any).groups?.map((g: any) => g.id) ?? [];
     result.referrerId = referral?.referrerStudentId ?? null;
     result.discountPeriods = ((student as any).discountPeriods ?? []).map(
       (d: any) => this.toDiscountPeriodView(d),
     );
+    // Tekin davr sanalari (guruhga qo'shilmagan bo'lsa hali noma'lum — null).
+    result.freeWindow = await this.paymentsService.resolveFreeWindow(student, {
+      fresh: true,
+    });
 
     return result;
   }
@@ -432,6 +441,65 @@ export class StudentsService {
       .andWhere('org.id = :organizationId', { organizationId })
       .getOne();
     if (!exists) throw new NotFoundException(`O'quvchi topilmadi`);
+  }
+
+  /**
+   * Fanlar ro'yxati: hammasi shu filialniki bo'lishi shart, takrorlar olib
+   * tashlanadi, berilgan tartib saqlanadi (birinchisi `subjectId` ga yoziladi).
+   */
+  private async findSubjectsInCenter(
+    subjectIds: number[],
+    centerId: number | null | undefined,
+  ): Promise<Subject[]> {
+    const unique = [...new Set(subjectIds.map(Number).filter(Boolean))];
+    if (!unique.length) return [];
+    const found = await this.subjectRepo.find({
+      where: { id: In(unique), center: { id: centerId as number } },
+    });
+    if (found.length !== unique.length) {
+      throw new BadRequestException(
+        "Bunday fan topilmadi yoki bu center'ga tegishli emas",
+      );
+    }
+    const byId = new Map(found.map((x) => [x.id, x]));
+    return unique.map((id) => byId.get(id) as Subject);
+  }
+
+  /** Javob uchun: asosiy fan (`subjectId`) birinchi, qolganlari id bo'yicha. */
+  private orderSubjects(
+    subjects: Subject[],
+    primaryId: number | null | undefined,
+  ): Array<{ id: number; name: string }> {
+    return [...subjects]
+      .sort(
+        (a, b) =>
+          Number(b.id === primaryId) - Number(a.id === primaryId) ||
+          a.id - b.id,
+      )
+      .map((x) => ({ id: x.id, name: x.name }));
+  }
+
+  /** Ro'yxat sahifasi uchun fanlar — bitta so'rovda (pagination buzilmaydi). */
+  private async loadSubjectsByStudent(
+    students: Student[],
+  ): Promise<Map<number, Array<{ id: number; name: string }>>> {
+    const result = new Map<number, Array<{ id: number; name: string }>>();
+    if (!students.length) return result;
+    const rows = await this.studentRepo
+      .createQueryBuilder('student')
+      .leftJoinAndSelect('student.subjects', 'subjects')
+      .select([
+        'student.id',
+        'student.subjectId',
+        'subjects.id',
+        'subjects.name',
+      ])
+      .where('student.id IN (:...ids)', { ids: students.map((x) => x.id) })
+      .getMany();
+    for (const row of rows) {
+      result.set(row.id, this.orderSubjects(row.subjects ?? [], row.subjectId));
+    }
+    return result;
   }
 
   /** Fan shu filialga tegishli bo'lishi shart (boshqa filial fanini biriktirib bo'lmaydi). */
@@ -666,6 +734,55 @@ export class StudentsService {
           `Cannot apply discount for ${m}: payment already has money received (paid/partial).`,
         );
       }
+    }
+  }
+
+  /**
+   * Tekin oylar sonini o'zgartirish: eski va yangi oraliqlarning birlashmasiga
+   * tushadigan oylarda pul (yoki tasdiq kutayotgan chek) bo'lmasligi shart.
+   */
+  private async assertFreeMonthsChangeAllowed(
+    student: Student,
+    nextMonths: number,
+  ) {
+    const windows = (
+      await Promise.all([
+        this.paymentsService.resolveFreeWindow(student, { fresh: true }),
+        this.paymentsService.resolveFreeWindow(
+          { ...student, freeMonths: nextMonths } as Student,
+          { fresh: true },
+        ),
+      ])
+    ).filter((w): w is NonNullable<typeof w> => Boolean(w));
+    if (!windows.length) return;
+
+    const from = dayjs(windows[0].from).format('YYYY-MM-01');
+    const until = windows.map((w) => w.untilExclusive).sort()[
+      windows.length - 1
+    ];
+    const lastMonth = dayjs(until)
+      .subtract(1, 'day')
+      .startOf('month')
+      .format('YYYY-MM-01');
+
+    const found = await this.paymentRepo
+      .createQueryBuilder('pay')
+      .select(['pay.id as id', 'pay.forMonth as "forMonth"'])
+      .where('pay.studentId = :studentId', { studentId: student.id })
+      .andWhere(
+        `(pay.amountPaid > 0 OR EXISTS (
+           SELECT 1 FROM payment_receipts r
+            WHERE r."paymentId" = pay.id AND r.status = :pendingStatus))`,
+        { pendingStatus: PaymentReceiptStatus.PENDING },
+      )
+      .andWhere('pay.forMonth >= :from', { from })
+      .andWhere('pay.forMonth <= :lastMonth', { lastMonth })
+      .getRawOne<{ id: number; forMonth: string }>();
+    if (found?.id) {
+      const m = dayjs(found.forMonth).format('YYYY-MM');
+      throw new ValidationException({
+        freeMonths: `Tekin oylarni o'zgartirib bo'lmaydi: ${m} uchun pul olingan`,
+      });
     }
   }
 
@@ -931,15 +1048,12 @@ export class StudentsService {
       throw new BadRequestException('Bunday organizatsiya mavjud emas');
     }
 
-    // Validate and load subject if provided
-    const subject = dto.subjectId
-      ? await this.findSubjectInCenter(dto.subjectId, effectiveCenterId)
-      : null;
-    // Ikkinchi fan birinchisi bilan bir xil bo'lsa — yozilmaydi.
-    const secondSubject =
-      dto.secondSubjectId && dto.secondSubjectId !== subject?.id
-        ? await this.findSubjectInCenter(dto.secondSubjectId, effectiveCenterId)
-        : null;
+    // Fanlar: `subjectIds` (cheklanmagan) ustun, eski front faqat `subjectId` yuboradi.
+    const subjects = await this.findSubjectsInCenter(
+      dto.subjectIds ?? (dto.subjectId ? [dto.subjectId] : []),
+      effectiveCenterId,
+    );
+    const subject = subjects[0] ?? null;
 
     const groupIds = dto.groupIds;
     const safeGroupIds = Array.isArray(groupIds) ? groupIds : [];
@@ -997,6 +1111,7 @@ export class StudentsService {
       discountPercent: dto.discountPercent ?? 0,
       discountAmount: dto.discountAmount ?? 0,
       discountReason: dto.discountReason ?? null,
+      freeMonths: dto.freeMonths ?? 0,
       birthDate: dto.birthDate ? (dto.birthDate as any) : null,
       comment: (dto as any).comment ?? null,
       heardAboutUs: (dto as any).heardAboutUs ?? null,
@@ -1010,10 +1125,9 @@ export class StudentsService {
       center,
       user,
       groups: groups,
-      subject: subject ?? null,
+      subject,
       subjectId: subject?.id ?? null,
-      secondSubject,
-      secondSubjectId: secondSubject?.id ?? null,
+      subjects,
     });
 
     const savedStudent = await this.studentRepo.save(student);
@@ -1201,33 +1315,29 @@ export class StudentsService {
       (student as any).centerId = center.id;
     }
 
-    // Handle subjectId update
-    if (dto.subjectId !== undefined) {
-      const subject = dto.subjectId
-        ? await this.findSubjectInCenter(dto.subjectId, student.centerId)
-        : null;
-      student.subject = subject;
-      student.subjectId = subject?.id ?? null;
-      delete (dto as any).subjectId; // Remove from dto to avoid Object.assign issues
-    }
-    if (dto.secondSubjectId !== undefined) {
-      const secondSubject =
-        dto.secondSubjectId && dto.secondSubjectId !== student.subjectId
-          ? await this.findSubjectInCenter(
-              dto.secondSubjectId,
-              student.centerId,
-            )
-          : null;
-      student.secondSubject = secondSubject;
-      student.secondSubjectId = secondSubject?.id ?? null;
-      delete (dto as any).secondSubjectId;
-    } else if (
-      student.secondSubjectId &&
-      student.secondSubjectId === student.subjectId
-    ) {
-      // Birinchi fan ikkinchisiga tenglashtirilgan bo'lsa — takror saqlanmaydi.
-      student.secondSubject = null;
-      student.secondSubjectId = null;
+    // Fanlar. `subjectIds` — to'liq ro'yxat (almashtiriladi). Faqat `subjectId`
+    // kelsa (eski front) — asosiy fan almashadi, qolgan fanlar saqlanadi.
+    if (dto.subjectIds !== undefined || dto.subjectId !== undefined) {
+      let ids: number[];
+      if (dto.subjectIds !== undefined) {
+        ids = dto.subjectIds ?? [];
+      } else {
+        const current = await this.studentRepo
+          .createQueryBuilder()
+          .relation(Student, 'subjects')
+          .of(student.id)
+          .loadMany<Subject>();
+        const rest = current
+          .map((x) => x.id)
+          .filter((x) => x !== student.subjectId);
+        ids = dto.subjectId ? [dto.subjectId, ...rest] : rest;
+      }
+      const subjects = await this.findSubjectsInCenter(ids, student.centerId);
+      student.subjects = subjects;
+      student.subject = subjects[0] ?? null;
+      student.subjectId = subjects[0]?.id ?? null;
+      delete (dto as any).subjectId; // Object.assign relation'ni buzmasligi uchun
+      delete (dto as any).subjectIds;
     }
 
     // Xavfsiz fieldlardan tashqarisini Object.assign qilmaslik uchun tozalash
@@ -1239,6 +1349,15 @@ export class StudentsService {
     delete (dto as any).referrerId;
     delete (dto as any).userId;
     delete (dto as any).id;
+    // Tekin oylar soni o'zgarsa: eski yoki yangi oraliqqa pul tushgan oy
+    // bo'lsa — rad etiladi (to'langan oy qayta narxlanmaydi).
+    const freeMonthsChanged =
+      dto.freeMonths !== undefined &&
+      Number(dto.freeMonths) !== Number(student.freeMonths ?? 0);
+    if (freeMonthsChanged) {
+      await this.assertFreeMonthsChangeAllowed(student, Number(dto.freeMonths));
+    }
+
     const previousDiscount = {
       percent: Number(student.discountPercent ?? 0),
       amount: Number(student.discountAmount ?? 0),
@@ -1274,10 +1393,21 @@ export class StudentsService {
       await this.replaceDiscountPeriodsForStudent(saved.id, discountPeriods);
     }
 
+    // Tekin davr o'zgardi: qisqarsa bo'shab qolgan oylar uchun qator
+    // yaratiladi, uzaysa ochiq qatorlar kamayadi (to'liq tekin — o'chadi).
+    if (freeMonthsChanged && saved.status === StudentStatus.ACTIVE) {
+      await this.paymentsService
+        .ensurePaymentsForStudent(saved.id, {
+          onlyCurrentMonth: false,
+          maxMonthsBack: 3,
+        })
+        .catch(() => undefined);
+    }
+
     // Guruhlar yuborilgan faol o'quvchi pastda baribir qayta hisoblanadi.
     const recalcBelow =
       shouldEnsureCurrentMonthPayments && saved.status === StudentStatus.ACTIVE;
-    if (discountChanged && !recalcBelow) {
+    if ((discountChanged || freeMonthsChanged) && !recalcBelow) {
       await this.paymentsService
         .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
         .catch(() => undefined);

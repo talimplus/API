@@ -5,6 +5,7 @@ import {
   IsString,
   IsEnum,
   IsArray,
+  IsInt,
   Max,
   Min,
   ValidateNested,
@@ -164,6 +165,20 @@ export class CreateStudentDto {
   discountReason?: string;
 
   @ApiProperty({
+    example: 1,
+    description:
+      "Birinchi N oy tekin (0 — yo'q). O'quvchining birinchi darsi sanasidan N kalendar oy to'lov olinmaydi (17-okt + 1 oy → 17-noyabrgacha)",
+    required: false,
+    minimum: 0,
+    maximum: 12,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(12)
+  freeMonths?: number;
+
+  @ApiProperty({
     required: false,
     description:
       'Optional month-based discount periods. If provided, they will override discountPercent for matching months.',
@@ -215,13 +230,14 @@ export class CreateStudentDto {
   subjectId?: number | null;
 
   @ApiProperty({
-    example: 2,
+    example: [1, 2, 5],
     description:
-      "O'quvchining ikkinchi fani (optional). Birinchisi bilan bir xil bo'lsa e'tiborsiz qoldiriladi; null — olib tashlash",
+      "O'quvchining fanlari (cheklanmagan). Berilsa `subjectId` dan ustun turadi; birinchisi `subjectId` ga yoziladi. [] — barcha fanlarni olib tashlash",
     required: false,
-    nullable: true,
+    type: [Number],
   })
   @IsOptional()
-  @IsNumber()
-  secondSubjectId?: number | null;
+  @IsArray()
+  @IsNumber({}, { each: true })
+  subjectIds?: number[];
 }

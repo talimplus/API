@@ -59,6 +59,12 @@ import * as ExcelJS from 'exceljs';
 /**
  * GET /payments va GET /payments/export bir xil filterlarni qabul qiladi.
  */
+/** "Birinchi N oy tekin" oralig'i: `[from, untilExclusive)`, YYYY-MM-DD. */
+export interface FreeWindow {
+  from: string;
+  untilExclusive: string;
+}
+
 export interface PaymentListFilters {
   centerId?: number;
   status?: PaymentStatus;
@@ -903,7 +909,13 @@ export class PaymentsService {
   async getStudentPaymentSummary(studentId: number, _currentUser: CurrentUser) {
     const student = await this.studentRepo.findOne({
       where: { id: studentId },
-      relations: ['groups', 'groups.schedules', 'subject', 'center'],
+      relations: [
+        'groups',
+        'groups.schedules',
+        'subject',
+        'subjects',
+        'center',
+      ],
     });
     if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
 
@@ -1094,6 +1106,14 @@ export class PaymentsService {
         subject: student.subject
           ? { id: student.subject.id, name: (student.subject as any).name }
           : null,
+        // Barcha fanlar: asosiysi (`subject`) birinchi.
+        subjects: [...(student.subjects ?? [])]
+          .sort(
+            (a, b) =>
+              Number(b.id === student.subjectId) -
+                Number(a.id === student.subjectId) || a.id - b.id,
+          )
+          .map((x) => ({ id: x.id, name: x.name })),
         groups,
       },
       totals: {
@@ -1407,9 +1427,11 @@ export class PaymentsService {
     Awaited<ReturnType<StudentBaseDiscountService['getPeriods']>>
   >();
   private primaryGroupCache = new Map<string, number | null>();
+  private freeWindowCache = new Map<string, FreeWindow | null>();
 
   private resetBillingCaches() {
     this.discountCache.clear();
+    this.freeWindowCache.clear();
     this.calendarCache.clear();
     this.basePeriodsCache.clear();
     this.primaryGroupCache.clear();
@@ -2078,6 +2100,8 @@ export class PaymentsService {
     studentActiveEndExclusive?: string; // YYYY-MM-DD (optional)
     /** A'zolik oynalari (shu oy bilan kesishganlari); berilsa dars shulardan biriga tushishi shart. */
     enrollmentWindows?: { joinedAt: string; leftAt: string | null }[] | null;
+    /** "Birinchi N oy tekin" — bu oraliqdagi darslar to'lovga kirmaydi. */
+    freeWindow?: FreeWindow | null;
   }): {
     lessonsPlanned: number;
     lessonsBillable: number;
@@ -2091,6 +2115,7 @@ export class PaymentsService {
       studentActiveStart,
       studentActiveEndExclusive,
       enrollmentWindows,
+      freeWindow,
     } = args;
     const timezone = group.timezone || 'Asia/Tashkent';
 
@@ -2170,6 +2195,10 @@ export class PaymentsService {
         lessonsPaused++;
         return false;
       }
+      // Tekin davr: dars o'tadi, lekin pul olinmaydi. `lessonsPlanned`
+      // o'zgarmaydi — oylik narx qolgan (pullik) darslar ulushiga kamayadi.
+      if (freeWindow && d >= freeWindow.from && d < freeWindow.untilExclusive)
+        return false;
       return true;
     });
 
@@ -2260,6 +2289,7 @@ export class PaymentsService {
         group.id,
         forMonth,
       );
+    const freeWindow = await this.resolveFreeWindow(student);
     const { lessonsPlanned, lessonsBillable, billableDates, lessonsPaused } =
       this.computeMonthLessonCounts({
         group,
@@ -2267,6 +2297,7 @@ export class PaymentsService {
         studentActiveStart,
         studentActiveEndExclusive: effectiveEndExclusive,
         enrollmentWindows,
+        freeWindow,
       });
 
     // EXCUSED (sababli) darslar endi to'lovni kamaytirmaydi (Req1) — faqat
@@ -2313,6 +2344,55 @@ export class PaymentsService {
       discountAmount,
       amountDue,
     };
+  }
+
+  /**
+   * "Birinchi N oy tekin" oralig'i (`students.freeMonths`). Boshlanishi —
+   * o'quvchining birinchi darsi: barcha guruhlari bo'yicha
+   * max(guruhga qo'shilgan, faollashgan, guruh boshlangan) sanalarining
+   * eng ertasi. Shuning uchun keyin qo'shilgan guruh yana tekin oy olmaydi,
+   * to'xtab qaytgan o'quvchida ham davr qayta boshlanmaydi.
+   * 17-oktabr + 1 oy → `[2026-10-17, 2026-11-17)`.
+   */
+  async resolveFreeWindow(
+    student: Student,
+    opts: { fresh?: boolean } = {},
+  ): Promise<FreeWindow | null> {
+    const months = Number(student.freeMonths ?? 0);
+    if (months <= 0) return null;
+    const key = `${student.id}:${months}`;
+    // Kesh faqat bitta hisob operatsiyasi ichida; tashqaridan (o'quvchi
+    // sahifasi, tekshiruv) `fresh` bilan chaqiriladi — eski oyna qaytmasin.
+    if (!opts.fresh && this.freeWindowCache.has(key)) {
+      return this.freeWindowCache.get(key) ?? null;
+    }
+
+    const enrollments = await this.enrollmentsService.listForStudent(
+      student.id,
+    );
+    let from: string | null = null;
+    for (const e of enrollments) {
+      const tz = e.group?.timezone || 'Asia/Tashkent';
+      const candidates = [dayjs(e.joinedAt).format('YYYY-MM-DD')];
+      if (e.group?.startDate) {
+        candidates.push(dayjs(e.group.startDate).format('YYYY-MM-DD'));
+      }
+      const activated = student.activatedAt ?? student.createdAt;
+      if (activated) {
+        candidates.push(dayjs(activated).tz(tz).format('YYYY-MM-DD'));
+      }
+      const start = candidates.sort().at(-1) as string;
+      if (!from || start < from) from = start;
+    }
+
+    const window = from
+      ? {
+          from,
+          untilExclusive: dayjs(from).add(months, 'month').format('YYYY-MM-DD'),
+        }
+      : null;
+    this.freeWindowCache.set(key, window);
+    return window;
   }
 
   private computeStudentActiveStartForMonth(args: {

@@ -117,6 +117,22 @@ export class StudentResponseDto {
   })
   discountReason?: string | null;
 
+  @ApiProperty({
+    example: 1,
+    default: 0,
+    description: "Birinchi N oy tekin (0 — yo'q)",
+  })
+  freeMonths: number;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    example: { from: '2026-10-17', untilExclusive: '2026-11-17' },
+    description:
+      "Tekin davr sanalari (faqat GET /students/:id). Guruhga qo'shilmagan bo'lsa null",
+  })
+  freeWindow?: { from: string; untilExclusive: string } | null;
+
   @ApiProperty({ enum: StudentStatus, example: StudentStatus.NEW })
   status: StudentStatus;
 
@@ -153,14 +169,11 @@ export class StudentResponseDto {
   })
   subject?: SubjectResponseDto | null;
 
-  @ApiProperty({ required: false, nullable: true, example: 2 })
-  secondSubjectId?: number | null;
-
   @ApiProperty({
     required: false,
-    nullable: true,
-    type: () => SubjectResponseDto,
-    description: "O'quvchining ikkinchi fani (optional)",
+    type: () => [SubjectResponseDto],
+    description:
+      "O'quvchining barcha fanlari (birinchisi — `subject`), bo'lmasa []",
   })
-  secondSubject?: SubjectResponseDto | null;
+  subjects?: SubjectResponseDto[];
 }
