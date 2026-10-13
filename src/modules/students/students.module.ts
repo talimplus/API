@@ -19,6 +19,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
 import { StudentBaseDiscountModule } from '@/modules/students/student-base-discount.module';
+import { StudentHistoryModule } from '@/modules/student-history/student-history.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { StudentBaseDiscountModule } from '@/modules/students/student-base-disco
     OrganizationsModule,
     EnrollmentsModule,
     StudentBaseDiscountModule,
+    StudentHistoryModule,
     forwardRef(() => GroupsModule),
     forwardRef(() => ReferralsModule),
     forwardRef(() => AttendanceModule),

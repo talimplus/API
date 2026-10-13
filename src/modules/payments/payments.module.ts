@@ -15,6 +15,7 @@ import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { GroupFeeModule } from '@/modules/groups/group-fee.module';
 import { StudentBaseDiscountModule } from '@/modules/students/student-base-discount.module';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
+import { StudentHistoryModule } from '@/modules/student-history/student-history.module';
 import { TelegramModule } from '@/modules/telegram/telegram.module';
 
 @Module({
@@ -33,6 +34,7 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
     StudentBaseDiscountModule,
     EnrollmentsModule,
     TelegramModule,
+    StudentHistoryModule,
     forwardRef(() => StudentsModule),
     forwardRef(() => TeacherEarningsModule),
   ],

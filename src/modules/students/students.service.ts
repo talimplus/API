@@ -37,6 +37,9 @@ import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
 import { GroupsService } from '@/modules/groups/groups.service';
+import { Attendance } from '@/modules/attendance/entities/attendance.entity';
+import { StudentEventsService } from '@/modules/student-history/student-events.service';
+import { StudentEventType } from '@/modules/student-history/student-timeline.enums';
 import { StudentBaseDiscountService } from '@/modules/students/student-base-discount.service';
 import {
   TransferPreviewDto,
@@ -71,6 +74,7 @@ export class StudentsService {
     private readonly groupsService: GroupsService,
     private readonly enrollmentsService: EnrollmentsService,
     private readonly baseDiscountService: StudentBaseDiscountService,
+    private readonly studentEvents: StudentEventsService,
   ) {}
   async findAll(
     organizationId: number,
@@ -1169,7 +1173,12 @@ export class StudentsService {
     };
   }
 
-  async update(organizationId: number, id: number, dto: UpdateStudentDto) {
+  async update(
+    organizationId: number,
+    id: number,
+    dto: UpdateStudentDto,
+    actorId?: number | null,
+  ) {
     const discountPeriods = (dto as any).discountPeriods as
       | Array<{
           percent: number;
@@ -1186,6 +1195,13 @@ export class StudentsService {
     await this.assertStudentInOrganization(organizationId, id);
 
     const student = await this.findEntityByIdOrThrow(id);
+    const profileBefore = await this.snapshotProfile(student, dto);
+    const passwordSent = !!dto.password && !!(student as any).user;
+    // Login o'quvchida emas, bog'langan akkauntda — yuborilgan qiymat bilan.
+    const loginChanged =
+      dto.login !== undefined &&
+      !!(student as any).user &&
+      String((student as any).user.login ?? '') !== String(dto.login ?? '');
 
     // O'quvchining kabinet akkaunti (users, role=student) bo'lmasligi mumkin —
     // masalan tashqi manbadan import qilinganlar. Unda faqat o'quvchi yoziladi.
@@ -1430,8 +1446,105 @@ export class StudentsService {
         .catch(() => undefined);
     }
 
+    const changedFields = this.diffProfile(
+      profileBefore,
+      await this.snapshotProfile(saved, profileBefore.keys),
+    );
+    if (loginChanged) changedFields.push('login');
+    // Parol xeshlangan — solishtirib bo'lmaydi; yuborilgan bo'lsa o'zgargan.
+    if (passwordSent) changedFields.push('password');
+    if (changedFields.length) {
+      await this.studentEvents.log({
+        studentId: saved.id,
+        organizationId,
+        type: StudentEventType.PROFILE_UPDATED,
+        actorId,
+        payload: { fields: changedFields },
+      });
+    }
+
     // Return the same enriched shape as findById so frontend always has ids
     return this.findById(organizationId, saved.id);
+  }
+
+  /**
+   * Tarix uchun: tahrirdan oldin/keyin solishtiriladigan maydonlar. Guruhlar,
+   * doimiy chegirma va shaxsiy narx bu yerda yo'q — ular o'z jadvalidan
+   * (a'zolik oynalari, `student_base_discounts`) tarixda alohida ko'rinadi.
+   * Qiymatlar yozilmaydi (pasport kabi maxfiy ma'lumot jurnalga tushmasin),
+   * faqat qaysi maydon o'zgargani.
+   */
+  private static readonly PROFILE_FIELDS = [
+    'firstName',
+    'lastName',
+    'phone',
+    'secondPhone',
+    'birthDate',
+    'comment',
+    'heardAboutUs',
+    'preferredTime',
+    'preferredDays',
+    'passportSeries',
+    'passportNumber',
+    'jshshir',
+    'freeMonths',
+    'centerId',
+  ] as const;
+
+  private async snapshotProfile(
+    student: Student,
+    keysOrDto: UpdateStudentDto | string[],
+  ): Promise<{ keys: string[]; values: Record<string, string> }> {
+    const keys = Array.isArray(keysOrDto)
+      ? keysOrDto
+      : [
+          ...StudentsService.PROFILE_FIELDS.filter(
+            (k) => (keysOrDto as any)[k] !== undefined,
+          ),
+          ...((keysOrDto as any).subjectIds !== undefined ||
+          (keysOrDto as any).subjectId !== undefined
+            ? ['subjects']
+            : []),
+          ...((keysOrDto as any).referrerId !== undefined ? ['referrer'] : []),
+        ];
+    const norm = (v: unknown): string => {
+      if (v == null || v === '') return '';
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      // Sana DTO'da ISO bo'lib kelishi mumkin, bazada esa `YYYY-MM-DD`.
+      if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
+        return v.slice(0, 10);
+      }
+      if (Array.isArray(v)) return JSON.stringify([...v].map(String).sort());
+      return String(v);
+    };
+    const values: Record<string, string> = {};
+    for (const k of keys) {
+      if (k === 'subjects') {
+        const subjects = await this.studentRepo
+          .createQueryBuilder()
+          .relation(Student, 'subjects')
+          .of(student.id)
+          .loadMany<Subject>();
+        values[k] = norm(subjects.map((x) => x.id));
+      } else if (k === 'referrer') {
+        const ref = await this.referralRepo.findOne({
+          where: { referredStudentId: student.id as any },
+        });
+        values[k] = norm((ref as any)?.referrerStudentId);
+      } else if (k === 'centerId') {
+        values[k] = norm((student as any).centerId ?? student.center?.id);
+      } else {
+        values[k] = norm((student as any)[k]);
+      }
+    }
+    return { keys, values };
+  }
+
+  private diffProfile(
+    before: { keys: string[]; values: Record<string, string> },
+    after: { values: Record<string, string> },
+  ): string[] {
+    return before.keys.filter((k) => before.values[k] !== after.values[k]);
   }
 
   // ── O'quvchini boshqa guruhga ko'chirish ─────────────────────────────────
@@ -1451,6 +1564,8 @@ export class StudentsService {
       lastName: string;
       debt: number;
       overpaid: number;
+      /** Eski guruhda `transferDate` dan boshlab yozilgan davomat (o'chiriladi). */
+      attendanceAfterDate: number;
     }>
   > {
     // Maqsad guruh bu yerda tekshirilmaydi — u hali tanlanmagan bo'lishi mumkin.
@@ -1487,12 +1602,28 @@ export class StudentsService {
 
     const byStudent = new Map(rows.map((r) => [Number(r.studentId), r]));
 
+    const attendanceRows = dto.transferDate
+      ? await this.studentRepo.manager
+          .createQueryBuilder(Attendance, 'a')
+          .select('a.studentId', 'studentId')
+          .addSelect('COUNT(*)', 'count')
+          .where('a.groupId = :groupId', { groupId: fromGroup.id })
+          .andWhere('a.studentId IN (:...ids)', { ids: dto.studentIds })
+          .andWhere('a.lessonDate >= :from', { from: dto.transferDate })
+          .groupBy('a.studentId')
+          .getRawMany<{ studentId: number; count: string }>()
+      : [];
+    const attendanceBy = new Map(
+      attendanceRows.map((r) => [Number(r.studentId), Number(r.count)]),
+    );
+
     return students.map((s) => ({
       studentId: s.id,
       firstName: s.firstName,
       lastName: s.lastName,
       debt: Number(byStudent.get(s.id)?.debt ?? 0),
       overpaid: Number(byStudent.get(s.id)?.overpaid ?? 0),
+      attendanceAfterDate: attendanceBy.get(s.id) ?? 0,
     }));
   }
 
@@ -1592,6 +1723,7 @@ export class StudentsService {
       carriedOverAmount: number;
       refundedAmount: number;
       remainingDebtInSourceGroup: number;
+      deletedAttendance: number;
     }> = [];
 
     for (const student of students) {
@@ -1664,6 +1796,22 @@ export class StudentsService {
         comment: `Ko'chirildi: ${reason}`,
       });
 
+      // 5) Davomat bitta guruhda bo'ladi: ko'chirish sanasidan boshlab eski
+      //    guruhda yozilgan davomat o'chiriladi (orqaga sanalangan ko'chirishda
+      //    o'sha darslar endi yangi guruhniki — pul ham, o'qituvchi foizi ham
+      //    yangi guruhga o'tadi). Puldan KEYIN: hisob yiqilsa davomat
+      //    yo'qolmaydi. Tartib hisobga ta'sir qilmaydi — eski guruhning
+      //    to'lov kunlari `leftAt` gacha, o'chirilayotganlar esa undan keyin.
+      const deleted = await this.studentRepo.manager
+        .createQueryBuilder()
+        .delete()
+        .from(Attendance)
+        .where('"studentId" = :studentId', { studentId: student.id })
+        .andWhere('"groupId" = :groupId', { groupId: fromGroup.id })
+        .andWhere('"lessonDate" >= :from', { from: transferDate })
+        .execute();
+      const deletedAttendance = Number(deleted.affected ?? 0);
+
       const debtRow = await this.paymentRepo
         .createQueryBuilder('p')
         .select(
@@ -1681,10 +1829,30 @@ export class StudentsService {
         carriedOverAmount: settlement.carriedOverAmount,
         refundedAmount: settlement.refundedAmount,
         remainingDebtInSourceGroup: Number(debtRow?.debt ?? 0),
+        deletedAttendance,
+      });
+
+      await this.studentEvents.log({
+        studentId: student.id,
+        organizationId,
+        type: StudentEventType.TRANSFERRED,
+        actorId: currentUser?.userId ?? null,
+        payload: {
+          fromGroupId: fromGroup.id,
+          fromGroupName: fromGroup.name,
+          toGroupId: toGroup.id,
+          toGroupName: toGroup.name,
+          transferDate,
+          reason: dto.reason?.trim() || null,
+          carriedOverAmount: settlement.carriedOverAmount,
+          refundedAmount: settlement.refundedAmount,
+          remainingDebt: Number(debtRow?.debt ?? 0),
+          deletedAttendance,
+        },
       });
     }
 
-    // 5) Kerak bo'lsa eski guruhni yopamiz (odam kam qolgani uchun yopilgan
+    // 6) Kerak bo'lsa eski guruhni yopamiz (odam kam qolgani uchun yopilgan
     //    guruh holati).
     let sourceGroupClosed = false;
     if (dto.closeSourceGroup) {
@@ -1737,6 +1905,7 @@ export class StudentsService {
     id: number,
     status: StudentStatus,
     body?: { returnLikelihood?: StudentReturnLikelihood; comment?: string },
+    actorId?: number | null,
   ) {
     const student = await this.studentRepo.findOne({
       where: {
@@ -1827,6 +1996,22 @@ export class StudentsService {
 
     student.status = status;
     const saved = await this.studentRepo.save(student);
+
+    await this.studentEvents.log({
+      studentId: saved.id,
+      organizationId,
+      type: StudentEventType.STATUS_CHANGED,
+      actorId,
+      payload: {
+        fromStatus: prevStatus,
+        toStatus: status,
+        returnLikelihood:
+          status === StudentStatus.STOPPED || status === StudentStatus.IGNORED
+            ? (body?.returnLikelihood ?? null)
+            : null,
+        comment: String(body?.comment ?? '').trim() || null,
+      },
+    });
 
     if (
       status === StudentStatus.STOPPED &&

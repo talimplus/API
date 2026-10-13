@@ -44,6 +44,20 @@ export class TransferPreviewDto {
   @ApiProperty({ description: 'Qaysi guruhdan', example: 3 })
   @IsInt()
   fromGroupId: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Ko'chirish sanasi (YYYY-MM-DD). Berilsa — har bir o'quvchi uchun eski " +
+      'guruhda shu kundan boshlab yozilgan davomat soni (`attendanceAfterDate`) ' +
+      "qaytariladi: ko'chirishda ular o'chiriladi.",
+    example: '2026-10-01',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: "transferDate YYYY-MM-DD formatida bo'lishi kerak",
+  })
+  transferDate?: string;
 }
 
 export class TransferStudentsDto {

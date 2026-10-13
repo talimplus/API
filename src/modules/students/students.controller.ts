@@ -233,6 +233,7 @@ export class StudentsController {
       id,
       effectiveStatus,
       body,
+      req.user?.userId ?? null,
     );
   }
 
@@ -245,7 +246,12 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
   ) {
-    return this.studentService.update(req.user.organizationId, id, dto);
+    return this.studentService.update(
+      req.user.organizationId,
+      id,
+      dto,
+      req.user?.userId ?? null,
+    );
   }
 
   @Get(':id/discount-periods')

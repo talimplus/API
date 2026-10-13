@@ -111,7 +111,8 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `syllabus` | `/syllabuses`, `/groups/:id/plan`, `/teachers/me` | kurs rejasi, AI yordamchi (OpenAI), o'qituvchining bugungi darslari |
 | `telegram` | `/telegram` | **ota-onalar boti** — QR ulanish, to'lov/davomat/qarz xabarlari |
 | `statistics` | `/statistics/dashboard` | dashboard ko'rsatkichlari |
-| `lessons`, `student-history` | — | **bo'sh stub modullar** (entity bor, logika yo'q) |
+| `student-history` | `/students/:id/timeline` | **o'quvchi tarixi** (timeline) + `student_events` jurnali (6.5.3) |
+| `lessons` | — | **bo'sh stub modul** (entity bor, logika yo'q) |
 
 ## 6. Domen qoidalari
 
@@ -458,6 +459,15 @@ Pul qismi — `PaymentsService.settlePaymentsForTransfer`:
    (naqd qaytariladi). `refundedAmount` = pul kassadan chiqdi,
    `transferredOutAmount` = pul markazda qoldi; ikkalasi aralashtirilmaydi;
 5. **eski guruhdagi qarz o'sha guruhda qoladi** — ko'chirish bloklanmaydi.
+6. **davomat bitta guruhda bo'ladi** (2026-10-13): ko'chirish sanasidan
+   boshlab eski guruhda yozilgan davomat **o'chiriladi** (pul hisobidan keyin —
+   hisob yiqilsa davomat yo'qolmaydi; o'chirilganlar baribir `leftAt` dan keyin,
+   ya'ni eski guruh hisobiga kirmaydi). Bugungi sana ham shunga kiradi. Sana istalgancha orqaga qo'yilishi mumkin:
+   o'tgan darslarning puli ham, o'qituvchi foizi ham yangi guruhga o'tadi
+   (komissiya to'lov qatorining guruhiga qarab avtomatik qayta hisoblanadi).
+   `POST /students/transfer/preview` ga `transferDate` berilsa har o'quvchi
+   uchun `attendanceAfterDate` (o'chiriladigan yozuvlar soni) qaytadi — front
+   o'tmishdagi sanada ogohlantiradi. Natijada `deletedAttendance`.
 
 Natijada ko'chirilgan oy uchun `A + B = bitta oylik narx`. O'qituvchi
 komissiyasi to'lov qatorining guruhiga bog'langani uchun avtomatik bo'linadi:
@@ -465,6 +475,34 @@ eski o'qituvchi o'tgan darslar uchun foizini saqlaydi.
 
 Orqaga sanalangan ko'chirishda `ensurePayments` oynasi ko'chirish oyidan
 bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
+
+### 6.5.3 O'quvchi tarixi (`student-history`, 2026-10-13)
+
+`GET /students/:id/timeline` (`students.view`) — o'quvchi bilan bo'lgan hamma
+narsa, yangidan eskiga, bitta javobda. `StudentTimelineService` **ikki manbani**
+birlashtiradi:
+
+1. **Mavjud jadvallar** (eski tarix ham ko'rinadi): a'zolik oynalari, cheklar,
+   `refundedAmount`, chegirma davrlari (**`fromMonth` bo'yicha** — forma har
+   saqlanganda qayta yoziladi, `createdAt` ishonchsiz), `student_base_discounts`,
+   tavsiya, Telegram, davomatdagi `absent/late/excused`.
+2. **`student_events` jurnali** — boshqa joyda izi qolmaydiganlar, muallifi
+   (`actorId`) bilan: `status_changed` (`changeStatus`), `profile_updated`
+   (`update`, faqat o'zgargan **maydon nomlari**, qiymatlar yozilmaydi),
+   `transferred` (`transferStudents`, summalar bilan), `payment_excluded`
+   (`applyExclusion`).
+
+- `StudentEventsService.log` **hech qachon xato tashlamaydi** — tarix yozilmasa
+  ham asosiy amal o'tadi. Modul boshqa domen modullariga bog'lanmaydi (xom SQL),
+  shuning uchun `StudentsModule`/`PaymentsModule` uni `forwardRef`siz import qiladi.
+- Takrorlar birlashtiriladi: jurnaldagi ko'chirish a'zolik oynasidagisini
+  almashtiradi; to'xtatish/qaytish kuni yopilgan/ochilgan oynalar alohida
+  chiqmaydi; ko'chirishdagi chek (`transferFromPaymentId`) to'lov emas,
+  ko'chirish ichida `carriedOverAmount` bo'lib ko'rinadi.
+- To'lov voqealari faqat `payments.view`, davomat faqat `attendance.view` bilan.
+- Yangi amal tarixga tushishi kerak bo'lsa: avval uning izi mavjud jadvalda
+  bormi — bor bo'lsa servisga o'quvchi qo'shiladi, yo'q bo'lsa `StudentEventType`
+  ga tur qo'shib `studentEvents.log(...)` chaqiriladi (front enum ham).
 
 ### 6.5.2 Xodimni bloklash (`users.isActive`)
 

@@ -54,6 +54,8 @@ import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
 import { TelegramNotifierService } from '@/modules/telegram/telegram-notifier.service';
+import { StudentEventsService } from '@/modules/student-history/student-events.service';
+import { StudentEventType } from '@/modules/student-history/student-timeline.enums';
 import * as ExcelJS from 'exceljs';
 
 /**
@@ -124,6 +126,7 @@ export class PaymentsService {
     private readonly enrollmentsService: EnrollmentsService,
     private readonly telegramNotifier: TelegramNotifierService,
     private readonly dataSource: DataSource,
+    private readonly studentEvents: StudentEventsService,
   ) {}
 
   /**
@@ -1350,7 +1353,7 @@ export class PaymentsService {
   async applyExclusion(
     paymentId: number,
     args: { excludeLessons?: number; excludeAmount?: number; comment?: string },
-    _currentUser: CurrentUser,
+    currentUser: CurrentUser,
   ) {
     const hasExclusion =
       args.excludeAmount != null || args.excludeLessons != null;
@@ -1398,6 +1401,21 @@ export class PaymentsService {
     else payment.status = PaymentStatus.UNPAID;
 
     await this.paymentRepo.save(payment);
+
+    await this.studentEvents.log({
+      studentId: payment.studentId,
+      organizationId: currentUser?.organizationId,
+      type: StudentEventType.PAYMENT_EXCLUDED,
+      actorId: currentUser?.userId ?? null,
+      groupId: payment.groupId ?? null,
+      payload: {
+        amount: Number(preview.excludedAmount ?? 0),
+        lessons: preview.excludeLessons ?? null,
+        comment: payment.manualExcludedReason,
+        forMonth: dayjs(payment.forMonth).format('YYYY-MM'),
+        newAmountDue: Number(preview.newAmountDue ?? 0),
+      },
+    });
 
     return {
       ...preview,
