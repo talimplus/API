@@ -582,7 +582,9 @@ saqlashni rad etadi.
 **Xodim sahifasi** — `GET /staff/:userId/overview?forMonth=YYYY-MM`
 (o'ziniki uchun `GET /staff/me/overview`). Bitta javobda: xodim ma'lumoti,
 oyma-oy davomat (12 oy), shu oydagi kechikishlar, topshirilmagan pullar,
-jarimalar va oylik holati. Boshqa xodimni ko'rish uchun `staffPerformance.view`
+jarimalar va oylik holati. O'qituvchida `groups` ham — tugamagan guruhlari
+(fan, xona, jadval, o'quvchilar soni); boshqa rollarda `[]`.
+Boshqa xodimni ko'rish uchun `staffPerformance.view`
 kerak; o'zini har kim ko'radi (`StaffOverviewService.assertCanView`).
 
 **"Topshirilmagan pul"** — `payment_receipts` dagi `receivedById = xodim` va

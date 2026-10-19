@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { dayjs } from '@/shared/utils/dayjs';
 import { UserRole } from '@/common/enums/user-role.enums';
+import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { ALL_PERMISSIONS } from '@/common/permissions/permission.catalog';
 import { User } from '@/modules/users/entities/user.entity';
 import {
@@ -23,6 +24,9 @@ const round2 = (n: number): number =>
 
 /** Oyma-oy grafik uchun nechta oy ko'rsatiladi */
 const MONTHS_IN_SERIES = 12;
+
+/** Guruh jadvalini hafta tartibida chiqarish uchun */
+const WEEK_DAY_ORDER: string[] = Object.values(WeekDay);
 
 /**
  * Xodim sahifasi uchun yig'ma ma'lumot: davomat, topshirilmagan pullar,
@@ -72,14 +76,23 @@ export class StaffOverviewService {
     const from = dayjs(month).startOf('month').format('YYYY-MM-DD');
     const to = dayjs(month).endOf('month').format('YYYY-MM-DD');
 
-    const [attendanceSummary, lateRecords, receipts, months, deductions] =
-      await Promise.all([
-        this.attendanceService.getUserSummary(userId, from, to),
-        this.attendanceService.listUserRecords(userId, from, to),
-        this.loadUnsettledReceipts(userId),
-        this.buildMonthSeries(userId, month),
-        this.deductionsService.listForUser(userId, reqUser),
-      ]);
+    const [
+      attendanceSummary,
+      lateRecords,
+      receipts,
+      months,
+      deductions,
+      groups,
+    ] = await Promise.all([
+      this.attendanceService.getUserSummary(userId, from, to),
+      this.attendanceService.listUserRecords(userId, from, to),
+      this.loadUnsettledReceipts(userId),
+      this.buildMonthSeries(userId, month),
+      this.deductionsService.listForUser(userId, reqUser),
+      user.role === UserRole.TEACHER
+        ? this.loadTeacherGroups(userId, reqUser.organizationId)
+        : Promise.resolve([]),
+    ]);
 
     const pending = receipts.filter(
       (r) => r.status === PaymentReceiptStatus.PENDING,
@@ -123,10 +136,56 @@ export class StaffOverviewService {
       unsettledReceipts: receipts.map((r) => this.receiptView(r)),
       deductions,
       salary: salary ? await this.salaryView(salary) : null,
+      groups,
     };
   }
 
   // ─────────────────────────────────────────────────────────────
+
+  /**
+   * O'qituvchi hozir dars o'tadigan guruhlar (`finished` emas): fan, xona,
+   * jadval, o'quvchilar soni. Boshqa xodimlarda bo'sh ro'yxat.
+   * Xom SQL — staff-salaries moduli groups moduliga bog'lanmasin.
+   */
+  private async loadTeacherGroups(teacherId: number, organizationId: number) {
+    const rows: any[] = await this.userRepo.manager.query(
+      `SELECT g.id, g.name, g.status,
+              TO_CHAR(g."startDate", 'YYYY-MM-DD') AS "startDate",
+              TO_CHAR(g."endDate", 'YYYY-MM-DD') AS "endDate",
+              s.name AS "subjectName", r.name AS "roomName",
+              (SELECT COUNT(*)::int FROM "students_groups_groups" sg
+                WHERE sg."groupsId" = g.id) AS "studentsCount",
+              COALESCE((SELECT json_agg(json_build_object(
+                         'day', gs.day,
+                         'startTime', TO_CHAR(gs."startTime", 'HH24:MI')))
+                  FROM group_schedule gs WHERE gs."groupId" = g.id), '[]') AS schedules
+         FROM groups g
+         JOIN centers c ON c.id = g."centerId"
+         LEFT JOIN subjects s ON s.id = g."subjectId"
+         LEFT JOIN rooms r ON r.id = g."roomId"
+        WHERE g."teacherId" = $1
+          AND c."organizationId" = $2
+          AND g.status <> 'finished'
+        ORDER BY (g.status = 'started') DESC, g.name`,
+      [teacherId, organizationId],
+    );
+
+    return rows.map((g) => ({
+      id: Number(g.id),
+      name: g.name,
+      status: g.status,
+      subject: g.subjectName ?? null,
+      room: g.roomName ?? null,
+      studentsCount: Number(g.studentsCount ?? 0),
+      startDate: g.startDate ?? null,
+      endDate: g.endDate ?? null,
+      schedules: (g.schedules as { day: string; startTime: string }[]).sort(
+        (a, b) =>
+          WEEK_DAY_ORDER.indexOf(a.day) - WEEK_DAY_ORDER.indexOf(b.day) ||
+          a.startTime.localeCompare(b.startTime),
+      ),
+    }));
+  }
 
   /**
    * Xodim qabul qilgan, lekin admin tasdiqlamagan cheklar.

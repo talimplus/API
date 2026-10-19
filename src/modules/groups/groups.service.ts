@@ -869,6 +869,9 @@ export class GroupsService {
       .leftJoinAndSelect('group.room', 'room')
       .leftJoinAndSelect('group.schedules', 'schedule')
       .leftJoin('center.organization', 'organization')
+      // Ro'yxat jadvali uchun: guruhda hozir turgan o'quvchilar soni (junction
+      // bo'yicha — guruh sahifasidagi "O'quvchilar" tabi bilan bir xil).
+      .loadRelationCountAndMap('group.studentsCount', 'group.students')
       .where('organization.id = :organizationId', { organizationId });
 
     if (role === UserRole.TEACHER && teacherId) {

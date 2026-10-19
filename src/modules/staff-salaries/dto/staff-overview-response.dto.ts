@@ -106,6 +106,28 @@ export class StaffOverviewSalaryDto {
   @ApiProperty({ example: 'partial' }) status: string;
 }
 
+export class StaffTeacherGroupScheduleDto {
+  @ApiProperty({ example: 'monday' }) day: string;
+  @ApiProperty({ example: '14:00' }) startTime: string;
+}
+
+export class StaffTeacherGroupDto {
+  @ApiProperty({ example: 12 }) id: number;
+  @ApiProperty({ example: 'IELTS 1' }) name: string;
+  @ApiProperty({ example: 'started', description: 'new | started' })
+  status: string;
+  @ApiProperty({ example: 'Ingliz tili', nullable: true })
+  subject: string | null;
+  @ApiProperty({ example: '101-xona', nullable: true }) room: string | null;
+  @ApiProperty({ example: 14 }) studentsCount: number;
+  @ApiProperty({ example: '2026-09-01', nullable: true })
+  startDate: string | null;
+  @ApiProperty({ example: '2027-03-01', nullable: true })
+  endDate: string | null;
+  @ApiProperty({ type: [StaffTeacherGroupScheduleDto] })
+  schedules: StaffTeacherGroupScheduleDto[];
+}
+
 export class StaffOverviewResponseDto {
   @ApiProperty({ type: StaffOverviewUserDto }) user: StaffOverviewUserDto;
   @ApiProperty({ example: '2026-09-01' }) forMonth: string;
@@ -136,4 +158,11 @@ export class StaffOverviewResponseDto {
 
   @ApiProperty({ type: StaffOverviewSalaryDto, nullable: true })
   salary: StaffOverviewSalaryDto | null;
+
+  @ApiProperty({
+    type: [StaffTeacherGroupDto],
+    description:
+      'O‘qituvchi dars o‘tadigan guruhlar (tugaganlari kirmaydi); boshqa xodimlarda bo‘sh',
+  })
+  groups: StaffTeacherGroupDto[];
 }
