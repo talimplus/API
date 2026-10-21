@@ -1805,8 +1805,15 @@ export class PaymentsService {
   /**
    * Guruhning shu oydagi BARCHA o'qituvchilari komissiyasini qayta hisoblaydi
    * (oy o'rtasida o'qituvchi almashgan bo'lsa ikkalasi ham).
+   * `extraTeacherIds` — tarixda endi ko'rinmaydigan, lekin shu oy daromadida
+   * guruh puli qolgan bo'lishi mumkin bo'lgan o'qituvchilar (almashuv orqaga
+   * sanalanib butun oy yangisiga o'tganda).
    */
-  async recalcTeacherEarningsForGroupMonth(groupId: number, month: string) {
+  async recalcTeacherEarningsForGroupMonth(
+    groupId: number,
+    month: string,
+    extraTeacherIds: number[] = [],
+  ) {
     // O'qituvchi oyligi to'lov bilan bir xil oyda (ish oyi) turadi.
     // Kelajak oy uchun oldindan to'lov bo'lsa — o'sha oy ochilganda hisoblanadi.
     const monthYm = dayjs(month).format('YYYY-MM');
@@ -1821,10 +1828,13 @@ export class PaymentsService {
     const organizationId = Number(row?.organizationId ?? 0);
     if (!organizationId) return;
 
-    const teacherIds = await this.teacherEarningsService.teachersForGroupMonth(
-      groupId,
-      `${monthYm}-01`,
-    );
+    const teacherIds = new Set([
+      ...(await this.teacherEarningsService.teachersForGroupMonth(
+        groupId,
+        `${monthYm}-01`,
+      )),
+      ...extraTeacherIds,
+    ]);
     for (const teacherId of teacherIds) {
       try {
         await this.teacherEarningsService.calculateTeacherEarningsForMonth(

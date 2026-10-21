@@ -162,6 +162,16 @@ Uchalasi ham "o'tgan darslar o'tgan holicha qoladi" tamoyili bo'yicha:
   Oy o'rtasida almashgan guruhda har bir to'lov o'quvchining shu oydagi darslari
   (a'zolik oynasi bilan) soniga qarab bo'linadi. Oylik berilgan (muzlatilgan) oy
   eski o'qituvchidan qaytarib olinmaydi — faqat yangisiga carryover.
+  `teacherEffectiveFrom` **kelajakda bo'lolmaydi** va almashtirilayotgan
+  o'qituvchining oyligi berilgan oyga tusha olmaydi (422 `teacherEffectiveFrom`)
+  — aks holda bitta dars uchun ikki marta to'lanardi. Orqaga sanalanib butun oy
+  yangisiga o'tsa, eski o'qituvchi yangi tarixda ko'rinmaydi — shuning uchun
+  `teachersReplacedFrom` yozishdan oldin uni topadi va daromadi alohida qayta
+  hisoblanadi (`recalcTeacherEarningsForGroupMonth(..., extraTeacherIds)`).
+- **Guruh tarixi** — `GET /groups/:id/timeline` (`groups.view`,
+  `GroupTimelineService`): yuqoridagi tarix jadvallari + narx, ko'chirilgan
+  darslar va a'zolik oynalaridan yig'iladi (alohida audit jadvali yo'q). Status
+  va xona tarixi saqlanmaydi; kim o'zgartirgani faqat pauza/dars ko'chirishda bor.
 - **Bayram kunlari** (`holidays`, `HolidaysModule`, `GET/POST/DELETE /holidays`):
   butun tashkilot (`centerId = null`) yoki bitta filial. Bu kunlarda hech bir
   guruhda dars yo'q (jurnal, davomat, kechikish, syllabus). To'lovda bayram

@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { GroupsService } from './groups.service';
 import { GroupPausesService } from './group-pauses.service';
+import { GroupTimelineService } from './group-timeline.service';
 import { CreateGroupPauseDto } from './dto/group-pause.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -31,6 +32,7 @@ export class GroupsController {
   constructor(
     private readonly groupsService: GroupsService,
     private readonly groupPausesService: GroupPausesService,
+    private readonly groupTimelineService: GroupTimelineService,
   ) {}
 
   @Post()
@@ -187,6 +189,30 @@ export class GroupsController {
       req.user.role === UserRole.ADMIN ||
       req.user.role === UserRole.SUPER_ADMIN;
     return isAdmin ? undefined : req.user.centerId;
+  }
+
+  @Get(':id/timeline')
+  @RequirePermissions('groups.view')
+  @ApiOperation({
+    summary: 'Guruh tarixi (timeline)',
+    description:
+      "O'qituvchi, jadval, narx almashuvlari, pauzalar, ko'chirilgan darslar va " +
+      "o'quvchilar qo'shilishi/chiqishi/ko'chirilishi — yangisi tepada. " +
+      '`date` — hodisa kuchga kirgan kun (narx uchun — oyning 1-sanasi).',
+  })
+  @ApiResponse({
+    description:
+      '[{ date: YYYY-MM-DD, type, title, data }] — type: group_created, group_started, ' +
+      'group_finished, group_end_planned, teacher_assigned, teacher_changed, schedule_set, ' +
+      'schedule_changed, fee_set, fee_changed, pause, lesson_moved, student_joined, ' +
+      'student_left, student_transferred_in, student_transferred_out',
+  })
+  timeline(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.groupTimelineService.getTimeline(
+      id,
+      req.user.organizationId,
+      this.scopedCenterId(req),
+    );
   }
 
   @Get(':id/pauses')

@@ -19,6 +19,7 @@ import { GroupSchedulePeriod } from '@/modules/group_schedule/entities/group-sch
 import { GroupTeacherPeriod } from '@/modules/groups/entities/group-teacher-period.entity';
 import { GroupPause } from '@/modules/groups/entities/group-pause.entity';
 import { GroupPausesService } from './group-pauses.service';
+import { GroupTimelineService } from './group-timeline.service';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 
@@ -44,7 +45,12 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     forwardRef(() => PaymentsModule),
   ],
   controllers: [GroupsController, GroupAliasController],
-  providers: [GroupsService, GroupsLifecycleService, GroupPausesService],
+  providers: [
+    GroupsService,
+    GroupsLifecycleService,
+    GroupPausesService,
+    GroupTimelineService,
+  ],
   exports: [GroupsService],
 })
 export class GroupsModule {}

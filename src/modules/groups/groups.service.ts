@@ -30,6 +30,7 @@ import { ScheduleBoardService } from '@/modules/group_schedule/schedule-board.se
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
 import { MoreThanOrEqual } from 'typeorm';
+import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 
 /** To'qnashuv xabarini o'zbekcha yozish uchun (xabar backendda yig'iladi). */
 const DAY_LABELS_UZ: Record<WeekDay, string> = {
@@ -257,6 +258,104 @@ export class GroupsService {
         teacherId,
       }),
     );
+  }
+
+  /**
+   * O'qituvchi almashuvidan oldingi tekshiruv. Komissiya almashuv sanasidan
+   * kun bo'yicha bo'linadi, shuning uchun:
+   * - sana kelajakda bo'lolmaydi — `groups.teacher` darhol almashadi
+   *   (jurnal, dars jadvali), komissiya esa eski o'qituvchida qolib ketardi;
+   * - oyligi berilgan (muzlatilgan) oyga orqaga sanalab bo'lmaydi: eski
+   *   o'qituvchidan pul qaytarib olinmaydi, yangisiga esa carryover yoziladi
+   *   — bitta dars uchun ikki marta to'lanardi.
+   */
+  private async assertTeacherChangeDate(
+    group: Group,
+    teacherFrom: string,
+    nextTeacherId: number | null,
+  ) {
+    const today = this.todayInGroupTz(group);
+    if (teacherFrom > today) {
+      throw new ValidationException({
+        teacherEffectiveFrom:
+          "O'qituvchi almashuvi sanasi kelajakda bo'lishi mumkin emas",
+      });
+    }
+    const replaced = await this.teachersReplacedFrom(
+      group.id,
+      teacherFrom,
+      nextTeacherId,
+    );
+    for (const [month, teacherIds] of replaced) {
+      if (!teacherIds.length) continue;
+      const rows: { fullName: string | null }[] =
+        await this.teacherPeriodRepo.manager.query(
+          `SELECT TRIM(CONCAT(u."firstName", ' ', u."lastName")) AS "fullName"
+             FROM "staff_salaries" s
+             JOIN "users" u ON u."id" = s."userId"
+            WHERE s."userId" = ANY($1) AND s."forMonth" = $2 AND s."status" = $3
+            LIMIT 1`,
+          [teacherIds, month, StaffSalaryStatus.PAID],
+        );
+      if (rows.length) {
+        const next = dayjs(month).add(1, 'month').format('YYYY-MM-DD');
+        throw new ValidationException({
+          teacherEffectiveFrom:
+            `${rows[0].fullName || "Oldingi o'qituvchi"}ning ${dayjs(month).format('YYYY-MM')} ` +
+            `oyligi berib bo'lingan — almashuv sanasi ${next} dan oldin bo'lolmaydi`,
+        });
+      }
+    }
+  }
+
+  /**
+   * `fromDate` dan boshlab yangi o'qituvchi guruhni olsa, qaysi oyda kim
+   * dars kunlarini YO'QOTADI (hozirgi tarix bo'yicha). Kalit — `YYYY-MM-01`,
+   * almashuv oyidan joriy oygacha (ko'pi bilan 12 oy). Bo'sh ro'yxatli oylar
+   * ham qaytadi — chaqiruvchi ularni qayta hisoblash uchun ishlatadi.
+   */
+  private async teachersReplacedFrom(
+    groupId: number,
+    fromDate: string,
+    nextTeacherId: number | null,
+  ): Promise<Map<string, number[]>> {
+    const periods = await this.teacherPeriodRepo.find({
+      where: { groupId },
+      order: { fromDate: 'ASC' },
+    });
+    const list = periods.map((p) => ({
+      from: dayjs(p.fromDate).format('YYYY-MM-DD'),
+      teacherId: p.teacherId ?? null,
+    }));
+    const teacherAt = (date: string): number | null => {
+      if (!list.length) return null;
+      let picked = list[0];
+      for (const p of list) {
+        if (p.from <= date) picked = p;
+        else break;
+      }
+      return picked.teacherId;
+    };
+
+    const result = new Map<string, number[]>();
+    const current = dayjs().startOf('month');
+    let cursor = dayjs(fromDate).startOf('month');
+    if (cursor.isBefore(current.subtract(12, 'month'))) {
+      cursor = current.subtract(12, 'month');
+    }
+    while (!cursor.isAfter(current)) {
+      const ids = new Set<number>();
+      const days = cursor.daysInMonth();
+      for (let i = 0; i < days; i++) {
+        const d = cursor.add(i, 'day').format('YYYY-MM-DD');
+        if (d < fromDate) continue;
+        const t = teacherAt(d);
+        if (t && t !== nextTeacherId) ids.add(t);
+      }
+      result.set(cursor.format('YYYY-MM-01'), Array.from(ids));
+      cursor = cursor.add(1, 'month');
+    }
+    return result;
   }
 
   private async assertScheduleKeepsRecordedLessons(
@@ -633,6 +732,18 @@ export class GroupsService {
       );
     }
 
+    // O'qituvchi almashsa — sanasi saqlashdan OLDIN tekshiriladi.
+    const teacherFrom = dto.teacherEffectiveFrom
+      ? dayjs(dto.teacherEffectiveFrom).format('YYYY-MM-DD')
+      : this.todayInGroupTz(group);
+    if ((group.teacher?.id ?? null) !== prevTeacherId) {
+      await this.assertTeacherChangeDate(
+        group,
+        teacherFrom,
+        group.teacher?.id ?? null,
+      );
+    }
+
     const savedGroup = await this.groupRepo.save(group);
 
     // Forma har saqlashda jadvalni qayta yuboradi — faqat haqiqatan
@@ -676,20 +787,20 @@ export class GroupsService {
     // (eski ham, yangi o'qituvchi ham) qayta hisoblaymiz.
     const nextTeacherId = group.teacher?.id ?? null;
     if (nextTeacherId !== prevTeacherId) {
-      const teacherFrom = dto.teacherEffectiveFrom
-        ? dayjs(dto.teacherEffectiveFrom).format('YYYY-MM-DD')
-        : this.todayInGroupTz(group);
+      // Yozishdan OLDINGI egalar: almashuv sanasidan keyin darsi bor edi,
+      // endi yo'q. Butun oy yangisiga o'tsa ular yangi tarixda ko'rinmaydi —
+      // shuning uchun alohida qayta hisoblanadi (aks holda eski o'qituvchi
+      // daromadida shu guruh puli qolib, bitta pul ikki marta sanalardi).
+      const replacedByMonth = await this.teachersReplacedFrom(
+        id,
+        teacherFrom,
+        nextTeacherId,
+      );
       await this.writeTeacherPeriod(id, teacherFrom, nextTeacherId);
-      const current = dayjs().startOf('month');
-      let cursor = dayjs(teacherFrom).startOf('month');
-      if (cursor.isBefore(current.subtract(12, 'month'))) {
-        cursor = current.subtract(12, 'month');
-      }
-      while (!cursor.isAfter(current)) {
+      for (const [month, teacherIds] of replacedByMonth) {
         await this.paymentsService
-          .recalcTeacherEarningsForGroupMonth(id, cursor.format('YYYY-MM-01'))
+          .recalcTeacherEarningsForGroupMonth(id, month, teacherIds)
           .catch(() => undefined);
-        cursor = cursor.add(1, 'month');
       }
     }
 
