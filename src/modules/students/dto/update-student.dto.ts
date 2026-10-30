@@ -116,6 +116,18 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
   groupIds?: number[];
 
   @ApiProperty({
+    example: '2026-10-20',
+    required: false,
+    description:
+      "`groupIds` ga YANGI qo'shilgan guruhlar uchun qo'shilgan sana (o'tgan " +
+      "sana bo'lishi mumkin). To'lov shu sanadan hisoblanadi. Guruh " +
+      "boshlanishidan oldin va bugundan keyin bo'lolmaydi. Default — bugun.",
+  })
+  @IsOptional()
+  @IsDateString()
+  groupJoinedAt?: string;
+
+  @ApiProperty({
     example: 1,
     description: "O'quvchi fan IDsi (optional)",
     required: false,

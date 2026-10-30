@@ -26,6 +26,56 @@ export function toDateOnly(
   return dayjs(value).format('YYYY-MM-DD');
 }
 
+/** Oy bilan kesishgan oynalar (`leftAt` exclusive). */
+export function windowsForMonth(
+  windows: EnrollmentWindow[],
+  forMonth: string, // YYYY-MM-01
+): EnrollmentWindow[] | null {
+  if (!windows.length) return null;
+  const monthStart = dayjs(forMonth).startOf('month').format('YYYY-MM-DD');
+  const monthEnd = dayjs(forMonth).endOf('month').format('YYYY-MM-DD');
+  return windows.filter(
+    (w) => w.joinedAt <= monthEnd && (!w.leftAt || w.leftAt > monthStart),
+  );
+}
+
+/**
+ * Berilgan oy uchun amal qiladigan a'zolik chegaralari (`resolveWindowForMonth`
+ * ning sof varianti — orqaga sanalash preview'i taxminiy oynalar bilan
+ * hisoblashi uchun alohida).
+ */
+export function pickWindowForMonth(
+  windows: EnrollmentWindow[],
+  forMonth: string, // YYYY-MM-01
+): EnrollmentWindow | null {
+  if (!windows.length) return null;
+
+  // `leftAt` exclusive: oy boshida chiqqan bo'lsa shu oyda dars yo'q.
+  const overlapping = windowsForMonth(windows, forMonth) ?? [];
+  if (!overlapping.length) {
+    // Oy bilan kesishmaydi: o'quvchi bu oyda bu guruhda o'qimagan. Oxirgi
+    // oynani qaytaramiz — u chegara sifatida ishlatilganda darslar baribir
+    // oynadan tashqarida qoladi va billable = 0 chiqadi (oy oynadan oldin
+    // bo'lsa joinedAt to'sadi, keyin bo'lsa leftAt to'sadi).
+    const last = windows[windows.length - 1];
+    return { joinedAt: last.joinedAt, leftAt: last.leftAt };
+  }
+
+  const joinedAt = overlapping.reduce(
+    (min, w) => (w.joinedAt < min ? w.joinedAt : min),
+    overlapping[0].joinedAt,
+  );
+  const hasOpen = overlapping.some((w) => !w.leftAt);
+  const leftAt = hasOpen
+    ? null
+    : overlapping.reduce(
+        (max, w) => ((w.leftAt as string) > max ? (w.leftAt as string) : max),
+        overlapping[0].leftAt as string,
+      );
+
+  return { joinedAt, leftAt };
+}
+
 /**
  * O'quvchi ↔ guruh a'zolik oynalari bilan ishlaydigan servis.
  *
@@ -94,38 +144,10 @@ export class EnrollmentsService {
     groupId: number,
     forMonth: string, // YYYY-MM-01
   ): Promise<EnrollmentWindow | null> {
-    const windows = await this.getWindows(studentId, groupId);
-    if (!windows.length) return null;
-
-    const monthStart = dayjs(forMonth).startOf('month').format('YYYY-MM-DD');
-    const monthEnd = dayjs(forMonth).endOf('month').format('YYYY-MM-DD');
-
-    // `leftAt` exclusive: oy boshida chiqqan bo'lsa shu oyda dars yo'q.
-    const overlapping = windows.filter(
-      (w) => w.joinedAt <= monthEnd && (!w.leftAt || w.leftAt > monthStart),
+    return pickWindowForMonth(
+      await this.getWindows(studentId, groupId),
+      forMonth,
     );
-    if (!overlapping.length) {
-      // Oy bilan kesishmaydi: o'quvchi bu oyda bu guruhda o'qimagan. Oxirgi
-      // oynani qaytaramiz — u chegara sifatida ishlatilganda darslar baribir
-      // oynadan tashqarida qoladi va billable = 0 chiqadi (oy oynadan oldin
-      // bo'lsa joinedAt to'sadi, keyin bo'lsa leftAt to'sadi).
-      const last = windows[windows.length - 1];
-      return { joinedAt: last.joinedAt, leftAt: last.leftAt };
-    }
-
-    const joinedAt = overlapping.reduce(
-      (min, w) => (w.joinedAt < min ? w.joinedAt : min),
-      overlapping[0].joinedAt,
-    );
-    const hasOpen = overlapping.some((w) => !w.leftAt);
-    const leftAt = hasOpen
-      ? null
-      : overlapping.reduce(
-          (max, w) => ((w.leftAt as string) > max ? (w.leftAt as string) : max),
-          overlapping[0].leftAt as string,
-        );
-
-    return { joinedAt, leftAt };
   }
 
   /**
@@ -139,13 +161,41 @@ export class EnrollmentsService {
     groupId: number,
     forMonth: string, // YYYY-MM-01
   ): Promise<EnrollmentWindow[] | null> {
-    const windows = await this.getWindows(studentId, groupId);
-    if (!windows.length) return null;
-    const monthStart = dayjs(forMonth).startOf('month').format('YYYY-MM-DD');
-    const monthEnd = dayjs(forMonth).endOf('month').format('YYYY-MM-DD');
-    return windows.filter(
-      (w) => w.joinedAt <= monthEnd && (!w.leftAt || w.leftAt > monthStart),
-    );
+    return windowsForMonth(await this.getWindows(studentId, groupId), forMonth);
+  }
+
+  /**
+   * Guruh boshlanish sanasi orqaga surilganda a'zoligi ham shu sanaga
+   * surilishi mumkin bo'lgan o'quvchilar: ochiq oynasi `date` dan keyin
+   * boshlangan, guruhda yagona oynasi bor va boshqa guruhdan KO'CHIRILMAGAN.
+   * Ko'chirilganlarning sanasi ko'chirishda aniq berilgan — ularni surish
+   * eski guruh bilan bir xil darslar uchun ikki marta pul olardi.
+   */
+  async findBackdatableForGroup(
+    groupId: number,
+    date: string,
+  ): Promise<{ studentId: number; joinedAt: string }[]> {
+    const rows: { studentId: number; joinedAt: string | Date }[] =
+      await this.repo.query(
+        `SELECT e."studentId", e."joinedAt"
+           FROM "student_group_enrollments" e
+          WHERE e."groupId" = $1
+            AND e."leftAt" IS NULL
+            AND e."joinedAt" > $2::date
+            AND e."transferredFromGroupId" IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM "student_group_enrollments" o
+               WHERE o."groupId" = e."groupId"
+                 AND o."studentId" = e."studentId"
+                 AND o."id" <> e."id"
+            )
+          ORDER BY e."studentId"`,
+        [groupId, date],
+      );
+    return rows.map((r) => ({
+      studentId: Number(r.studentId),
+      joinedAt: toDateOnly(r.joinedAt) as string,
+    }));
   }
 
   /**

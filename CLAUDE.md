@@ -120,6 +120,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 
 - `startDate` / `endDate` (DATE, guruh timezone'ida, **inclusive**) — darslar, to'lovlar,
   syllabus rejasi va avtomatik yopilish shu sanalarga qarab ishlaydi. `endDate = null` → muddatsiz.
+  `startDate` o'tgan sana bo'lishi mumkin — orqaga sanalash 6.1.3 da.
 - Status: `new → started → finished`. `changeStatus` da `endDate` majburiy mos keladi;
   `finished` qilinganda kelajakdagi `endDate` bugunga tortiladi.
 - **`started` qilish uchun `endDate` ham, `room` ham bo'lishi shart.** Yetishmaganlari
@@ -138,6 +139,48 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 - **O'chirish:** faqat o'z tashkiloti/filiali ichida; to'lov yoki davomat tarixi
   bor guruh o'chirilmaydi (400) — `finished` qilinadi.
 - **O'qituvchi** faqat `teacher` turidagi xodim bo'ladi (422 `teacherId`).
+
+### 6.1.3 O'tgan sana bilan boshlash / qo'shish (orqaga sanalash, 2026-10-30)
+
+Guruh sistemaga kech kiritilsa ("darslar 5 kun oldin boshlangan"). Pul **statusga
+emas, sanalarga** qaraydi: `billable = [group.startDate..endDate] ∩ a'zolik oynasi
+∩ activatedAt dan`. Shuning uchun faqat `startDate` ni surish yetmaydi — guruh
+sistemada bo'lmagan paytda qo'shilgan o'quvchilarning `joinedAt` (va `activatedAt`)
+i ham suriladi.
+
+| Qayerda | Nima |
+|---|---|
+| `PUT /groups/change-status/:id` `{status:'started', startDate?, backdateStudentIds?}` | darslar boshlangan sana (≤ bugun); ids berilmasa — barcha nomzodlar |
+| `PUT /groups/:id` `{startDate, backdateStudentIds?}` | tahrir; ids berilmasa — **hech kim** |
+| `POST /groups/:id/start-date/preview` | ta'sir (hech narsa yozmaydi): `candidates`, `rows`, `totals`, `paidSalaryMonths`, `attendanceBefore` |
+| `PUT /students/change-status/:id?status=ACTIVE` `{startDate?}` | faqat BIRINCHI faollashtirish: `activatedAt` = sana, ochiq oynalar `max(sana, group.startDate)` ga |
+| `PUT /students/:id` `{groupIds, groupJoinedAt?}` | tahrirda YANGI qo'shilgan guruhlar uchun qo'shilgan sana (guruh boshlanishidan oldin emas) |
+| `POST /students/:id/start-date/preview` `{startDate, groupIds?}` | o'quvchi uchun preview |
+
+- Servislar: `GroupStartDateService` (groups), `StudentStartDateService` (students),
+  `PaymentsService.previewBackdating` / `rebillAfterBackdating`.
+- **Nomzod** (suriladigan o'quvchi): ochiq oynasi yangi sanadan keyin, guruhda
+  yagona oynasi bor va **ko'chirilmagan** (`transferredFromGroupId IS NULL`) —
+  ko'chirilganni surish eski guruh bilan bir darsga ikki marta pul olardi.
+- Preview — sof hisob: `computeMonthBilling({ windowsOverride })` + o'zgartirilgan
+  student/group nusxalari; boshida va oxirida billing keshlari tozalanadi.
+- Qo'llash: yetishmagan oylar `ensurePaymentsForStudent({ groupIds })` bilan
+  (boshqa guruhlarga tegmaydi), keyin `[eng erta oy .. ta'sirlangan oxirgi oy]`
+  qatorlari **force** bilan qayta hisoblanadi (PAID ham: dars kamaysa —
+  `refundedAmount`, ko'paysa — qarz). Oyligi berilgan oy muzlagan qoladi.
+- Cheklar: sana bugundan keyin emas, 24 oydan uzoq emas, `endDate` dan keyin emas;
+  yangi sanadan oldingi kunlarga davomat bo'lsa — 422 `startDate`.
+- **Tashkilot ochilgan kundan oldin bo'lolmaydi** (`organizations.createdAt`,
+  `organization-opened.util.ts`): guruh yaratish/boshlash/tahrir (`startDate`),
+  faollashtirish (`startDate`), yangi guruhga qo'shish (`groupJoinedAt`) — 422.
+  `GET /organizations/branding` → `openedOn` (front kalendarda `minDate`).
+  Undan oldingi oylar faqat bir martalik SQL import bilan.
+- Front: `GroupStartDialog` / `StudentStartDialog` + umumiy `BackdateImpact`
+  (ogohlantirish oynasi, Confirm faqat preview'dan keyin).
+- Ssenariy testi (nusxa bazada, 24 tekshiruv): guruhni 05-okt dan boshlash,
+  NEW o'quvchini 12-okt dan faollashtirish, tahrirda yangi guruhga 15-okt dan
+  qo'shish (guruh boshlanishidan oldingi sana — 422), sanani keyinga surish
+  (davomat — 422; to'langan oy — refund), ko'chirilgan o'quvchi nomzod emas.
 
 ### 6.1.2 Jadval, o'qituvchi tarixi va pauza (MUHIM, 2026-09-27)
 
@@ -198,6 +241,11 @@ kichik modul (`ScheduleBoardModule`), uni ham `GroupsModule`, ham
 - Tekshiruv guruh yaratishda ham, tahrirlashda ham bajariladi
   (`assertScheduleAvailable`) va **422** bo'lib qaytadi: xona to'qnashuvi
   `roomId` maydoniga, o'qituvchiniki `teacherId` ga bog'lanadi.
+  **Bandlik — ogohlantirish, to'siq emas** (2026-10-26): body'da
+  `allowScheduleConflicts: true` bo'lsa to'qnashuv bloklamaydi, faqat
+  `logger.warn` ga yoziladi. Front ogohlantirishda "baribir saqlash" belgisi
+  qo'yilgandagina yuboradi. Sabab: ikki o'qituvchi guruhlarini almashtirganda
+  birinchi saqlash doim to'qnashadi (ikkinchisi hali o'z guruhida).
 - `POST /group-schedule/conflicts` — saqlashdan oldin tekshirish (forma
   natijani input ostida ko'rsatadi). Ruxsat: `schedule.view` **yoki**
   `groups.create` **yoki** `groups.update`.
@@ -396,6 +444,11 @@ finished→ active
 - To'xtatishda (`stopped`) o'quvchining **barcha a'zolik oynalari yopiladi**
   (`leftAt` = bugun), qaytishda har bir guruhda **yangi oyna** ochiladi — to'xtab
   turgan davr to'lovga kirmaydi. `stoppedAt` ham saqlanadi (joriy oy chegarasi).
+- **Tahrirda guruh faqat qo'shiladi** (2026-10-26, `assertNoOngoingGroupRemoved`):
+  `PUT /students/:id` dagi `groupIds` tugamagan joriy guruhni tushirib qoldirsa
+  — 422 `groupIds`. Guruh almashtirish faqat `POST /students/transfer` orqali
+  (aks holda pul `refundedAmount` ga tushib, yangi guruhda to'liq qarz
+  yozilardi). Tugagan guruhni ro'yxatdan olib tashlash mumkin.
 - Guruhga qo'shilgan/chiqqan sana — `student_group_enrollments` (pastda 6.5.1).
   `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;

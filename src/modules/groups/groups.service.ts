@@ -31,6 +31,12 @@ import { ValidationException } from '@/common/exceptions/validation.exception';
 import { dayjs } from '@/shared/utils/dayjs';
 import { MoreThanOrEqual } from 'typeorm';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
+import {
+  BackdateCandidate,
+  GroupStartDateService,
+} from '@/modules/groups/group-start-date.service';
+import { PreviewGroupStartDateDto } from '@/modules/groups/dto/preview-group-start-date.dto';
+import { assertNotBeforeOrganization } from '@/modules/organizations/organization-opened.util';
 
 /** To'qnashuv xabarini o'zbekcha yozish uchun (xabar backendda yig'iladi). */
 const DAY_LABELS_UZ: Record<WeekDay, string> = {
@@ -72,6 +78,7 @@ export class GroupsService {
     private readonly paymentsService: PaymentsService,
     private readonly groupFeeService: GroupFeeService,
     private readonly scheduleBoardService: ScheduleBoardService,
+    private readonly startDateService: GroupStartDateService,
   ) {}
 
   /**
@@ -433,6 +440,11 @@ export class GroupsService {
    *
    * Xato 422 bo'lib qaytadi va aynan tegishli maydonga (`roomId` /
    * `teacherId`) bog'lanadi — formada shu input ostida ko'rinadi.
+   *
+   * `allowConflicts` — foydalanuvchi ogohlantirishni ko'rib tasdiqlagan:
+   * to'qnashuv bloklamaydi, faqat log'ga yoziladi. Aks holda ikki
+   * o'qituvchining guruhlarini almashtirib bo'lmasdi (birinchi guruh
+   * saqlanganda ikkinchi o'qituvchi hali o'z guruhida — doim "band").
    */
   private async assertScheduleAvailable(args: {
     organizationId: number;
@@ -441,6 +453,7 @@ export class GroupsService {
     days?: { day: WeekDay; startTime: string }[];
     durationMinutes?: number | null;
     excludeGroupId?: number;
+    allowConflicts?: boolean;
   }) {
     const conflicts = await this.scheduleBoardService.findConflicts({
       organizationId: args.organizationId,
@@ -451,6 +464,17 @@ export class GroupsService {
       excludeGroupId: args.excludeGroupId ?? null,
     });
     if (!conflicts.length) return;
+
+    if (args.allowConflicts) {
+      this.logger.warn(
+        `Bandlik tasdiq bilan o'tkazib yuborildi (guruh ${
+          args.excludeGroupId ?? 'yangi'
+        }): ${conflicts
+          .map((c) => `${c.reason} → "${c.groupName}" ${c.day} ${c.startTime}`)
+          .join('; ')}`,
+      );
+      return;
+    }
 
     const describe = (c: (typeof conflicts)[number]) =>
       `"${c.groupName}" — ${DAY_LABELS_UZ[c.day] ?? c.day} ${c.startTime}–${c.endTime}`;
@@ -525,6 +549,7 @@ export class GroupsService {
       teacherId: dto.teacherId,
       days: dto.days,
       durationMinutes: dto.lessonDurationMinutes,
+      allowConflicts: dto.allowScheduleConflicts === true,
     });
 
     const startDate = dto.startDate
@@ -537,6 +562,15 @@ export class GroupsService {
       throw new ValidationException({
         endDate: `Tugash sanasi boshlanish sanasidan (${startDate}) oldin bo'lishi mumkin emas`,
       });
+    }
+    if (startDate) {
+      await assertNotBeforeOrganization(
+        this.groupRepo,
+        center.id,
+        startDate,
+        'startDate',
+        dto.timezone,
+      );
     }
 
     const group = this.groupRepo.create({
@@ -694,6 +728,27 @@ export class GroupsService {
       });
     }
 
+    // Boshlanish sanasi o'zgardi: tekshiruv va surilishi mumkin bo'lgan
+    // o'quvchilar ro'yxati saqlashdan OLDIN olinadi.
+    let startChange: {
+      prev: string;
+      next: string;
+      candidates: BackdateCandidate[];
+    } | null = null;
+    // Avval sanasi bo'lmagan guruh ham tekshiruvdan o'tadi (ochilish kuni,
+    // 24 oy, davomat) — aks holda istalgan eski sana kiritilardi.
+    if (nextStartDate && nextStartDate !== prevStartDate) {
+      await this.startDateService.assertStartDate(group, nextStartDate);
+      startChange = {
+        prev: prevStartDate ?? nextStartDate,
+        next: nextStartDate,
+        candidates: await this.startDateService.candidates(
+          group,
+          nextStartDate,
+        ),
+      };
+    }
+
     const endDateChanged = nextEndDate !== prevEndDate;
     if (endDateChanged) {
       this.applyEndDateStatusRules(group);
@@ -714,6 +769,7 @@ export class GroupsService {
       days: effectiveDays,
       durationMinutes: group.lessonDurationMinutes,
       excludeGroupId: id,
+      allowConflicts: dto.allowScheduleConflicts === true,
     });
 
     // Yangi jadval o'tgan sanadan kuchga kirsa, o'sha oraliqda davomat
@@ -843,6 +899,16 @@ export class GroupsService {
       await this.recalcGroupPayments(id, endMovedEarlier);
     }
 
+    // Boshlanish sanasi: tanlangan o'quvchilar a'zoligi suriladi va
+    // ta'sirlangan oylar (PAID ham) qayta hisoblanadi.
+    if (startChange) {
+      await this.startDateService.apply({
+        group: savedGroup,
+        ...startChange,
+        backdateStudentIds: dto.backdateStudentIds ?? [],
+      });
+    }
+
     await this.groupFeeService.attachFeeInfo([savedGroup]);
     (savedGroup as any).feeEffectiveFrom = feeEffectiveFrom;
 
@@ -869,6 +935,7 @@ export class GroupsService {
     id: number,
     nextStatus: GroupStatus,
     centerId?: number,
+    opts?: { startDate?: string; backdateStudentIds?: number[] },
   ) {
     if (!nextStatus) {
       throw new ValidationException({ status: 'status is required' });
@@ -932,6 +999,31 @@ export class GroupsService {
       if (!group.startedAt) group.startedAt = new Date();
     }
 
+    // "Darslar qachon boshlangan?" — o'tgan sana bo'lishi mumkin. To'lov
+    // statusga emas, `startDate` ga qaraydi, shuning uchun sana shu yerda
+    // qo'yiladi va tanlangan o'quvchilar a'zoligi ham suriladi.
+    let startChange: {
+      prev: string;
+      next: string;
+      candidates: BackdateCandidate[];
+    } | null = null;
+    if (nextStatus === GroupStatus.STARTED && opts?.startDate) {
+      const next = dayjs(opts.startDate).format('YYYY-MM-DD');
+      if (next > today) {
+        throw new ValidationException({
+          startDate:
+            "Darslar boshlangan sana bugundan keyin bo'lishi mumkin emas",
+        });
+      }
+      await this.startDateService.assertStartDate(group, next);
+      startChange = {
+        prev: this.toDateOnly(group.startDate) ?? next,
+        next,
+        candidates: await this.startDateService.candidates(group, next),
+      };
+      group.startDate = next as unknown as Date;
+    }
+
     if (nextStatus === GroupStatus.FINISHED && endDate > today) {
       // Guruh bugun yopiladi: darslar ham, to'lovlar ham bugundan keyin
       // hisoblanmasligi uchun tugash sanasini bugunga tortamiz.
@@ -951,8 +1043,42 @@ export class GroupsService {
 
     await this.syncStudentStatusesForGroups([id]);
     await this.recalcGroupPayments(id, nextStatus === GroupStatus.FINISHED);
+    if (startChange) {
+      await this.startDateService.apply({
+        group: saved,
+        ...startChange,
+        backdateStudentIds: opts?.backdateStudentIds,
+      });
+    }
 
     return saved;
+  }
+
+  /**
+   * Boshlanish sanasi o'zgarishining ta'siri (hech narsa yozmaydi): qaysi
+   * o'quvchilar a'zoligini surish mumkin, qaysi oylar qanchaga o'zgaradi,
+   * qaysi oylarda o'qituvchi oyligi allaqachon berilgan. Front shuni
+   * ogohlantirish oynasida ko'rsatadi.
+   */
+  async previewStartDate(
+    organizationId: number,
+    id: number,
+    dto: PreviewGroupStartDateDto,
+    centerId?: number,
+  ) {
+    const group = await this.groupRepo.findOne({
+      where: { id },
+      relations: ['center', 'schedules'],
+    });
+    if (!group) throw new NotFoundException('Group not found');
+    if (group.center?.organizationId !== organizationId) {
+      throw new NotFoundException('Group not found');
+    }
+    if (centerId && group.center?.id !== centerId) {
+      throw new NotFoundException('Group not found');
+    }
+    const next = dayjs(dto.startDate).format('YYYY-MM-DD');
+    return this.startDateService.preview(group, next, dto.backdateStudentIds);
   }
 
   async findAll(

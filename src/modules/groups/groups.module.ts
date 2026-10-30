@@ -20,6 +20,8 @@ import { GroupTeacherPeriod } from '@/modules/groups/entities/group-teacher-peri
 import { GroupPause } from '@/modules/groups/entities/group-pause.entity';
 import { GroupPausesService } from './group-pauses.service';
 import { GroupTimelineService } from './group-timeline.service';
+import { GroupStartDateService } from './group-start-date.service';
+import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
 
@@ -40,6 +42,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     ]),
     GroupFeeModule,
     ScheduleBoardModule,
+    EnrollmentsModule,
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
     forwardRef(() => PaymentsModule),
@@ -50,6 +53,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     GroupsLifecycleService,
     GroupPausesService,
     GroupTimelineService,
+    GroupStartDateService,
   ],
   exports: [GroupsService],
 })

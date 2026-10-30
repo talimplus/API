@@ -25,6 +25,7 @@ import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { GroupStatus } from '@/modules/groups/enums/group-status.enum';
 import { ChangeGroupStatusDto } from '@/modules/groups/dto/change-group-status.dto';
 import { ApiBody } from '@nestjs/swagger';
+import { PreviewGroupStartDateDto } from '@/modules/groups/dto/preview-group-start-date.dto';
 
 @ApiTags('Groups')
 @Controller('groups')
@@ -87,6 +88,34 @@ export class GroupsController {
       req.user.organizationId,
       id,
       effectiveStatus as any,
+      req.user.centerId,
+      {
+        startDate: body?.startDate,
+        backdateStudentIds: body?.backdateStudentIds,
+      },
+    );
+  }
+
+  @Post(':id/start-date/preview')
+  @RequirePermissions('groups.changeStatus', 'groups.update')
+  @ApiOperation({
+    summary: "Boshlanish sanasi o'zgarishining to'lovlarga ta'siri (preview)",
+    description:
+      "Hech narsa yozmaydi. `candidates` — a'zoligi ham surilishi mumkin " +
+      "bo'lgan o'quvchilar; `rows` — o'zgaradigan to'lov qatorlari; " +
+      "`paidSalaryMonths` — o'qituvchi oyligi berilgan oylar (carryover); " +
+      "`attendanceBefore > 0` bo'lsa sana qo'llanmaydi (422).",
+  })
+  @ApiBody({ type: PreviewGroupStartDateDto })
+  previewStartDate(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PreviewGroupStartDateDto,
+  ) {
+    return this.groupsService.previewStartDate(
+      req.user.organizationId,
+      id,
+      dto,
       req.user.centerId,
     );
   }

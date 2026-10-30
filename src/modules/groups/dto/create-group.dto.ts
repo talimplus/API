@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsInt,
   IsNotEmpty,
@@ -136,4 +137,18 @@ export class CreateGroupDto {
   @IsOptional()
   @IsNumber()
   centerId?: number;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description:
+      "Xona/o'qituvchi band bo'lsa ham saqlash. Default — false: to'qnashuv " +
+      "bo'lsa 422 (`roomId` / `teacherId`). Front avval ogohlantirish " +
+      "ko'rsatadi, foydalanuvchi tasdiqlasa true yuboriladi (masalan ikki " +
+      "o'qituvchi guruhlarini almashtirganda — ketma-ket saqlashda oraliq " +
+      "qadam doim to'qnashadi).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  allowScheduleConflicts?: boolean;
 }

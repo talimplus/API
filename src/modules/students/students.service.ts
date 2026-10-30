@@ -36,6 +36,8 @@ import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
+import { StudentStartDateService } from '@/modules/students/student-start-date.service';
+import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
 import { GroupsService } from '@/modules/groups/groups.service';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { StudentEventsService } from '@/modules/student-history/student-events.service';
@@ -75,6 +77,7 @@ export class StudentsService {
     private readonly enrollmentsService: EnrollmentsService,
     private readonly baseDiscountService: StudentBaseDiscountService,
     private readonly studentEvents: StudentEventsService,
+    private readonly startDateService: StudentStartDateService,
   ) {}
   async findAll(
     organizationId: number,
@@ -416,6 +419,32 @@ export class StudentsService {
     return result;
   }
 
+  /**
+   * Tahrirda o'quvchini davom etayotgan guruhdan olib tashlab bo'lmaydi —
+   * faqat yangi guruh qo'shiladi. Guruh almashtirish `POST /students/transfer`
+   * orqali: u oyni ikki guruh orasida bo'ladi va ortiqcha pulni chek bilan
+   * yangi guruhga o'tkazadi. Tahrirda olib tashlansa pul `refundedAmount` ga
+   * (go'yo kassadan qaytarilgandek) tushib, yangi guruhda to'liq qarz
+   * yozilardi. Tugagan guruhni ro'yxatdan olib tashlash zararsiz — ruxsat.
+   */
+  private assertNoOngoingGroupRemoved(
+    student: Student,
+    nextGroupIds: number[] | undefined,
+  ) {
+    if (!Array.isArray(nextGroupIds)) return;
+    const removed = (student.groups ?? []).filter(
+      (g) => g.status !== GroupStatus.FINISHED && !nextGroupIds.includes(g.id),
+    );
+    if (!removed.length) return;
+    throw new ValidationException({
+      groupIds:
+        `O'quvchini guruhdan olib tashlab bo'lmaydi: ${removed
+          .map((g) => `"${g.name}"`)
+          .join(', ')}. ` +
+        "Boshqa guruhga o'tkazish uchun «Ko'chirish» dan foydalaning.",
+    });
+  }
+
   private async findEntityByIdOrThrow(id: number) {
     const student = await this.studentRepo.findOne({
       where: { id },
@@ -431,6 +460,55 @@ export class StudentsService {
       throw new BadRequestException('Month must be in YYYY-MM format');
     }
     return `${v}-01`;
+  }
+
+  /**
+   * O'qishni boshlagan / guruhga qo'shilgan sanani orqaga qo'yishning
+   * to'lovlarga ta'siri (`StudentStartDateService.preview`).
+   */
+  async previewStartDate(
+    organizationId: number,
+    id: number,
+    dto: PreviewStudentStartDateDto,
+  ) {
+    await this.assertStudentInOrganization(organizationId, id);
+    const student = await this.studentRepo.findOne({
+      where: { id },
+      relations: ['groups'],
+    });
+    const centerId = (student as any)?.centerId ?? null;
+    const date = dayjs(dto.startDate).format('YYYY-MM-DD');
+    // Saqlashdagi tekshiruvlarning o'zi: preview qo'llab bo'lmaydigan
+    // sana uchun raqam ko'rsatmasin (422 shu yerda).
+    if (dto.groupIds?.length) {
+      const current = ((student as any)?.groups ?? []).map((g: any) => g.id);
+      if (dto.groupIds.some((gid) => current.includes(gid))) {
+        throw new BadRequestException(
+          "O'quvchi bu guruhda allaqachon bor — faqat yangi guruhlar uchun",
+        );
+      }
+      const groups = await this.groupRepo.find({
+        where: { id: In(dto.groupIds), center: { id: centerId } },
+      });
+      if (groups.length !== dto.groupIds.length) {
+        throw new BadRequestException(
+          "Ba'zi guruhlar topilmadi yoki bu markazga tegishli emas",
+        );
+      }
+      await this.startDateService.assertJoinDate(date, groups, centerId);
+    } else {
+      await this.startDateService.assertDate(
+        date,
+        'startDate',
+        centerId,
+        (student as any)?.groups?.[0] ?? null,
+      );
+    }
+    return this.startDateService.preview(
+      id,
+      date,
+      dto.groupIds?.length ? dto.groupIds : undefined,
+    );
   }
 
   private async assertStudentInOrganization(
@@ -1195,6 +1273,7 @@ export class StudentsService {
     await this.assertStudentInOrganization(organizationId, id);
 
     const student = await this.findEntityByIdOrThrow(id);
+    this.assertNoOngoingGroupRemoved(student, dto.groupIds);
     const profileBefore = await this.snapshotProfile(student, dto);
     const passwordSent = !!dto.password && !!(student as any).user;
     // Login o'quvchida emas, bog'langan akkauntda — yuborilgan qiymat bilan.
@@ -1229,6 +1308,7 @@ export class StudentsService {
     }
 
     // group assignment update (ManyToMany)
+    let joinBackdate: { groups: Group[]; date: string } | null = null;
     const shouldEnsureCurrentMonthPayments =
       Array.isArray(dto.groupIds) && dto.groupIds.length > 0;
     if (dto.groupIds) {
@@ -1258,6 +1338,21 @@ export class StudentsService {
 
       const tzGroup = groups[0] ?? (student as any).groups?.[0] ?? null;
       const today = this.todayInGroupTz(tzGroup);
+
+      // Yangi guruh(lar)ga o'tgan sanadan qo'shildi — sana yozishdan OLDIN
+      // tekshiriladi, a'zolik va to'lovlar esa saqlangandan keyin suriladi.
+      if (dto.groupJoinedAt) {
+        const joinDate = dayjs(dto.groupJoinedAt).format('YYYY-MM-DD');
+        const added = groups.filter((g) => !oldGroupIds.includes(g.id));
+        if (added.length && joinDate < today) {
+          await this.startDateService.assertJoinDate(
+            joinDate,
+            added,
+            effectiveCenterId,
+          );
+          joinBackdate = { groups: added, date: joinDate };
+        }
+      }
 
       await this.enrollmentsService.syncForStudent({
         studentId: id,
@@ -1361,6 +1456,7 @@ export class StudentsService {
     delete (dto as any).activatedAt;
     delete (dto as any).stoppedAt;
     delete (dto as any).groupIds;
+    delete (dto as any).groupJoinedAt;
     delete (dto as any).centerId;
     delete (dto as any).referrerId;
     delete (dto as any).userId;
@@ -1444,6 +1540,15 @@ export class StudentsService {
       await this.paymentsService
         .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
         .catch(() => undefined);
+    }
+
+    // `activatedAt` ham surilishi mumkin — shuning uchun save'dan KEYIN.
+    if (joinBackdate) {
+      await this.startDateService.applyJoin(
+        saved,
+        joinBackdate.groups,
+        joinBackdate.date,
+      );
     }
 
     const changedFields = this.diffProfile(
@@ -1904,7 +2009,11 @@ export class StudentsService {
     organizationId: number,
     id: number,
     status: StudentStatus,
-    body?: { returnLikelihood?: StudentReturnLikelihood; comment?: string },
+    body?: {
+      returnLikelihood?: StudentReturnLikelihood;
+      comment?: string;
+      startDate?: string;
+    },
     actorId?: number | null,
   ) {
     const student = await this.studentRepo.findOne({
@@ -1975,12 +2084,35 @@ export class StudentsService {
     const isReturn =
       prevStatus === StudentStatus.STOPPED ||
       prevStatus === StudentStatus.FINISHED;
+    // Birinchi faollashtirishda o'qishni boshlagan sana o'tgan kun bo'lishi
+    // mumkin ("bir hafta oldin kelgan, sistemaga endi kiritdik").
+    const firstActivation =
+      status === StudentStatus.ACTIVE &&
+      prevStatus !== StudentStatus.ACTIVE &&
+      (!isReturn || !student.activatedAt);
+    const tzGroup = (student as any).groups?.[0] ?? null;
+    const backdateFrom =
+      firstActivation && body?.startDate
+        ? dayjs(body.startDate).format('YYYY-MM-DD')
+        : null;
+    const startsInPast = backdateFrom !== null && backdateFrom < today;
+    if (startsInPast) {
+      await this.startDateService.assertDate(
+        backdateFrom!,
+        'startDate',
+        (student as any).centerId ?? null,
+        tzGroup,
+      );
+    }
+
     if (
       status === StudentStatus.ACTIVE &&
       prevStatus !== StudentStatus.ACTIVE
     ) {
-      if (!isReturn || !student.activatedAt) {
-        student.activatedAt = new Date();
+      if (firstActivation) {
+        student.activatedAt = startsInPast
+          ? this.startDateService.activatedAtFor(backdateFrom!, tzGroup)
+          : new Date();
       }
       student.stoppedAt = null;
     }
@@ -2046,6 +2178,9 @@ export class StudentsService {
       await this.paymentsService.ensurePaymentsForStudent(saved.id, {
         onlyCurrentMonth: true,
       });
+      if (startsInPast) {
+        await this.startDateService.applyActivation(saved, backdateFrom!);
+      }
     }
 
     if (status === StudentStatus.STOPPED) {

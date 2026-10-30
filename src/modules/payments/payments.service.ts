@@ -49,7 +49,17 @@ import {
   StudentBaseDiscountService,
   pickBaseDiscountForMonth,
 } from '@/modules/students/student-base-discount.service';
-import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
+import {
+  EnrollmentsService,
+  EnrollmentWindow,
+  pickWindowForMonth,
+  windowsForMonth,
+} from '@/modules/enrollments/enrollments.service';
+import {
+  BackdatePreview,
+  BackdatePreviewRow,
+  BackdateSimulation,
+} from '@/modules/payments/backdate-preview.interface';
 import { UpdatePaymentDto } from '@/modules/payments/dto/update-payment.dto';
 import { CalculatePaymentDto } from '@/modules/payments/dto/calculate-payment.dto';
 import { User } from '@/modules/users/entities/user.entity';
@@ -2268,6 +2278,13 @@ export class PaymentsService {
     forMonth: string; // YYYY-MM-01
     studentActiveEndExclusive?: string;
     manualExcludedAmount?: number;
+    /**
+     * Shu (o'quvchi, guruh) ning BARCHA a'zolik oynalari o'rniga ishlatiladi —
+     * faqat preview uchun (DB'dagi oyna hali o'zgarmagan). `undefined` — DB'dan.
+     */
+    windowsOverride?: EnrollmentWindow[];
+    /** Preview uchun tayyor tekin davr (`undefined` — keshdan/DB'dan). */
+    freeWindowOverride?: FreeWindow | null;
   }): Promise<{
     studentActiveStart: string;
     lessonsPlanned: number;
@@ -2284,17 +2301,20 @@ export class PaymentsService {
       forMonth,
       studentActiveEndExclusive,
       manualExcludedAmount = 0,
+      windowsOverride,
+      freeWindowOverride,
     } = args;
 
     // O'quvchining shu GURUHDAGI a'zolik oynasi. Oy o'rtasida qo'shilgan bo'lsa
     // proratsiya `joinedAt` dan boshlanadi; guruhdan chiqqan (yoki boshqa
     // guruhga ko'chirilgan) bo'lsa `leftAt` dan keyingi darslar to'lovga
     // kirmaydi — bu chegara har qanday qayta hisoblashda saqlanib qoladi.
-    const { joinedAt, leftAt } = await this.resolveEnrollmentWindow(
-      student.id,
-      group.id,
-      forMonth,
-    );
+    const { joinedAt, leftAt } = windowsOverride
+      ? (pickWindowForMonth(windowsOverride, forMonth) ?? {
+          joinedAt: null,
+          leftAt: null,
+        })
+      : await this.resolveEnrollmentWindow(student.id, group.id, forMonth);
 
     const studentActiveStart = this.computeStudentActiveStartForMonth({
       student,
@@ -2311,13 +2331,18 @@ export class PaymentsService {
     );
 
     await this.loadGroupCalendar(group);
-    const enrollmentWindows =
-      await this.enrollmentsService.resolveWindowsForMonth(
-        student.id,
-        group.id,
-        forMonth,
-      );
-    const freeWindow = await this.resolveFreeWindow(student);
+    const enrollmentWindows = windowsOverride
+      ? windowsForMonth(windowsOverride, forMonth)
+      : await this.enrollmentsService.resolveWindowsForMonth(
+          student.id,
+          group.id,
+          forMonth,
+        );
+    // Preview nusxalari bilan hisoblangan tekin davr umumiy keshga tushmaydi.
+    const freeWindow =
+      freeWindowOverride !== undefined
+        ? freeWindowOverride
+        : await this.resolveFreeWindow(student);
     const { lessonsPlanned, lessonsBillable, billableDates, lessonsPaused } =
       this.computeMonthLessonCounts({
         group,
@@ -2398,6 +2423,18 @@ export class PaymentsService {
     const enrollments = await this.enrollmentsService.listForStudent(
       student.id,
     );
+    const window = this.freeWindowFrom(student, enrollments);
+    this.freeWindowCache.set(key, window);
+    return window;
+  }
+
+  /** `resolveFreeWindow` ning sof qismi (keshsiz, DB'siz) — berilgan a'zoliklar bo'yicha. */
+  private freeWindowFrom(
+    student: Student,
+    enrollments: { joinedAt: string | Date; group?: Group | null }[],
+  ): FreeWindow | null {
+    const months = Number(student.freeMonths ?? 0);
+    if (months <= 0) return null;
     let from: string | null = null;
     for (const e of enrollments) {
       const tz = e.group?.timezone || 'Asia/Tashkent';
@@ -2412,15 +2449,12 @@ export class PaymentsService {
       const start = candidates.sort().at(-1) as string;
       if (!from || start < from) from = start;
     }
-
-    const window = from
+    return from
       ? {
           from,
           untilExclusive: dayjs(from).add(months, 'month').format('YYYY-MM-DD'),
         }
       : null;
-    this.freeWindowCache.set(key, window);
-    return window;
   }
 
   private computeStudentActiveStartForMonth(args: {
@@ -3051,6 +3085,247 @@ export class PaymentsService {
     };
   }
 
+  /**
+   * Orqaga sanalangan sanadan bugungacha nechta oy ochiq turishi kerak
+   * (ko'chirish bilan bir xil chegara: kamida 3, ko'pi bilan 24 oy).
+   */
+  monthsBackFor(date: string): number {
+    const months = dayjs()
+      .startOf('month')
+      .diff(dayjs(date).startOf('month'), 'month');
+    return Math.min(24, Math.max(3, months + 1));
+  }
+
+  /**
+   * Orqaga sanalash (guruh boshlanishi, o'quvchi qo'shilgan/faollashgan sana)
+   * to'lovlarga qanday ta'sir qilishini HISOBLAYDI — hech narsa yozmaydi.
+   * Front shu natijani ogohlantirish oynasida ko'rsatadi.
+   *
+   * Har bir simulyatsiyada `student`/`group` — o'zgartirilgan nusxalar,
+   * `windows` — yangi a'zolik oynalari. Mavjud qator (PAID ham) yangi
+   * hisob bilan solishtiriladi, chunki qo'llashda ular majburan qayta
+   * hisoblanadi (`rebillAfterBackdating`). Qator yo'q oy faqat faol o'quvchi
+   * uchun yaratiladi (`ensurePayments` qoidasi).
+   */
+  async previewBackdating(
+    sims: BackdateSimulation[],
+  ): Promise<BackdatePreview> {
+    // Umumiy keshlarga faqat HAQIQIY ma'lumot tushadi (jadval, chegirma).
+    // Nusxalarga bog'liq qismlar — a'zolik oynalari va tekin davr — override
+    // bilan uzatiladi: parallel haqiqiy qayta hisoblash ularni o'qib, noto'g'ri
+    // summa yozib qo'ymasligi kerak.
+    this.resetBillingCaches();
+    this.joinedAtCache.clear();
+    this.enrollmentsService.clearCache();
+
+    const rows: BackdatePreviewRow[] = [];
+    const currentMonth = dayjs().startOf('month').format('YYYY-MM-01');
+
+    for (const sim of sims) {
+      const { student, group, windows, fromMonth } = sim;
+      if (!group.schedules?.length) continue;
+      // Qo'llash ham shu oygacha qayta hisoblaydi — preview undan oshmaydi.
+      const lastMonth = dayjs(sim.toMonth ?? currentMonth);
+      const freeWindowOverride = await this.previewFreeWindow(sim, sims);
+
+      const existing = await this.paymentRepo
+        .createQueryBuilder('p')
+        .where('p.studentId = :studentId', { studentId: student.id })
+        .andWhere('p.groupId = :groupId', { groupId: group.id })
+        .andWhere('p.forMonth >= :fromMonth', { fromMonth })
+        .getMany();
+      const byMonth = new Map(
+        existing.map((p) => [dayjs(p.forMonth).format('YYYY-MM-01'), p]),
+      );
+
+      let cursor = dayjs(fromMonth).startOf('month');
+      while (!cursor.isAfter(lastMonth)) {
+        const forMonth = cursor.format('YYYY-MM-01');
+        cursor = cursor.add(1, 'month');
+        const row = byMonth.get(forMonth) as any;
+        if (!row && student.status !== StudentStatus.ACTIVE) continue;
+
+        const billing = await this.computeMonthBilling({
+          student,
+          group,
+          forMonth,
+          studentActiveEndExclusive: row
+            ? this.resolveActiveEndExclusive({
+                student,
+                group,
+                forMonth,
+                plannedStudyUntilDate: row.plannedStudyUntilDate,
+              })
+            : undefined,
+          manualExcludedAmount: Number(row?.manualExcludedAmount ?? 0),
+          windowsOverride: windows,
+          freeWindowOverride,
+        });
+        const noLessons = !billing.lessonsPlanned || !billing.lessonsBillable;
+        if (!row && noLessons) continue;
+
+        const newDue = noLessons ? 0 : billing.amountDue;
+        const currentDue = Number(row?.amountDue ?? 0);
+        if (row && Math.abs(newDue - currentDue) < 0.01) continue;
+
+        const amountPaid = Number(row?.amountPaid ?? 0);
+        rows.push({
+          studentId: student.id,
+          studentName:
+            `${student.firstName ?? ''} ${student.lastName ?? ''}`.trim(),
+          groupId: group.id,
+          groupName: group.name,
+          forMonth,
+          isNew: !row,
+          currentDue: this.round2(currentDue),
+          newDue: this.round2(newDue),
+          amountPaid: this.round2(amountPaid),
+          refund: this.round2(Math.max(0, amountPaid - newDue)),
+        });
+      }
+    }
+
+    const totals = { debtIncrease: 0, debtDecrease: 0, refund: 0 };
+    for (const r of rows) {
+      const before = Math.max(0, r.currentDue - r.amountPaid);
+      const after = Math.max(0, r.newDue - r.amountPaid);
+      if (after > before) totals.debtIncrease += after - before;
+      else totals.debtDecrease += before - after;
+      totals.refund += r.refund;
+    }
+
+    return {
+      rows,
+      totals: {
+        debtIncrease: this.round2(totals.debtIncrease),
+        debtDecrease: this.round2(totals.debtDecrease),
+        refund: this.round2(totals.refund),
+      },
+      paidSalaryMonths: await this.paidSalaryMonthsFor(rows),
+    };
+  }
+
+  /**
+   * Simulyatsiya uchun tekin davr (keshsiz): DB'dagi a'zoliklar, simulyatsiya
+   * qilinayotgan guruhniki esa taxminiy oynalar bilan — qo'llangandan keyingi
+   * holat bo'yicha. `student` nusxasidagi `activatedAt` ham hisobga olinadi.
+   */
+  private async previewFreeWindow(
+    sim: BackdateSimulation,
+    all: BackdateSimulation[],
+  ): Promise<FreeWindow | null> {
+    const { student } = sim;
+    if (Number(student.freeMonths ?? 0) <= 0) return null;
+    // Shu o'quvchining BARCHA simulyatsiya qilingan guruhlari (faollashtirishda
+    // hammasi birga suriladi) — tekin davr eng erta sanadan boshlanadi.
+    const simulated = all.filter((x) => x.student.id === student.id);
+    const simulatedIds = new Set(simulated.map((x) => x.group.id));
+    const db = await this.enrollmentsService.listForStudent(student.id);
+    const entries: { joinedAt: string | Date; group?: Group | null }[] =
+      db.filter((e) => !simulatedIds.has(e.groupId));
+    for (const x of simulated) {
+      const own = x.windows
+        ? x.windows.map((w) => ({ joinedAt: w.joinedAt }))
+        : db
+            .filter((e) => e.groupId === x.group.id)
+            .map((e) => ({ joinedAt: e.joinedAt }));
+      for (const w of own)
+        entries.push({ joinedAt: w.joinedAt, group: x.group });
+    }
+    return this.freeWindowFrom(student, entries);
+  }
+
+  /** Preview qatorlaridagi (guruh, oy) lar uchun oyligi berilgan o'qituvchilar. */
+  private async paidSalaryMonthsFor(rows: BackdatePreviewRow[]) {
+    const pairs = new Map<string, { groupId: number; forMonth: string }>();
+    for (const r of rows) {
+      pairs.set(`${r.groupId}|${r.forMonth}`, {
+        groupId: r.groupId,
+        forMonth: r.forMonth,
+      });
+    }
+    const result: BackdatePreview['paidSalaryMonths'] = [];
+    const seen = new Set<string>();
+    for (const { groupId, forMonth } of pairs.values()) {
+      const teacherIds =
+        await this.teacherEarningsService.teachersForGroupMonth(
+          groupId,
+          forMonth,
+        );
+      if (!teacherIds.length) continue;
+      const paid: { userId: number; name: string }[] =
+        await this.dataSource.query(
+          `SELECT s."userId",
+                  TRIM(COALESCE(u."firstName", '') || ' ' || COALESCE(u."lastName", '')) AS "name"
+             FROM "staff_salaries" s
+             JOIN "users" u ON u."id" = s."userId"
+            WHERE s."userId" = ANY($1::int[])
+              AND TO_CHAR(s."forMonth", 'YYYY-MM-01') = $2
+              AND s."status" = 'paid'`,
+          [teacherIds, forMonth],
+        );
+      for (const p of paid) {
+        const key = `${p.userId}|${forMonth}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push({
+          teacherId: Number(p.userId),
+          teacherName: p.name,
+          forMonth,
+        });
+      }
+    }
+    return result.sort((a, b) => a.forMonth.localeCompare(b.forMonth));
+  }
+
+  /**
+   * Orqaga sanalash QO'LLANGANDAN keyin: yetishmagan oylar yaratiladi va
+   * `[fromDate oyi .. toMonth]` oralig'idagi qatorlar (PAID ham) majburan
+   * qayta hisoblanadi. Oraliq ataylab chegaralangan — undan keyingi oylarga
+   * sana o'zgarishi ta'sir qilmaydi, ularni qayta narxlash shart emas.
+   * O'qituvchi komissiyasi pul o'zgargan oylar uchun avtomatik (carryover
+   * bilan) qayta hisoblanadi.
+   */
+  async rebillAfterBackdating(args: {
+    studentIds: number[];
+    groupIds: number[];
+    fromDate: string; // YYYY-MM-DD
+    toMonth?: string; // YYYY-MM-01, default — joriy oy
+  }) {
+    const { studentIds, groupIds, fromDate } = args;
+    if (!studentIds.length || !groupIds.length) return;
+
+    const maxMonthsBack = this.monthsBackFor(fromDate);
+    for (const studentId of studentIds) {
+      await this.ensurePaymentsForStudent(studentId, {
+        onlyCurrentMonth: false,
+        maxMonthsBack,
+        groupIds,
+      });
+    }
+
+    this.resetBillingCaches();
+    this.joinedAtCache.clear();
+    this.enrollmentsService.clearCache();
+
+    const fromMonth = dayjs(fromDate).startOf('month').format('YYYY-MM-01');
+    const toMonth =
+      args.toMonth ?? dayjs().startOf('month').format('YYYY-MM-01');
+    const rows = await this.paymentRepo
+      .createQueryBuilder('payments')
+      .leftJoinAndSelect('payments.student', 'student')
+      .leftJoinAndSelect('payments.group', 'group')
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .where('payments.studentId IN (:...studentIds)', { studentIds })
+      .andWhere('payments.groupId IN (:...groupIds)', { groupIds })
+      .andWhere('payments.forMonth BETWEEN :fromMonth AND :toMonth', {
+        fromMonth,
+        toMonth,
+      })
+      .getMany();
+    await this.recalcOpenPaymentRows(rows, { force: true });
+  }
+
   private computeAmountDue(args: {
     /** Shu oy uchun amaldagi shaxsiy narx (`resolvePersonalFeeForMonth`). */
     personalFee: number;
@@ -3460,7 +3735,12 @@ export class PaymentsService {
 
   async ensurePaymentsForStudent(
     studentId: number,
-    opts: { onlyCurrentMonth: boolean; maxMonthsBack?: number } = {
+    opts: {
+      onlyCurrentMonth: boolean;
+      maxMonthsBack?: number;
+      /** Berilsa faqat shu guruhlar uchun (orqaga sanalashda boshqa guruhlarga tegmaslik). */
+      groupIds?: number[];
+    } = {
       onlyCurrentMonth: false,
     },
   ) {
@@ -3470,6 +3750,11 @@ export class PaymentsService {
     });
     if (!student) return;
     if (student.status !== StudentStatus.ACTIVE) return;
+    if (opts.groupIds) {
+      student.groups = (student.groups ?? []).filter((g) =>
+        opts.groupIds!.includes(g.id),
+      );
+    }
     await this.ensurePaymentsForStudents([student], opts);
   }
 

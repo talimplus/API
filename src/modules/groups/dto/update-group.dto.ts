@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -173,6 +174,19 @@ export class UpdateGroupDto {
   scheduleEffectiveFrom?: string;
 
   @ApiProperty({
+    required: false,
+    type: [Number],
+    description:
+      "`startDate` o'zgarganda: a'zoligi ham yangi sanaga suriladigan " +
+      "o'quvchilar (`POST /groups/:id/start-date/preview` dagi `candidates`). " +
+      "Berilmasa — hech kim (faqat guruh chegarasi o'zgaradi).",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  backdateStudentIds?: number[];
+
+  @ApiProperty({
     example: 3,
     description:
       "Gurux qaysi centerga qo'shilayotgani, centerId faqat admin gurux yaratayotganda yuboriladi boshqa vaqt kerak emas",
@@ -181,4 +195,18 @@ export class UpdateGroupDto {
   @IsOptional()
   @IsNumber()
   centerId?: number;
+
+  @ApiProperty({
+    example: false,
+    required: false,
+    description:
+      "Xona/o'qituvchi band bo'lsa ham saqlash. Default — false: to'qnashuv " +
+      "bo'lsa 422 (`roomId` / `teacherId`). Front avval ogohlantirish " +
+      "ko'rsatadi, foydalanuvchi tasdiqlasa true yuboriladi (masalan ikki " +
+      "o'qituvchi guruhlarini almashtirganda — ketma-ket saqlashda oraliq " +
+      "qadam doim to'qnashadi).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  allowScheduleConflicts?: boolean;
 }

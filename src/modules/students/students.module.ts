@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Student } from '@/modules/students/entities/students.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { StudentsService } from '@/modules/students/students.service';
+import { StudentStartDateService } from '@/modules/students/student-start-date.service';
 import { StudentsController } from './students.controller';
 import { StudentAliasController } from './student-alias.controller';
 import { CentersModule } from '@/modules/centers/centers.module';
@@ -44,7 +45,7 @@ import { StudentHistoryModule } from '@/modules/student-history/student-history.
     forwardRef(() => PaymentsModule),
   ],
   controllers: [StudentsController, StudentAliasController],
-  providers: [StudentsService],
+  providers: [StudentsService, StudentStartDateService],
   exports: [StudentsService],
 })
 export class StudentsModule {}

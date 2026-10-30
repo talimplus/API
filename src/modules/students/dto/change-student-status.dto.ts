@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 
@@ -26,4 +26,16 @@ export class ChangeStudentStatusDto {
   @IsOptional()
   @IsEnum(StudentReturnLikelihood)
   returnLikelihood?: StudentReturnLikelihood;
+
+  @ApiProperty({
+    required: false,
+    example: '2026-10-20',
+    description:
+      "Faqat BIRINCHI faollashtirishda (new/ignored → active): o'quvchi " +
+      "darsga qatnay boshlagan sana (o'tgan sana bo'lishi mumkin). To'lov " +
+      'shu sanadan hisoblanadi. Default — bugun.',
+  })
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
 }

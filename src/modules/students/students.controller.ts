@@ -26,6 +26,7 @@ import { ApiBody } from '@nestjs/swagger';
 import { instanceToPlain } from 'class-transformer';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 import { ChangeStudentStatusDto } from '@/modules/students/dto/change-student-status.dto';
+import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import {
@@ -213,6 +214,29 @@ export class StudentsController {
       req.user.organizationId,
       dto,
       req.user,
+    );
+  }
+
+  @Post(':id/start-date/preview')
+  @RequirePermissions('students.changeStatus', 'students.update')
+  @ApiOperation({
+    summary: "O'qishni boshlagan sanani orqaga qo'yishning ta'siri (preview)",
+    description:
+      'Hech narsa yozmaydi. `groupIds` siz — birinchi faollashtirish ' +
+      '(`change-status` dagi `startDate`), `groupIds` bilan — tahrirda yangi ' +
+      "guruhga qo'shilgan sana (`groupJoinedAt`). Javobda o'zgaradigan to'lov " +
+      "qatorlari, jami summalar va o'qituvchi oyligi berilgan oylar.",
+  })
+  @ApiBody({ type: PreviewStudentStartDateDto })
+  previewStartDate(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PreviewStudentStartDateDto,
+  ) {
+    return this.studentService.previewStartDate(
+      req.user.organizationId,
+      id,
+      dto,
     );
   }
 

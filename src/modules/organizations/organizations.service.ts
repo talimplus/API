@@ -1,3 +1,4 @@
+import { dayjs } from '@/shared/utils/dayjs';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -43,6 +44,9 @@ export class OrganizationsService {
       logoUrl: org.logoUrl ?? null,
       faviconUrl: org.faviconUrl ?? null,
       brandingUpdatedAt: org.brandingUpdatedAt ?? null,
+      // Orqaga sanalashning quyi chegarasi (kalendarda bundan oldingi kunlar
+      // yopiladi; backend ham 422 beradi — organization-opened.util.ts).
+      openedOn: dayjs(org.createdAt).tz('Asia/Tashkent').format('YYYY-MM-DD'),
     };
   }
 
