@@ -37,6 +37,7 @@ import {
 } from '@/modules/groups/group-start-date.service';
 import { PreviewGroupStartDateDto } from '@/modules/groups/dto/preview-group-start-date.dto';
 import { assertNotBeforeOrganization } from '@/modules/organizations/organization-opened.util';
+import { returningRows } from '@/shared/utils/returning-rows';
 
 /** To'qnashuv xabarini o'zbekcha yozish uchun (xabar backendda yig'iladi). */
 const DAY_LABELS_UZ: Record<WeekDay, string> = {
@@ -96,8 +97,9 @@ export class GroupsService {
       centerFilterSql = ` AND g."centerId" = $2`;
     }
 
-    const finished: { id: number }[] = await this.groupRepo.query(
-      `
+    const finished = returningRows<{ id: number }>(
+      await this.groupRepo.query(
+        `
       UPDATE "groups" g
       SET "status" = $${params.length + 1}
       WHERE g."status" = $${params.length + 2}
@@ -110,10 +112,11 @@ export class GroupsService {
         ${centerFilterSql}
       RETURNING g."id"
     `,
-      [...params, GroupStatus.FINISHED, GroupStatus.STARTED],
+        [...params, GroupStatus.FINISHED, GroupStatus.STARTED],
+      ),
     );
 
-    if (finished?.length) {
+    if (finished.length) {
       await this.syncStudentStatusesForGroups(finished.map((r) => r.id));
     }
   }
@@ -1091,6 +1094,7 @@ export class GroupsService {
     days?: WeekDay[],
     page?: number,
     perPage?: number,
+    statuses?: GroupStatus[],
   ) {
     await this.finishExpiredGroups(organizationId, centerId);
 
@@ -1136,6 +1140,11 @@ export class GroupsService {
 
     if (days?.length) {
       query.andWhere('schedule.day IN (:...days)', { days });
+    }
+
+    // Faol (new, started) va yopilgan (finished) guruhlar alohida ko'rinadi.
+    if (statuses?.length) {
+      query.andWhere('group.status IN (:...statuses)', { statuses });
     }
 
     const [data, total] = await query

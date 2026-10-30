@@ -18,6 +18,13 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { DashboardMonthRow } from '@/modules/statistics/dto/dashboard-response.dto';
 
+/** Bitta to'lov qatorining tasdiqlash kutayotgan cheklari summasi. */
+const PENDING_SQL = `(SELECT COALESCE(SUM(r.amount), 0) FROM payment_receipts r
+  WHERE r."paymentId" = p.id AND r.status = :pendingStatus)`;
+
+/** O'quvchi oy pulini to'liq topshirgan (tasdiqlangan + tasdiq kutayotgan). */
+const HANDED_OVER_SQL = `(p.amountPaid + ${PENDING_SQL} >= p.amountDue)`;
+
 @Injectable()
 export class StatisticsService {
   constructor(
@@ -136,16 +143,24 @@ export class StatisticsService {
         'COALESCE(SUM(p.amountPaid), 0) as "amountPaid"',
         'COALESCE(SUM(p.amountDue - p.amountPaid), 0) as "remainingAmount"',
         'COALESCE(SUM(p.refundedAmount), 0) as "refundedAmount"',
+        // Reception olgan, admin hali tasdiqlamagan pul (shu oylar uchun).
+        `COALESCE(SUM(${PENDING_SQL}), 0) as "pendingAmount"`,
+        `SUM(CASE WHEN ${PENDING_SQL} > 0 THEN 1 ELSE 0 END) as "pendingCount"`,
+        // O'quvchilardan hali olinadigan pul: qarzdan tasdiq kutayotgani ayiriladi.
+        `COALESCE(SUM(GREATEST(0, p.amountDue - p.amountPaid - ${PENDING_SQL})), 0) as "collectableAmount"`,
         'COUNT(p.id) as "totalCount"',
         `SUM(CASE WHEN p.status = '${PaymentStatus.PAID}' THEN 1 ELSE 0 END) as "paidCount"`,
-        `SUM(CASE WHEN p.status = '${PaymentStatus.PARTIAL}' THEN 1 ELSE 0 END) as "partialCount"`,
-        `SUM(CASE WHEN p.status = '${PaymentStatus.UNPAID}' THEN 1 ELSE 0 END) as "unpaidCount"`,
+        // To'lovlar ro'yxati filtri bilan bir xil: pulni to'liq topshirib,
+        // tasdiq kutayotgan qator "qisman/to'lanmagan" emas (pendingCount da).
+        `SUM(CASE WHEN p.status = '${PaymentStatus.PARTIAL}' AND NOT ${HANDED_OVER_SQL} THEN 1 ELSE 0 END) as "partialCount"`,
+        `SUM(CASE WHEN p.status = '${PaymentStatus.UNPAID}' AND NOT ${HANDED_OVER_SQL} THEN 1 ELSE 0 END) as "unpaidCount"`,
       ])
       .leftJoin('p.student', 's')
       .leftJoin('s.center', 'sc')
       .where(studentScope.clause, studentScope.params)
       .andWhere('p.forMonth >= :fromMonthStart', { fromMonthStart })
-      .andWhere('p.forMonth < :endExclusive', { endExclusive });
+      .andWhere('p.forMonth < :endExclusive', { endExclusive })
+      .setParameter('pendingStatus', PaymentReceiptStatus.PENDING);
 
     const expensesAggQb = this.expenseRepo
       .createQueryBuilder('e')
@@ -287,6 +302,9 @@ export class StatisticsService {
       amountPaid: n(paymentsRaw?.amountPaid),
       refundedAmount: n(paymentsRaw?.refundedAmount),
       remainingAmount: n(paymentsRaw?.remainingAmount),
+      pendingAmount: n(paymentsRaw?.pendingAmount),
+      pendingCount: n(paymentsRaw?.pendingCount),
+      collectableAmount: n(paymentsRaw?.collectableAmount),
       totalCount: n(paymentsRaw?.totalCount),
       paidCount: n(paymentsRaw?.paidCount),
       partialCount: n(paymentsRaw?.partialCount),

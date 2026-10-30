@@ -28,6 +28,26 @@ class PaymentsDashboardDto extends MoneySummaryDto {
 
   @ApiProperty({ example: 30 })
   unpaidCount: number;
+
+  @ApiProperty({
+    example: 400000,
+    description:
+      'Tasdiqlash kutayotgan cheklar summasi (reception olgan, admin tasdiqlamagan)',
+  })
+  pendingAmount: number;
+
+  @ApiProperty({
+    example: 2,
+    description: "Tasdiqlash kutayotgan to'lov qatorlari soni",
+  })
+  pendingCount: number;
+
+  @ApiProperty({
+    example: 150000,
+    description:
+      "O'quvchilardan hali olinishi kerak: remainingAmount − pendingAmount (qator bo'yicha, ≥ 0)",
+  })
+  collectableAmount: number;
 }
 
 class PayrollDashboardDto extends MoneySummaryDto {

@@ -322,6 +322,12 @@ amountDue = baseMonthlyFee
   `UsersService.findOne/update` bo'sh id da 404 beradi: TypeORM `where: { id: undefined }`
   shartsiz bo'lib, birinchi foydalanuvchini qaytaradi.
 - Muddatlar: `dueDate` = oyning 10-sanasi, `hardDueDate` = 15-sanasi (guruh timezone'ida).
+- **Tasdiqlash kutilmoqda** (2026-10-30): oy pulini to'liq topshirgan
+  (`amountPaid + pending >= amountDue`) qator — reception javobgarligida:
+  `isOverdue = false`, `status=unpaid|partial` va `overdueOnly` filtrlarida
+  chiqmaydi; `GET /payments?pendingOnly=true` — faqat `pending` cheki borlar.
+  Dashboard `payments.pendingAmount/pendingCount/collectableAmount`
+  (`collectable = Σ max(0, due − paid − pending)`).
 - **Cheklar va parallellik:** `submitReceipt` to'lov qatorini `FOR UPDATE` qulflab
   qoldiqni qayta tekshiradi (ikki xodim bir vaqtda ortiqcha qabul qila olmaydi;
   `available < 0` bo'lsa ham rad etiladi). `confirmReceipt` chekni qulflab holatini
@@ -441,6 +447,11 @@ finished→ active
 - `activatedAt` — **birinchi** faollashish (new/ignored → active) sanasi, o'tgan
   oylarning quyi chegarasi. **Qaytishda (stopped/finished → active) qayta
   yozilmaydi** — ilgari yozilardi va to'xtashdan oldingi oylar qarzi o'chib ketardi.
+- **To'xtatish sanasi** (2026-10-30): `change-status?status=stopped` body `stopDate`
+  (exclusive, o'tgan kun bo'lishi mumkin, default bugun). Bugundan keyin, ochilishdan,
+  `activatedAt` va ochiq a'zolik boshlanishidan oldin — 422; shu kundan keyin
+  `present/late` davomati bo'lsa — 422 (`assertStopDate`). To'lovlar to'xtatish
+  OYIdan qayta hisoblanadi (o'tgan oy bo'lsa `recalcOpenPaymentRows` force).
 - To'xtatishda (`stopped`) o'quvchining **barcha a'zolik oynalari yopiladi**
   (`leftAt` = bugun), qaytishda har bir guruhda **yangi oyna** ochiladi — to'xtab
   turgan davr to'lovga kirmaydi. `stoppedAt` ham saqlanadi (joriy oy chegarasi).
@@ -538,6 +549,34 @@ eski o'qituvchi o'tgan darslar uchun foizini saqlaydi.
 
 Orqaga sanalangan ko'chirishda `ensurePayments` oynasi ko'chirish oyidan
 bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
+
+### 6.5.4 Sobiq guruhlar va davomat tarixi (2026-10-30)
+
+- `GET /students/:id/attendance` (`attendance.view`, `StudentAttendanceService`):
+  BARCHA guruhlardagi davomat (ko'chirilgan/tugagan ham) — `groups` (davr,
+  kimga ko'chirilgan, soni) + `items` (har belgi, kim qo'ygani). Ota-ona bilan
+  bahs uchun.
+- `GET /groups/:id/members` (`groups.view`, `GroupMembersService`): guruhda
+  o'qigan hamma (a'zolik oynalaridan) — sobiqlar ham; `debt` faqat `payments.view` bilan.
+- `GET /groups?status=new,started|finished` — faol / tugagan guruhlar alohida
+  (front default — faol). Tugagan guruh jurnali va a'zolari ochiladi (faqat o'qish).
+
+### 6.5.5 Guruhni yakunlash (2026-10-30)
+
+`POST /groups/:id/finish` (`groups.changeStatus`; ko'chirish bo'lsa `students.transfer`
+ham, `GroupFinishController` → `StudentsService.finishGroup`):
+`{ endDate, targetGroupId?, studentIds?, reason? }`.
+- `endDate` — OXIRGI dars kuni (inclusive): bugundan keyin, guruh boshlanishidan va
+  tashkilot ochilishidan oldin emas; undan keyin davomat bo'lsa — 422.
+- Hamma tekshiruv yozishdan OLDIN (DB tranzaksiya emas — servislar o'z repo'lari bilan).
+- Belgilanganlar `transferStudents` bilan `endDate + 1` kundan ko'chadi; `new` maqsad
+  guruh avtomatik boshlanadi (tugash sanasi va xona shart). Qolganlar guruh bilan
+  `finished` bo'ladi, qarz shu guruhda qoladi.
+- `closeGroupOn`: `changeStatus(FINISHED)` o'tgan `endDate` da erta qaytadi, shuning
+  uchun o'quvchilar holati va to'lovlar (PAID ham) aniq qayta hisoblanadi.
+- ⚠️ `repo.query('UPDATE … RETURNING')` TypeORM'da `[rows, rowCount]` qaytaradi —
+  `returningRows()` (`shared/utils/returning-rows.ts`). Ilgari shu sabab muddati
+  o'tib avtomatik yopilgan guruh o'quvchilari `finished` bo'lmasdi.
 
 ### 6.5.3 O'quvchi tarixi (`student-history`, 2026-10-13)
 

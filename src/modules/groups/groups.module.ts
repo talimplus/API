@@ -21,6 +21,8 @@ import { GroupPause } from '@/modules/groups/entities/group-pause.entity';
 import { GroupPausesService } from './group-pauses.service';
 import { GroupTimelineService } from './group-timeline.service';
 import { GroupStartDateService } from './group-start-date.service';
+import { GroupMembersService } from './group-members.service';
+import { RolesModule } from '@/modules/roles/roles.module';
 import { EnrollmentsModule } from '@/modules/enrollments/enrollments.module';
 import { Room } from '@/modules/rooms/entities/rooms.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
@@ -43,6 +45,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     GroupFeeModule,
     ScheduleBoardModule,
     EnrollmentsModule,
+    RolesModule,
     forwardRef(() => GroupScheduleModule),
     forwardRef(() => AttendanceModule),
     forwardRef(() => PaymentsModule),
@@ -54,6 +57,7 @@ import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendan
     GroupPausesService,
     GroupTimelineService,
     GroupStartDateService,
+    GroupMembersService,
   ],
   exports: [GroupsService],
 })

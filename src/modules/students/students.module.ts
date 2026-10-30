@@ -5,6 +5,8 @@ import { Group } from '@/modules/groups/entities/groups.entity';
 import { StudentsService } from '@/modules/students/students.service';
 import { StudentStartDateService } from '@/modules/students/student-start-date.service';
 import { StudentsController } from './students.controller';
+import { GroupFinishController } from './group-finish.controller';
+import { RolesModule } from '@/modules/roles/roles.module';
 import { StudentAliasController } from './student-alias.controller';
 import { CentersModule } from '@/modules/centers/centers.module';
 import { UsersModule } from '@/modules/users/users.module';
@@ -39,12 +41,17 @@ import { StudentHistoryModule } from '@/modules/student-history/student-history.
     EnrollmentsModule,
     StudentBaseDiscountModule,
     StudentHistoryModule,
+    RolesModule,
     forwardRef(() => GroupsModule),
     forwardRef(() => ReferralsModule),
     forwardRef(() => AttendanceModule),
     forwardRef(() => PaymentsModule),
   ],
-  controllers: [StudentsController, StudentAliasController],
+  controllers: [
+    StudentsController,
+    StudentAliasController,
+    GroupFinishController,
+  ],
   providers: [StudentsService, StudentStartDateService],
   exports: [StudentsService],
 })

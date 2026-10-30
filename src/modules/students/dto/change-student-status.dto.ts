@@ -38,4 +38,18 @@ export class ChangeStudentStatusDto {
   @IsOptional()
   @IsDateString()
   startDate?: string;
+
+  @ApiProperty({
+    required: false,
+    example: '2026-10-20',
+    description:
+      "Faqat `stopped` uchun: o'quvchi o'qishni to'xtatgan kun (o'tgan sana " +
+      "bo'lishi mumkin, exclusive — shu kundan boshlab darslar to'lovga " +
+      "kirmaydi). Bugundan keyin, faollashgan/guruhga qo'shilgan kundan oldin " +
+      "bo'lolmaydi; shu kundan keyin 'keldi/kechikdi' davomati bo'lsa — 422. " +
+      'Default — bugun.',
+  })
+  @IsOptional()
+  @IsDateString()
+  stopDate?: string;
 }

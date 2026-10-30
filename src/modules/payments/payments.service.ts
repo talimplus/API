@@ -82,6 +82,11 @@ export interface PaymentListFilters {
   status?: PaymentStatus;
   forMonth?: string; // YYYY-MM
   overdueOnly?: boolean;
+  /**
+   * Faqat tasdiqlash kutayotgan cheki bor qatorlar (reception pulni olgan,
+   * admin hali tasdiqlamagan).
+   */
+  pendingOnly?: boolean;
   studentId?: number;
   groupId?: number;
   teacherId?: number;
@@ -2597,7 +2602,12 @@ export class PaymentsService {
     if (!student) return;
     if (!student.stoppedAt) return;
 
-    const currentMonth = dayjs().startOf('month').format('YYYY-MM-01');
+    // To'xtatish sanasi o'tgan oyga tushishi mumkin — o'sha oydan boshlab.
+    const tz = student.groups?.[0]?.timezone || 'Asia/Tashkent';
+    const stopMonth = dayjs(student.stoppedAt)
+      .tz(tz)
+      .startOf('month')
+      .format('YYYY-MM-01');
 
     const payments = await this.paymentRepo
       .createQueryBuilder('payments')
@@ -2605,10 +2615,18 @@ export class PaymentsService {
       .leftJoinAndSelect('payments.group', 'group')
       .leftJoinAndSelect('group.schedules', 'schedule')
       .where('payments.studentId = :studentId', { studentId })
-      .andWhere('payments.forMonth >= :forMonth', { forMonth: currentMonth })
+      .andWhere('payments.forMonth >= :forMonth', { forMonth: stopMonth })
       .getMany();
 
     if (!payments.length) return;
+
+    // O'tgan oy(lar) ham tegsa — umumiy qayta hisoblash (qulf, chek bor qator
+    // o'chmaydi, ortiqcha pul refundga, bo'sh qator o'chadi, komissiya).
+    const currentMonth = dayjs().tz(tz).startOf('month').format('YYYY-MM-01');
+    if (stopMonth < currentMonth) {
+      await this.recalcOpenPaymentRows(payments, { force: true });
+      return;
+    }
 
     const toSave: Payment[] = [];
     for (const p of payments as any[]) {
@@ -4102,6 +4120,7 @@ export class PaymentsService {
       status,
       forMonth,
       overdueOnly,
+      pendingOnly,
       studentId,
       groupId,
       teacherId,
@@ -4130,8 +4149,25 @@ export class PaymentsService {
       throw new BadRequestException('centerId is required');
     }
 
+    // Tasdiqlash kutayotgan cheklar summasi (qator bo'yicha).
+    const pendingSql = `(SELECT COALESCE(SUM(r.amount), 0) FROM payment_receipts r
+        WHERE r."paymentId" = payments.id AND r.status = :pendingStatus)`;
+    // O'quvchi oy pulini to'liq topshirgan (tasdiqlangan + tasdiq kutayotgan):
+    // undan boshqa hech narsa olinmaydi — bu qator endi reception javobgarligida.
+    const handedOverSql = `(payments."amountPaid" + ${pendingSql} >= payments."amountDue")`;
+    const pendingParams = { pendingStatus: PaymentReceiptStatus.PENDING };
+
     if (status) {
       query.andWhere('payments.status = :status', { status });
+      // "To'lanmagan"/"Qisman" — o'quvchidan hali olinadigan qatorlar. Pulni
+      // to'liq topshirib, tasdiq kutayotganlar "Tasdiqlash kutilmoqda" filtrida.
+      if (status !== PaymentStatus.PAID) {
+        query.andWhere(`NOT ${handedOverSql}`, pendingParams);
+      }
+    }
+
+    if (pendingOnly) {
+      query.andWhere(`${pendingSql} > 0`, pendingParams);
     }
 
     if (studentId) {
@@ -4169,6 +4205,8 @@ export class PaymentsService {
       query.andWhere('payments.hardDueDate IS NOT NULL');
       query.andWhere('payments.status != :paid', { paid: PaymentStatus.PAID });
       query.andWhere('payments.hardDueDate < CURRENT_DATE');
+      // Pulni topshirgan (tasdiq kutayotgan) o'quvchi kechikkan emas.
+      query.andWhere(`NOT ${handedOverSql}`, pendingParams);
     }
 
     // Oraliq bo'yicha filter: to'lov OYI (forMonth) oraliqqa tushsa oladi.
@@ -4233,9 +4271,6 @@ export class PaymentsService {
         const hardDue = p.hardDueDate
           ? dayjs(p.hardDueDate).format('YYYY-MM-DD')
           : null;
-        const isOverdue =
-          !!hardDue && today > hardDue && p.status !== PaymentStatus.PAID;
-
         const pending = pendingByPaymentId.get(Number(p.id)) ?? {
           pendingAmount: 0,
           pendingReceiptsCount: 0,
@@ -4249,6 +4284,12 @@ export class PaymentsService {
         const receivedAmount = this.round2(amountPaid + pending.pendingAmount);
         // O'quvchidan hali olinishi kerak bo'lgan summa.
         const payableNow = this.round2(Math.max(0, amountDue - receivedAmount));
+        // Pulni to'liq topshirgan (tasdiq kutayotgan) o'quvchi kechikkan emas.
+        const isOverdue =
+          !!hardDue &&
+          today > hardDue &&
+          p.status !== PaymentStatus.PAID &&
+          payableNow > 0;
 
         const paymentForMonth = p.forMonth
           ? dayjs(p.forMonth).startOf('month').format('YYYY-MM-01')
@@ -4556,6 +4597,7 @@ export class PaymentsService {
     }
 
     if (filters.overdueOnly) parts.push('Faqat kechikkanlar');
+    if (filters.pendingOnly) parts.push('Tasdiqlash kutilmoqda');
     if (filters.search?.trim())
       parts.push(`Qidiruv: "${filters.search.trim()}"`);
 
@@ -4584,6 +4626,7 @@ export class PaymentsService {
     if (filters.studentId) parts.push(`student-${filters.studentId}`);
     if (filters.status) parts.push(filters.status);
     if (filters.overdueOnly) parts.push('overdue');
+    if (filters.pendingOnly) parts.push('pending');
     parts.push(dayjs().format('YYYY-MM-DD'));
 
     return `${parts.join('_')}.xlsx`;

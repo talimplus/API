@@ -13,6 +13,7 @@ import {
 import { GroupsService } from './groups.service';
 import { GroupPausesService } from './group-pauses.service';
 import { GroupTimelineService } from './group-timeline.service';
+import { GroupMembersService } from './group-members.service';
 import { CreateGroupPauseDto } from './dto/group-pause.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
@@ -34,6 +35,7 @@ export class GroupsController {
     private readonly groupsService: GroupsService,
     private readonly groupPausesService: GroupPausesService,
     private readonly groupTimelineService: GroupTimelineService,
+    private readonly groupMembersService: GroupMembersService,
   ) {}
 
   @Post()
@@ -129,6 +131,13 @@ export class GroupsController {
   @ApiQuery({ name: 'teacherId', required: false, type: Number })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'perPage', required: false })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    description:
+      'Vergul bilan: `new,started` — faol guruhlar, `finished` — yopilgan/tugagan. Berilmasa — hammasi.',
+    example: 'new,started',
+  })
   findAll(
     @Req() req: any,
     @Query('centerId') centerId?: number,
@@ -138,6 +147,7 @@ export class GroupsController {
     @Query('page') page?: number,
     @Query('days') days?: WeekDay[],
     @Query('perPage') perPage?: number,
+    @Query('status') status?: string,
   ) {
     const isAdmin =
       req.user.role === UserRole.ADMIN ||
@@ -161,7 +171,33 @@ export class GroupsController {
       days,
       page,
       perPage,
+      this.parseStatuses(status),
     );
+  }
+
+  /** `status=new,started` → [new, started]; noma'lum qiymatlar tashlanadi. */
+  private parseStatuses(raw?: string): GroupStatus[] | undefined {
+    if (!raw) return undefined;
+    const list = String(raw)
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s): s is GroupStatus =>
+        (Object.values(GroupStatus) as string[]).includes(s),
+      );
+    return list.length ? list : undefined;
+  }
+
+  @Get(':id/members')
+  @RequirePermissions('groups.view')
+  @ApiOperation({
+    summary: "Guruhda o'qigan BARCHA o'quvchilar (sobiqlari ham)",
+    description:
+      "A'zolik oynalaridan: qachon qo'shilgan/chiqqan, qaysi guruhga " +
+      "ko'chirilgan, hozir shu guruhdami. `debt` (shu guruhdagi qarz) faqat " +
+      '`payments.view` ruxsati bilan, aks holda null.',
+  })
+  members(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.groupMembersService.list(req.user, id);
   }
 
   @Get('/all')

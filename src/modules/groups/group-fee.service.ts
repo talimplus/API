@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { GroupFeePeriod } from '@/modules/groups/entities/group-fee-period.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { dayjs } from '@/shared/utils/dayjs';
+import { returningRows } from '@/shared/utils/returning-rows';
 
 /** Oyga bog'langan narx qatori (YYYY-MM-01 + summa). */
 export interface FeePeriod {
@@ -269,7 +270,7 @@ export class GroupFeeService {
     groupIds?: number[],
   ): Promise<Map<number, number>> {
     const scoped = groupIds?.length ? groupIds : null;
-    const rows = await this.groupRepo.query(
+    const result = await this.groupRepo.query(
       `
       UPDATE "groups" g
          SET "monthlyFee" = due."monthlyFee"
@@ -291,9 +292,9 @@ export class GroupFeeService {
       [scoped],
     );
 
+    const rows = returningRows<{ id: number; monthlyFee: string }>(result);
     const map = new Map<number, number>();
-    for (const r of rows ?? [])
-      map.set(Number(r.id), Number(r.monthlyFee ?? 0));
+    for (const r of rows) map.set(Number(r.id), Number(r.monthlyFee ?? 0));
     return map;
   }
 

@@ -37,6 +37,8 @@ import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
 import { StudentStartDateService } from '@/modules/students/student-start-date.service';
+import { FinishGroupDto } from '@/modules/students/dto/finish-group.dto';
+import { assertNotBeforeOrganization } from '@/modules/organizations/organization-opened.util';
 import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
 import { GroupsService } from '@/modules/groups/groups.service';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
@@ -1974,12 +1976,7 @@ export class StudentsService {
         });
       }
 
-      await this.groupsService.changeStatus(
-        organizationId,
-        fromGroup.id,
-        GroupStatus.FINISHED,
-        fromGroup.center?.id,
-      );
+      await this.closeGroupOn(organizationId, fromGroup, transferDate);
       sourceGroupClosed = true;
     }
 
@@ -1990,6 +1987,199 @@ export class StudentsService {
       sourceGroupClosed,
       transferred: results.length,
       results,
+    };
+  }
+
+  /**
+   * Tugash sanasi (o'tgan kun bo'lishi mumkin) qo'yilgan guruhni yopadi.
+   * `changeStatus` o'tgan `endDate` li guruhni avval `finishExpiredGroups`
+   * bilan yopib, o'zi erta qaytadi — o'shanda to'lov qayta hisoblanmasdi.
+   * Shuning uchun o'quvchilar holati va to'lovlar (PAID ham — darslar
+   * kamaygan) shu yerda aniq yangilanadi; ikkalasi idempotent.
+   */
+  private async closeGroupOn(
+    organizationId: number,
+    group: Group,
+    endDate: string,
+  ) {
+    await this.groupsService.changeStatus(
+      organizationId,
+      group.id,
+      GroupStatus.FINISHED,
+      group.center?.id,
+    );
+    await this.groupsService.syncStudentStatusesForGroups([group.id]);
+    await this.paymentsService.recalculateOpenPaymentsForGroup(group.id, {
+      maxMonthsBack: this.paymentsService.monthsBackFor(endDate),
+      includePaid: true,
+    });
+  }
+
+  /**
+   * Guruhni yakunlash (kurs tugadi / guruh yopildi) — bitta amal:
+   *  1. tekshiruvlar BIRINCHI (sana, guruh holati, maqsad guruh, o'quvchilar,
+   *     ruxsat) — yozishdan oldin hammasi o'tishi shart, aks holda guruh
+   *     yarim yopilgan holda qolardi;
+   *  2. maqsad guruh `new` bo'lsa — boshlanadi;
+   *  3. belgilangan o'quvchilar ko'chiriladi (`transferStudents`, sana —
+   *     oxirgi darsdan keyingi kun: eski guruh `endDate` gacha, yangisi
+   *     undan keyin hisoblanadi, ortiqcha pul yangi guruhga o'tadi);
+   *  4. guruh `endDate` ga tortilib `finished` qilinadi — qolganlar
+   *     (`syncStudentStatusesForGroups`) "tugallangan" bo'ladi, qarzi shu
+   *     guruhda qoladi.
+   */
+  async finishGroup(
+    organizationId: number,
+    groupId: number,
+    dto: FinishGroupDto,
+    currentUser: CurrentUser,
+    canTransfer: boolean,
+  ) {
+    const group = await this.groupRepo.findOne({
+      where: { id: groupId, center: { organization: { id: organizationId } } },
+      relations: ['center', 'students'],
+    });
+    if (!group) throw new NotFoundException('Guruh topilmadi');
+    if (currentUser?.centerId && group.center?.id !== currentUser.centerId) {
+      throw new NotFoundException('Guruh topilmadi');
+    }
+    if (group.status !== GroupStatus.STARTED) {
+      throw new BadRequestException(
+        group.status === GroupStatus.FINISHED
+          ? 'Guruh allaqachon tugagan'
+          : "Hali boshlanmagan guruhni yakunlab bo'lmaydi",
+      );
+    }
+
+    const endDate = dto.endDate;
+    const today = this.todayInGroupTz(group);
+    const startDate = dayjs(group.startDate).format('YYYY-MM-DD');
+    if (endDate > today) {
+      throw new ValidationException({
+        endDate: "Tugash sanasi bugundan keyin bo'lishi mumkin emas",
+      });
+    }
+    if (endDate < startDate) {
+      throw new ValidationException({
+        endDate: `Guruh ${startDate} da boshlangan — tugash sanasi undan oldin bo'lolmaydi`,
+      });
+    }
+    await assertNotBeforeOrganization(
+      this.groupRepo,
+      group.center?.id,
+      endDate,
+      'endDate',
+      group.timezone,
+    );
+    const [after] = await this.groupRepo.query(
+      `SELECT COUNT(*)::int AS "count" FROM attendance
+        WHERE "groupId" = $1 AND "lessonDate" > $2::date`,
+      [groupId, endDate],
+    );
+    if (Number(after?.count ?? 0) > 0) {
+      throw new ValidationException({
+        endDate: `${endDate} dan keyingi darslarga ${after.count} ta davomat yozilgan — tugash sanasini keyinroq qo'ying`,
+      });
+    }
+
+    const studentIds = Array.from(new Set(dto.studentIds ?? []));
+    const memberIds = new Set((group.students ?? []).map((s) => s.id));
+    let target: Group | null = null;
+    if (studentIds.length) {
+      if (!canTransfer) {
+        throw new BadRequestException(
+          "O'quvchilarni ko'chirish uchun ruxsat yo'q (students.transfer)",
+        );
+      }
+      if (!dto.targetGroupId) {
+        throw new ValidationException({
+          targetGroupId: "O'quvchilar o'tadigan guruhni tanlang",
+        });
+      }
+      const missing = studentIds.filter((id) => !memberIds.has(id));
+      if (missing.length) {
+        throw new BadRequestException(
+          `Bu o'quvchilar guruhda emas: ${missing.join(', ')}`,
+        );
+      }
+      target = await this.groupRepo.findOne({
+        where: { id: dto.targetGroupId, center: { id: group.center?.id } },
+        relations: ['center', 'room'],
+      });
+      if (!target || target.id === group.id) {
+        throw new ValidationException({
+          targetGroupId: 'Guruh topilmadi yoki boshqa filialda',
+        });
+      }
+      if (target.status === GroupStatus.FINISHED) {
+        throw new ValidationException({
+          targetGroupId: "Tugagan guruhga o'tkazib bo'lmaydi",
+        });
+      }
+      if (
+        target.status === GroupStatus.NEW &&
+        (!target.endDate || !target.room?.id)
+      ) {
+        throw new ValidationException({
+          targetGroupId:
+            "Yangi guruhni boshlash uchun tugash sanasi va xona kerak — guruhni tahrirlab to'ldiring",
+        });
+      }
+      // `changeStatus(STARTED)` o'tib ketgan tugash sanasini rad etadi —
+      // ko'chirishdan KEYIN yiqilmasligi uchun shu yerda tekshiriladi.
+      if (
+        target.status === GroupStatus.NEW &&
+        dayjs(target.endDate).format('YYYY-MM-DD') < this.todayInGroupTz(target)
+      ) {
+        throw new ValidationException({
+          targetGroupId:
+            "Yangi guruhning tugash sanasi o'tib ketgan — tahrirlab to'g'rilang",
+        });
+      }
+    }
+
+    // --- yozish ---
+    const transferDate = dayjs(endDate).add(1, 'day').format('YYYY-MM-DD');
+    let transfer: Awaited<
+      ReturnType<StudentsService['transferStudents']>
+    > | null = null;
+    if (target && studentIds.length) {
+      transfer = await this.transferStudents(
+        organizationId,
+        {
+          studentIds,
+          fromGroupId: group.id,
+          toGroupId: target.id,
+          transferDate,
+          reason:
+            dto.reason?.trim() ||
+            `Guruh tugadi: "${group.name}" dan "${target.name}" ga`,
+        } as TransferStudentsDto,
+        currentUser,
+      );
+    }
+    // Ko'chirish (eng ko'p tekshiruvli qadam) o'tgandan KEYIN boshlanadi —
+    // ko'chirish yiqilsa, maqsad guruh "boshlangan" bo'lib qolib ketmaydi.
+    if (target && target.status === GroupStatus.NEW) {
+      await this.groupsService.changeStatus(
+        organizationId,
+        target.id,
+        GroupStatus.STARTED,
+        target.center?.id,
+      );
+    }
+
+    await this.groupRepo.update(group.id, { endDate: endDate as any });
+    await this.closeGroupOn(organizationId, group, endDate);
+
+    return {
+      groupId: group.id,
+      endDate,
+      transferDate: transfer ? transferDate : null,
+      targetGroupId: target?.id ?? null,
+      transferred: transfer?.transferred ?? 0,
+      finishedStudents: memberIds.size - (transfer?.transferred ?? 0),
+      results: transfer?.results ?? [],
     };
   }
 
@@ -2013,6 +2203,7 @@ export class StudentsService {
       returnLikelihood?: StudentReturnLikelihood;
       comment?: string;
       startDate?: string;
+      stopDate?: string;
     },
     actorId?: number | null,
   ) {
@@ -2118,12 +2309,22 @@ export class StudentsService {
     }
 
     // STOPPED — to'xtatilgan sana saqlanadi va barcha a'zolik oynalari shu
-    // kuni yopiladi (keyingi darslar to'lovga kirmaydi).
-    if (
-      status === StudentStatus.STOPPED &&
-      prevStatus !== StudentStatus.STOPPED
-    ) {
-      student.stoppedAt = new Date();
+    // kuni yopiladi (keyingi darslar to'lovga kirmaydi). Sana o'tgan kun
+    // bo'lishi mumkin ("o'tgan haftadan beri kelmayapti").
+    const stopping =
+      status === StudentStatus.STOPPED && prevStatus !== StudentStatus.STOPPED;
+    const stopDate =
+      stopping && body?.stopDate
+        ? dayjs(body.stopDate).format('YYYY-MM-DD')
+        : today;
+    if (stopping) {
+      if (stopDate !== today) {
+        await this.startDateService.assertStopDate(student, stopDate, tzGroup);
+      }
+      student.stoppedAt =
+        stopDate === today
+          ? new Date()
+          : this.startDateService.activatedAtFor(stopDate, tzGroup);
     }
 
     student.status = status;
@@ -2142,6 +2343,7 @@ export class StudentsService {
             ? (body?.returnLikelihood ?? null)
             : null,
         comment: String(body?.comment ?? '').trim() || null,
+        ...(stopping && stopDate !== today ? { effectiveDate: stopDate } : {}),
       },
     });
 
@@ -2151,7 +2353,7 @@ export class StudentsService {
     ) {
       await this.enrollmentsService.closeAllForStudent(
         saved.id,
-        today,
+        stopDate,
         "O'quvchi to'xtatildi",
       );
     }

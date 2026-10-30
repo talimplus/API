@@ -57,6 +57,15 @@ export class PaymentsController {
     example: '2026-01',
   })
   @ApiQuery({
+    name: 'pendingOnly',
+    required: false,
+    description:
+      "true — faqat tasdiqlash kutayotgan cheki bor to'lovlar (reception pulni " +
+      "olgan, admin tasdiqlamagan). `status=unpaid|partial` esa pulni to'liq " +
+      'topshirib tasdiq kutayotgan qatorlarni chiqarmaydi.',
+    example: 'true',
+  })
+  @ApiQuery({
     name: 'overdueOnly',
     required: false,
     description:
@@ -102,6 +111,7 @@ export class PaymentsController {
     @Query('status') status?: PaymentStatus,
     @Query('forMonth') forMonth?: string, // YYYY-MM
     @Query('overdueOnly') overdueOnly?: string, // 'true' | 'false'
+    @Query('pendingOnly') pendingOnly?: string,
     @Query('studentId') studentId?: number,
     @Query('groupId') groupId?: number,
     @Query('teacherId') teacherId?: number,
@@ -128,6 +138,7 @@ export class PaymentsController {
         status,
         forMonth,
         overdueOnly: overdueOnly === 'true',
+        pendingOnly: pendingOnly === 'true',
         studentId: studentId ? +studentId : undefined,
         groupId: groupId ? +groupId : undefined,
         teacherId: teacherId ? +teacherId : undefined,
@@ -157,6 +168,15 @@ export class PaymentsController {
     required: false,
     description: 'Filter by month (YYYY-MM)',
     example: '2026-01',
+  })
+  @ApiQuery({
+    name: 'pendingOnly',
+    required: false,
+    description:
+      "true — faqat tasdiqlash kutayotgan cheki bor to'lovlar (reception pulni " +
+      "olgan, admin tasdiqlamagan). `status=unpaid|partial` esa pulni to'liq " +
+      'topshirib tasdiq kutayotgan qatorlarni chiqarmaydi.',
+    example: 'true',
   })
   @ApiQuery({ name: 'overdueOnly', required: false, example: 'true' })
   @ApiQuery({ name: 'studentId', required: false, type: Number })
@@ -200,6 +220,7 @@ export class PaymentsController {
     @Query('status') status?: PaymentStatus,
     @Query('forMonth') forMonth?: string,
     @Query('overdueOnly') overdueOnly?: string,
+    @Query('pendingOnly') pendingOnly?: string,
     @Query('studentId') studentId?: string,
     @Query('groupId') groupId?: string,
     @Query('teacherId') teacherId?: string,
@@ -224,6 +245,7 @@ export class PaymentsController {
         status,
         forMonth,
         overdueOnly: overdueOnly === 'true',
+        pendingOnly: pendingOnly === 'true',
         studentId: studentId ? +studentId : undefined,
         groupId: groupId ? +groupId : undefined,
         teacherId: teacherId ? +teacherId : undefined,

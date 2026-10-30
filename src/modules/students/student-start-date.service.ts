@@ -202,6 +202,48 @@ export class StudentStartDateService {
     });
   }
 
+  /**
+   * O'qishni to'xtatgan kun (`stopDate`, exclusive): bugundan keyin, tashkilot
+   * ochilishidan, faollashgan kundan va ochiq a'zoliklar boshlanishidan oldin
+   * bo'lolmaydi. Shu kundan keyin "keldi"/"kechikdi" belgisi bo'lsa — o'quvchi
+   * o'qigan, to'xtatish sanasi noto'g'ri (422 `stopDate`).
+   */
+  async assertStopDate(student: Student, date: string, group?: Group | null) {
+    await this.assertDate(date, 'stopDate', student.centerId, group);
+    if (student.activatedAt) {
+      const activated = dayjs(student.activatedAt)
+        .tz(this.tz(group))
+        .format('YYYY-MM-DD');
+      if (date < activated) {
+        throw new ValidationException({
+          stopDate: `O'quvchi ${activated} da faollashgan — to'xtatish sanasi undan oldin bo'lolmaydi`,
+        });
+      }
+    }
+    const [joined] = await this.studentRepo.query(
+      `SELECT MAX("joinedAt") AS "joinedAt" FROM "student_group_enrollments"
+        WHERE "studentId" = $1 AND "leftAt" IS NULL`,
+      [student.id],
+    );
+    const lastJoin = toDateOnly(joined?.joinedAt);
+    if (lastJoin && date < lastJoin) {
+      throw new ValidationException({
+        stopDate: `O'quvchi ${lastJoin} da guruhga qo'shilgan — to'xtatish sanasi undan oldin bo'lolmaydi`,
+      });
+    }
+    const [att] = await this.studentRepo.query(
+      `SELECT COUNT(*)::int AS "count", MAX("lessonDate") AS "last" FROM "attendance"
+        WHERE "studentId" = $1 AND "lessonDate" >= $2::date
+          AND "status" IN ('present', 'late')`,
+      [student.id, date],
+    );
+    if (Number(att?.count ?? 0) > 0) {
+      throw new ValidationException({
+        stopDate: `${date} dan keyin ${att.count} ta darsga "keldi" deb belgilangan (oxirgisi ${toDateOnly(att.last)}) — to'xtatish sanasi undan keyin bo'lishi kerak`,
+      });
+    }
+  }
+
   /** Tashqaridan (changeStatus) `activatedAt` qiymatini hisoblash uchun. */
   activatedAtFor(date: string, group?: Group | null): Date {
     return this.startOfDay(date, group);

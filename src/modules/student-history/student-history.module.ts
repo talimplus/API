@@ -5,6 +5,7 @@ import { StudentEvent } from '@/modules/student-history/entities/student-event.e
 import { StudentEventsService } from '@/modules/student-history/student-events.service';
 import { StudentTimelineService } from '@/modules/student-history/student-timeline.service';
 import { StudentTimelineController } from '@/modules/student-history/student-timeline.controller';
+import { StudentAttendanceService } from '@/modules/student-history/student-attendance.service';
 
 /**
  * O'quvchi tarixi. Boshqa domen modullariga bog'lanmaydi (jadvallarni xom
@@ -14,7 +15,11 @@ import { StudentTimelineController } from '@/modules/student-history/student-tim
 @Module({
   imports: [TypeOrmModule.forFeature([StudentEvent]), RolesModule],
   controllers: [StudentTimelineController],
-  providers: [StudentEventsService, StudentTimelineService],
+  providers: [
+    StudentEventsService,
+    StudentTimelineService,
+    StudentAttendanceService,
+  ],
   exports: [StudentEventsService],
 })
 export class StudentHistoryModule {}
