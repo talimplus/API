@@ -557,7 +557,10 @@ bugungacha kengaytiriladi (aks holda o'rtadagi oylar uchun qator yaratilmasdi).
   kimga ko'chirilgan, soni) + `items` (har belgi, kim qo'ygani). Ota-ona bilan
   bahs uchun.
 - `GET /groups/:id/members` (`groups.view`, `GroupMembersService`): guruhda
-  o'qigan hamma (a'zolik oynalaridan) — sobiqlar ham; `debt` faqat `payments.view` bilan.
+  o'qigan hamma (a'zolik oynalaridan) — sobiqlar ham; `debt` (olinishi kerak,
+  tasdiq kutayotgan chek ayirilgan) va `pending` faqat `payments.view` bilan.
+- `PUT /payments/pay-debt/student/:id` ga `groupId` — faqat shu guruhning ochiq
+  oylariga taqsimlaydi (sobiq guruh qarzini guruh sahifasidan qabul qilish).
 - `GET /groups?status=new,started|finished` — faol / tugagan guruhlar alohida
   (front default — faol). Tugagan guruh jurnali va a'zolari ochiladi (faqat o'qish).
 

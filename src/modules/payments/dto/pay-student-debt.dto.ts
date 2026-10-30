@@ -2,10 +2,12 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   IsPositive,
   IsString,
+  Min,
 } from 'class-validator';
 import { PaymentMethod } from '@/modules/payments/entities/payment-receipt.entity';
 
@@ -40,4 +42,15 @@ export class PayStudentDebtDto {
   @IsOptional()
   @IsDateString()
   paidAt?: string;
+
+  @ApiPropertyOptional({
+    example: 12,
+    description:
+      'Faqat shu guruhning ochiq oylariga taqsimlash (masalan sobiq guruhdagi ' +
+      "qarzni o'sha guruh sahifasidan qabul qilish). Berilmasa — barcha guruhlar.",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  groupId?: number;
 }

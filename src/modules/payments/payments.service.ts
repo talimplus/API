@@ -1166,6 +1166,7 @@ export class PaymentsService {
     comment?: string,
     paymentMethod?: PaymentMethod,
     paidAt?: string | Date | null,
+    groupId?: number,
   ) {
     const student = await this.studentRepo.findOne({
       where: { id: studentId },
@@ -1181,6 +1182,8 @@ export class PaymentsService {
       .andWhere('p.status IN (:...statuses)', {
         statuses: [PaymentStatus.UNPAID, PaymentStatus.PARTIAL],
       })
+      // Bitta guruh qarzi (masalan sobiq guruh sahifasidan qabul qilish).
+      .andWhere(groupId ? 'p.groupId = :groupId' : '1=1', { groupId })
       .orderBy('p.forMonth', 'ASC') // eng eski oydan boshlab
       .getMany();
 

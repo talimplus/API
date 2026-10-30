@@ -681,6 +681,7 @@ export class PaymentsController {
       dto.comment,
       dto.paymentMethod,
       dto.paidAt,
+      dto.groupId,
     );
   }
 

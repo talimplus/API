@@ -20,8 +20,13 @@ export interface GroupMember {
   transferredToGroupName: string | null;
   /** Hozir shu guruhda (junction). */
   isCurrent: boolean;
-  /** Shu guruh bo'yicha qolgan qarz (tasdiqlanmagan chek ayirilmagan); `payments.view` siz — null. */
+  /**
+   * Shu guruh bo'yicha o'quvchidan hali OLINISHI kerak summa (tasdiq
+   * kutayotgan chek ayirilgan); `payments.view` siz — null.
+   */
   debt: number | null;
+  /** Reception olgan, admin tasdiqlamagan pul (shu guruh); `payments.view` siz — null. */
+  pending: number | null;
 }
 
 /**
@@ -29,6 +34,10 @@ export interface GroupMember {
  * va guruh tugaganda qolganlar ham. Junction (`students_groups_groups`)
  * faqat hozirgi a'zolarni beradi; tarix `student_group_enrollments` da.
  */
+/** Bitta to'lov qatorining tasdiqlash kutayotgan cheklari (`p` — payments). */
+const PENDING_PER_ROW = `(SELECT COALESCE(SUM(r.amount), 0) FROM payment_receipts r
+  WHERE r."paymentId" = p.id AND r.status = 'pending')`;
+
 @Injectable()
 export class GroupMembersService {
   constructor(
@@ -64,9 +73,12 @@ export class GroupMembersService {
               (ARRAY_AGG(e."transferredToGroupId" ORDER BY e."joinedAt" DESC))[1] AS "transferredToGroupId",
               EXISTS (SELECT 1 FROM students_groups_groups sg
                        WHERE sg."studentsId" = s.id AND sg."groupsId" = $1) AS "isCurrent",
-              (SELECT COALESCE(SUM(GREATEST(0, p."amountDue" - p."amountPaid")), 0)
+              (SELECT COALESCE(SUM(GREATEST(0, p."amountDue" - p."amountPaid" - ${PENDING_PER_ROW})), 0)
                  FROM payments p
-                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "debt"
+                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "debt",
+              (SELECT COALESCE(SUM(${PENDING_PER_ROW}), 0)
+                 FROM payments p
+                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "pending"
          FROM student_group_enrollments e
          JOIN students s ON s.id = e."studentId"
         WHERE e."groupId" = $1
@@ -80,9 +92,12 @@ export class GroupMembersService {
               s.status AS "studentStatus", g."startDate" AS "joinedAt",
               NULL AS "leftAt", NULL AS "leftReason", NULL AS "transferredToGroupId",
               TRUE AS "isCurrent",
-              (SELECT COALESCE(SUM(GREATEST(0, p."amountDue" - p."amountPaid")), 0)
+              (SELECT COALESCE(SUM(GREATEST(0, p."amountDue" - p."amountPaid" - ${PENDING_PER_ROW})), 0)
                  FROM payments p
-                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "debt"
+                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "debt",
+              (SELECT COALESCE(SUM(${PENDING_PER_ROW}), 0)
+                 FROM payments p
+                WHERE p."studentId" = s.id AND p."groupId" = $1) AS "pending"
          FROM students_groups_groups sg
          JOIN students s ON s.id = sg."studentsId"
          JOIN groups g ON g.id = sg."groupsId"
@@ -125,6 +140,7 @@ export class GroupMembersService {
             : null,
         isCurrent: r.isCurrent === true,
         debt: canPayments ? Number(r.debt ?? 0) : null,
+        pending: canPayments ? Number(r.pending ?? 0) : null,
       }))
       .sort(
         (a, b) =>
