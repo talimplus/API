@@ -35,9 +35,13 @@ import { ValidationException } from '@/common/exceptions/validation.exception';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
-import { EnrollmentsService } from '@/modules/enrollments/enrollments.service';
+import {
+  EnrollmentsService,
+  toDateOnly,
+} from '@/modules/enrollments/enrollments.service';
 import { StudentStartDateService } from '@/modules/students/student-start-date.service';
 import { FinishGroupDto } from '@/modules/students/dto/finish-group.dto';
+import { LeaveGroupDto } from '@/modules/students/dto/leave-group.dto';
 import { assertNotBeforeOrganization } from '@/modules/organizations/organization-opened.util';
 import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
 import { GroupsService } from '@/modules/groups/groups.service';
@@ -2391,5 +2395,142 @@ export class StudentsService {
     }
 
     return saved;
+  }
+
+  /**
+   * O'quvchi BITTA guruhda o'qishni to'xtatadi: a'zolik `stopDate` da yopiladi,
+   * shu guruh to'lovlari shu sanagacha qayta hisoblanadi (PAID ham — ortiqcha
+   * pul `refundedAmount` ga), qarz shu guruhda qoladi. Boshqa guruhlariga
+   * tegilmaydi. Tugamagan boshqa guruhi qolmasa — o'quvchi `stopped` bo'ladi
+   * (`changeStatus` orqali), aks holda u guruhsiz "faol" bo'lib qolardi.
+   */
+  async leaveGroup(
+    organizationId: number,
+    id: number,
+    dto: LeaveGroupDto,
+    actorId?: number | null,
+  ) {
+    const student = await this.studentRepo.findOne({
+      where: { id, center: { organization: { id: organizationId } } },
+      relations: ['groups'],
+    });
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+    if (student.status !== StudentStatus.ACTIVE) {
+      throw new BadRequestException("Guruhdan faqat faol o'quvchi chiqariladi");
+    }
+    const groups = student.groups ?? [];
+    const group = groups.find((g) => g.id === dto.groupId);
+    if (!group) {
+      throw new BadRequestException("O'quvchi bu guruhda emas");
+    }
+    if (group.status === GroupStatus.FINISHED) {
+      throw new BadRequestException('Bu guruh allaqachon tugagan');
+    }
+
+    const isLastGroup = !groups.some(
+      (g) => g.id !== group.id && g.status !== GroupStatus.FINISHED,
+    );
+    if (isLastGroup && !dto.returnLikelihood) {
+      throw new ValidationException({
+        returnLikelihood: 'Qaytish ehtimolini tanlang',
+      });
+    }
+
+    const today = this.todayInGroupTz(group);
+    const stopDate = dto.stopDate
+      ? dayjs(dto.stopDate).format('YYYY-MM-DD')
+      : today;
+    await this.startDateService.assertGroupLeaveDate(
+      student,
+      group,
+      stopDate,
+      today,
+    );
+
+    const before = await this.groupMoneyOf(id, group.id);
+    const reason = dto.reason?.trim() || null;
+
+    // Eski ma'lumot: a'zolik oynasi yo'q bo'lsa yopadigan narsa ham yo'q va
+    // hisob `leftAt` siz qolardi — avval oynani yozamiz.
+    const windows = await this.enrollmentsService.getWindows(id, group.id);
+    if (!windows.length) {
+      await this.enrollmentsService.open(
+        id,
+        group.id,
+        toDateOnly(group.startDate) ?? stopDate,
+      );
+    }
+
+    if (isLastGroup) {
+      await this.changeStatus(
+        organizationId,
+        id,
+        StudentStatus.STOPPED,
+        {
+          returnLikelihood: dto.returnLikelihood,
+          comment: reason ?? undefined,
+          stopDate,
+        },
+        actorId,
+      );
+    } else {
+      await this.enrollmentsService.close(id, group.id, stopDate, {
+        reason: reason ?? "Guruhda o'qishni to'xtatdi",
+      });
+      await this.paymentsService.adjustPaymentsForStudentLeftGroup(
+        id,
+        group.id,
+        { leftAt: stopDate },
+      );
+    }
+
+    // `save(student)` emas: xotiradagi nusxada eski guruh turibdi, u
+    // many-to-many farqini hisoblab bu o'chirishni bekor qilardi.
+    await this.studentRepo
+      .createQueryBuilder()
+      .relation(Student, 'groups')
+      .of(id)
+      .remove(group.id);
+    await this.studentRepo.update(id, {
+      studyDays: await this.computeStudyDays(
+        groups.filter((g) => g.id !== group.id).map((g) => g.id),
+      ),
+    } as any);
+
+    // Summadagi chegirma "to'liq oyni qamragan" guruhga yoziladi: bu guruh oy
+    // o'rtasida yopilgach u boshqa guruhga o'tishi mumkin.
+    if (!isLastGroup) {
+      await this.paymentsService.recalculateOpenPaymentsForStudent(id, {
+        maxMonthsBack: this.paymentsService.monthsBackFor(stopDate),
+      });
+    }
+
+    const after = await this.groupMoneyOf(id, group.id);
+    return {
+      studentId: id,
+      groupId: group.id,
+      stopDate,
+      studentStopped: isLastGroup,
+      refundedAmount: Math.max(0, after.refunded - before.refunded),
+      remainingDebt: after.debt,
+    };
+  }
+
+  /** O'quvchining bitta guruhdagi qaytarilgan puli va qolgan qarzi. */
+  private async groupMoneyOf(studentId: number, groupId: number) {
+    const row = await this.paymentRepo
+      .createQueryBuilder('p')
+      .select('COALESCE(SUM(p.refundedAmount), 0)', 'refunded')
+      .addSelect(
+        'COALESCE(SUM(GREATEST(p.amountDue - p.amountPaid, 0)), 0)',
+        'debt',
+      )
+      .where('p.groupId = :groupId', { groupId })
+      .andWhere('p.studentId = :studentId', { studentId })
+      .getRawOne<{ refunded: string; debt: string }>();
+    return {
+      refunded: Number(row?.refunded ?? 0),
+      debt: Number(row?.debt ?? 0),
+    };
   }
 }

@@ -459,7 +459,19 @@ finished→ active
   `PUT /students/:id` dagi `groupIds` tugamagan joriy guruhni tushirib qoldirsa
   — 422 `groupIds`. Guruh almashtirish faqat `POST /students/transfer` orqali
   (aks holda pul `refundedAmount` ga tushib, yangi guruhda to'liq qarz
-  yozilardi). Tugagan guruhni ro'yxatdan olib tashlash mumkin.
+  yozilardi). Tugagan guruhni ro'yxatdan olib tashlash mumkin. Shunchaki chiqish —
+  pastdagi `leave-group`.
+- **Bitta guruhdan chiqish** (2026-11-05): `POST /students/:id/leave-group`
+  (`students.changeStatus`, `StudentsService.leaveGroup`) `{ groupId, stopDate?,
+  returnLikelihood?, reason? }`. Faqat `ACTIVE` o'quvchi va tugamagan guruh.
+  `stopDate` exclusive, default bugun, kelajak bo'lolmaydi; shu kundan boshlab SHU
+  guruhda `present/late` bo'lsa — 422 (bugun uchun ham: bugun kelgan bo'lsa ertaga
+  chiqariladi). A'zolik yopiladi, junction'dan o'chadi, shu guruh to'lovlari sanagacha
+  qayta hisoblanadi (ortiqcha pul `refundedAmount` ga, qarz shu guruhda qoladi),
+  boshqa guruhlar tegilmaydi (faqat summadagi chegirma to'liq oyli guruhga o'tishi
+  mumkin). Oxirgi tugamagan guruhi bo'lsa `returnLikelihood` majburiy va o'quvchi
+  `stopped` bo'ladi; junction'dan o'chgani uchun qaytganda bu guruh qayta ochilmaydi.
+  Refund va shu guruhdagi boshqa oylar qarzi avtomatik yopishtirilmaydi.
 - Guruhga qo'shilgan/chiqqan sana — `student_group_enrollments` (pastda 6.5.1).
   `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;

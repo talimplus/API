@@ -26,6 +26,7 @@ import { ApiBody } from '@nestjs/swagger';
 import { instanceToPlain } from 'class-transformer';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 import { ChangeStudentStatusDto } from '@/modules/students/dto/change-student-status.dto';
+import { LeaveGroupDto } from '@/modules/students/dto/leave-group.dto';
 import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
@@ -237,6 +238,31 @@ export class StudentsController {
       req.user.organizationId,
       id,
       dto,
+    );
+  }
+
+  @Post(':id/leave-group')
+  @RequirePermissions('students.changeStatus')
+  @ApiOperation({
+    summary: "O'quvchi bitta guruhda o'qishni to'xtatadi",
+    description:
+      "A'zolik shu sanada yopiladi, guruh to'lovlari shu sanagacha qayta " +
+      'hisoblanadi (ortiqcha pul `refundedAmount` ga, qarz shu guruhda qoladi), ' +
+      "boshqa guruhlariga tegilmaydi. Oxirgi tugamagan guruhi bo'lsa o'quvchi " +
+      "`stopped` bo'ladi (`returnLikelihood` majburiy). Javob: " +
+      '`{ studentId, groupId, stopDate, studentStopped, refundedAmount, remainingDebt }`.',
+  })
+  @ApiBody({ type: LeaveGroupDto })
+  leaveGroup(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: LeaveGroupDto,
+  ) {
+    return this.studentService.leaveGroup(
+      req.user.organizationId,
+      id,
+      dto,
+      req.user?.userId ?? null,
     );
   }
 

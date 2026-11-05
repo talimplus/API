@@ -244,6 +244,56 @@ export class StudentStartDateService {
     }
   }
 
+  /**
+   * Bitta guruhdan chiqish kuni (`stopDate`, exclusive). `assertStopDate` dan
+   * farqi: a'zolik va davomat faqat SHU guruh bo'yicha tekshiriladi — boshqa
+   * guruhlarda o'qishi davom etadi. Bugun chiqsa ham davomat tekshiriladi:
+   * bugun kelgan bo'lsa, bu dars bepul qolib ketmasligi kerak.
+   */
+  async assertGroupLeaveDate(
+    student: Student,
+    group: Group,
+    date: string,
+    today: string,
+  ) {
+    if (date !== today) {
+      await this.assertDate(date, 'stopDate', student.centerId, group);
+      if (student.activatedAt) {
+        const activated = dayjs(student.activatedAt)
+          .tz(this.tz(group))
+          .format('YYYY-MM-DD');
+        if (date < activated) {
+          throw new ValidationException({
+            stopDate: `O'quvchi ${activated} da faollashgan — sana undan oldin bo'lolmaydi`,
+          });
+        }
+      }
+      const open = (
+        await this.enrollments.getWindows(student.id, group.id)
+      ).find((w) => !w.leftAt);
+      if (open && date < open.joinedAt) {
+        throw new ValidationException({
+          stopDate: `O'quvchi bu guruhga ${open.joinedAt} da qo'shilgan — sana undan oldin bo'lolmaydi`,
+        });
+      }
+    }
+    const [att] = await this.studentRepo.query(
+      `SELECT COUNT(*)::int AS "count", MAX("lessonDate") AS "last" FROM "attendance"
+        WHERE "studentId" = $1 AND "groupId" = $2 AND "lessonDate" >= $3::date
+          AND "status" IN ('present', 'late')`,
+      [student.id, group.id, date],
+    );
+    if (Number(att?.count ?? 0) > 0) {
+      const last = toDateOnly(att.last) as string;
+      throw new ValidationException({
+        stopDate:
+          date === today && last === today
+            ? 'Bugungi darsga "keldi" deb belgilangan — bu dars puli olinishi uchun o\'quvchini ertaga chiqaring'
+            : `${date} dan boshlab bu guruhda ${att.count} ta darsga "keldi" deb belgilangan (oxirgisi ${last}) — sana undan keyin bo'lishi kerak`,
+      });
+    }
+  }
+
   /** Tashqaridan (changeStatus) `activatedAt` qiymatini hisoblash uchun. */
   activatedAtFor(date: string, group?: Group | null): Date {
     return this.startOfDay(date, group);
