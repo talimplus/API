@@ -24,8 +24,8 @@ sudo -u postgres psql -d talimplus -v ro_password='KUCHLI_PAROL' -f setup-readon
 
 # 2) sozlamalar
 cp .env.example .env
-openssl rand -hex 32        # -> MCP_SECRET
-nano .env                   # MCP_SECRET, MCP_DB_PASS
+openssl rand -hex 32        # -> MCP_SECRET (tokenlarni imzolaydi)
+nano .env                   # MCP_SECRET, MCP_LOGIN_PASSWORD, MCP_PUBLIC_URL, MCP_DB_PASS
 
 # 3) ishga tushirish
 pm2 start ecosystem.config.cjs && pm2 save
@@ -37,25 +37,40 @@ Node **20.6+** kerak (`--env-file`).
 ## HTTPS (nginx)
 
 Claude.ai connector Anthropic serveridan ulanadi — manzil **ochiq HTTPS** bo'lishi
-shart (`localhost` ishlamaydi). Mavjud API domeniga qo'shish:
+shart (`localhost` ishlamaydi). Mavjud API domenining `server { }` blokiga **ikkala**
+`location` qo'shiladi (`/.well-known/oauth-*` — OAuth topish uchun, busiz connector
+"Couldn't register with … sign-in service" deydi):
 
 ```nginx
-location /mcp/ {
-    proxy_pass http://127.0.0.1:3010;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_buffering off;
-    proxy_read_timeout 60s;
-    access_log off;          # URL ichida maxfiy kalit bor — log'ga tushmasin
-}
+location = /mcp { proxy_pass http://127.0.0.1:3010; include /etc/nginx/mcp_proxy.conf; }
+location /mcp/  { proxy_pass http://127.0.0.1:3010; include /etc/nginx/mcp_proxy.conf; }
+location /.well-known/oauth- { proxy_pass http://127.0.0.1:3010; include /etc/nginx/mcp_proxy.conf; }
 ```
+
+`/etc/nginx/mcp_proxy.conf`:
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_buffering off;
+proxy_read_timeout 60s;
+access_log off;
+```
+
+Tekshirish: `curl https://<api-domen>/.well-known/oauth-protected-resource/mcp` → JSON.
 
 ## Claude'ga ulash
 
 **claude.ai / Claude Desktop:** Settings → Connectors → *Add custom connector*
 - Name: `Talimplus DB`
-- URL: `https://<api-domen>/mcp/<MCP_SECRET>`
-- OAuth maydonlari bo'sh qoladi.
+- URL: `https://<api-domen>/mcp`
+- OAuth Client ID / Secret — **bo'sh** (Claude o'zi ro'yxatdan o'tadi).
+- *Connect* → parol sahifasi ochiladi → `MCP_LOGIN_PASSWORD` → tayyor.
+
+Token 1 soat, refresh 30 kun (Claude o'zi yangilaydi). Barcha ulanishlarni
+uzish: `MCP_SECRET` ni almashtirib `pm2 restart talimplus-mcp`. Parolni 5 marta
+xato kiritgan IP 15 daqiqaga bloklanadi.
 
 Keyin chatda: *"Talimplus DB orqali oxirgi 3 oy bo'yicha har bir tashkilotning tushumini ko'rsat"*.
 
@@ -65,8 +80,7 @@ claude mcp add --transport http talimplus-db https://<api-domen>/mcp \
   --header "Authorization: Bearer <MCP_SECRET>"
 ```
 
-Kalit oshkor bo'lsa — `.env` da `MCP_SECRET` ni almashtirib `pm2 restart talimplus-mcp`,
-connector'ni yangi URL bilan qayta qo'shing.
+Muqobil (OAuth'siz): `https://<api-domen>/mcp/<MCP_SECRET>` ham ishlaydi.
 
 ## Lokal sinov
 

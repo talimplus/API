@@ -7,8 +7,8 @@
 //      extended protocol'da (bitta so'rovga bitta statement) va oxirida ROLLBACK.
 //   3. Faqat SELECT / WITH / VALUES / TABLE / EXPLAIN / SHOW bilan boshlanadigan so'rov.
 //
-// Kirish: URL ichidagi maxfiy kalit (`/mcp/<MCP_SECRET>`) — Claude.ai connector
-// sarlavha yubora olmaydi. Claude Code uchun `Authorization: Bearer <MCP_SECRET>` ham bo'ladi.
+// Kirish: claude.ai connector — OAuth (oauth.mjs, MCP_LOGIN_PASSWORD bilan);
+// Claude Code — `Authorization: Bearer <MCP_SECRET>`; zaxira — `/mcp/<MCP_SECRET>`.
 
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
@@ -16,6 +16,7 @@ import pg from 'pg';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createOAuth } from './oauth.mjs';
 
 const env = process.env;
 const PORT = Number(env.MCP_PORT || 3010);
@@ -25,9 +26,17 @@ const DEFAULT_ROWS = 200;
 const MAX_ROWS = Number(env.MCP_MAX_ROWS || 2000);
 const STATEMENT_TIMEOUT_MS = Number(env.MCP_STATEMENT_TIMEOUT_MS || 20000);
 const MAX_OUTPUT_CHARS = 400_000;
+// OAuth (claude.ai connector) — parol berilmasa OAuth o'chiq, faqat maxfiy URL/Bearer ishlaydi
+const LOGIN_PASSWORD = env.MCP_LOGIN_PASSWORD || '';
+// Tashqi manzil, masalan https://api.talimplus.uz/mcp (bo'lmasa X-Forwarded-* dan olinadi)
+const PUBLIC_URL = env.MCP_PUBLIC_URL || '';
 
 if (SECRET.length < 32) {
   console.error('MCP_SECRET kamida 32 belgi bo\'lishi kerak (masalan: openssl rand -hex 32)');
+  process.exit(1);
+}
+if (LOGIN_PASSWORD && LOGIN_PASSWORD.length < 12) {
+  console.error('MCP_LOGIN_PASSWORD kamida 12 belgi bo\'lishi kerak');
   process.exit(1);
 }
 
@@ -311,12 +320,16 @@ function safeEqual(a, b) {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
+const oauth = LOGIN_PASSWORD ? createOAuth({ secret: SECRET, loginPassword: LOGIN_PASSWORD, publicUrl: PUBLIC_URL }) : null;
+
+/** Kirish yo'llari: OAuth access token (claude.ai), Bearer MCP_SECRET (Claude Code), /mcp/<MCP_SECRET>. */
 function authorized(req, url) {
   const m = url.pathname.match(/^\/mcp\/([^/]+)\/?$/);
   if (m) return safeEqual(decodeURIComponent(m[1]), SECRET);
   if (url.pathname === '/mcp' || url.pathname === '/mcp/') {
     const h = req.headers.authorization || '';
-    return h.startsWith('Bearer ') && safeEqual(h.slice(7).trim(), SECRET);
+    if (!h.startsWith('Bearer ')) return false;
+    return safeEqual(h.slice(7).trim(), SECRET) || Boolean(oauth?.checkBearer(req));
   }
   return false;
 }
@@ -343,9 +356,25 @@ function sendJson(res, status, obj) {
 
 const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/health') return sendJson(res, 200, { ok: true });
+  if (url.pathname === '/health') return sendJson(res, 200, { ok: true, oauth: Boolean(oauth) });
+  if (oauth) {
+    try {
+      if (await oauth.handle(req, res, url, readBody)) return;
+    } catch (e) {
+      console.error('[oauth]', e.message);
+      if (!res.headersSent) return sendJson(res, 400, { error: 'invalid_request', error_description: e.message });
+      return;
+    }
+  }
   if (!url.pathname.startsWith('/mcp')) return sendJson(res, 404, { error: 'not found' });
-  if (!authorized(req, url)) return sendJson(res, 401, { error: 'unauthorized' });
+  if (!authorized(req, url)) {
+    // WWW-Authenticate — Claude shu sarlavhadan OAuth metadata manzilini topadi
+    res.writeHead(401, {
+      'content-type': 'application/json',
+      ...(oauth ? { 'www-authenticate': oauth.challenge(req) } : {}),
+    });
+    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
 
   // Stateless rejim: har POST uchun yangi server + transport, GET/DELETE (SSE sessiya) yo'q.
   if (req.method !== 'POST') {
@@ -371,7 +400,7 @@ const httpServer = http.createServer(async (req, res) => {
 });
 
 httpServer.listen(PORT, HOST, () => {
-  console.log(`talimplus read-only MCP: http://${HOST}:${PORT}/mcp/<MCP_SECRET>`);
+  console.log(`talimplus read-only MCP: http://${HOST}:${PORT}/mcp (OAuth ${oauth ? 'yoqilgan' : "o'chiq — MCP_LOGIN_PASSWORD yo'q"})`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
