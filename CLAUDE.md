@@ -811,6 +811,9 @@ logotipini ko'rsatadi: `organizations.name` + `logoUrl` + `faviconUrl`.
 - Fayl: `db/migrations/<timestamp>-<Name>.ts`, timestamp ketma-ket (`1760000000043-...`).
 - Uslub: xom SQL + `IF NOT EXISTS` / `DROP CONSTRAINT IF EXISTS` (idempotent), `down()` bor.
 - Ma'lumot ko'chirish (backfill) ham shu yerda — mavjud yozuvlar yangi jadvalga moslanadi.
+- **Claude MCP (faqat o'qish, `mcp/`)**: yangi jadval qo'shilsa `mcp/setup-readonly.sql` ni
+  qayta ishga tushiring (yangi jadval avtomatik ochilmaydi). Yangi **sirli** ustun (token,
+  parol, hujjat raqami) bo'lsa — avval uni o'sha fayldagi `hidden_columns` ga qo'shing.
 - Entity'lar `dist/**/*.entity.js` orqali avtomatik topiladi — `app.module` ga qo'shish shart emas,
   lekin `TypeOrmModule.forFeature([...])` kerakli modulda yoziladi.
 
