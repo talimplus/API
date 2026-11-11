@@ -97,6 +97,7 @@ const RECEPTION_PERMISSIONS = [
 
 const TEACHER_PERMISSIONS = [
   'teacher.today',
+  'teacher.dashboard',
   'groups.view',
   'students.view',
   'attendance.view',

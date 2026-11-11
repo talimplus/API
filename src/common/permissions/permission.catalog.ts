@@ -477,6 +477,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
         key: 'teacher.today',
         label: { uz: 'Bugungi darslarim', ru: 'Мои уроки на сегодня' },
       },
+      {
+        key: 'teacher.dashboard',
+        label: {
+          uz: 'Mening statistikam (o‘quvchilar, to‘lov, davomat)',
+          ru: 'Моя статистика (ученики, оплаты, посещаемость)',
+        },
+      },
     ],
   },
 ];

@@ -110,7 +110,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `referrals` | `/referrals` | do'st taklif qilish chegirmasi |
 | `syllabus` | `/syllabuses`, `/groups/:id/plan`, `/teachers/me` | kurs rejasi, AI yordamchi (OpenAI), o'qituvchining bugungi darslari |
 | `telegram` | `/telegram` | **ota-onalar boti** — QR ulanish, to'lov/davomat/qarz xabarlari |
-| `statistics` | `/statistics/dashboard` | dashboard ko'rsatkichlari |
+| `statistics` | `/statistics/dashboard`, `/teachers/me/dashboard` | dashboard ko'rsatkichlari; **o'qituvchi dashboardi** (`TeacherDashboardService`, `teacher.dashboard`): o'z guruhlari bo'yicha oy to'lovlari, qarz, davomat, 6 oylik trend, qarzdorlar. O'qituvchi doim o'zini ko'radi, boshqa rol `teacherId` bilan |
 | `student-history` | `/students/:id/timeline` | **o'quvchi tarixi** (timeline) + `student_events` jurnali (6.5.3) |
 | `lessons` | — | **bo'sh stub modul** (entity bor, logika yo'q) |
 
