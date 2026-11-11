@@ -268,6 +268,29 @@ export class StudentsService {
       data as Student[],
     );
 
+    // Ro'yxat jadvalida guruh nomlari ko'rsatiladi — sahifadagi barcha
+    // o'quvchilar guruhlari bitta so'rov bilan (join'siz, paginatsiya buzilmaydi).
+    const pageGroupIds = Array.from(
+      new Set(
+        data.flatMap((s: any) =>
+          Array.isArray(s._groupIds) ? s._groupIds.map(Number) : [],
+        ),
+      ),
+    );
+    const groupById = new Map<
+      number,
+      { id: number; name: string; status: GroupStatus }
+    >();
+    if (pageGroupIds.length) {
+      const groups = await this.groupRepo.find({
+        where: { id: In(pageGroupIds) },
+        select: { id: true, name: true, status: true },
+      });
+      for (const g of groups) {
+        groupById.set(g.id, { id: g.id, name: g.name, status: g.status });
+      }
+    }
+
     const enriched = data.map((s: any) => {
       const row: any = {
         ...instanceToPlain(s),
@@ -275,6 +298,9 @@ export class StudentsService {
         groupIds: Array.isArray(s._groupIds)
           ? s._groupIds.map((x: any) => Number(x))
           : [],
+        groups: (Array.isArray(s._groupIds) ? s._groupIds : [])
+          .map((x: any) => groupById.get(Number(x)))
+          .filter(Boolean),
         referrerId: referrerByReferred.get(s.id) ?? null,
         discountPeriods: discountPeriodsByStudent.get(s.id) ?? [],
         subject: s.subject

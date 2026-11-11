@@ -99,6 +99,14 @@ export class StudentResponseDto {
   groupIds?: number[];
 
   @ApiProperty({
+    example: [{ id: 1, name: 'IELTS-3', status: 'started' }],
+    required: false,
+    description:
+      "Ro'yxatda (GET /students): biriktirilgan guruhlar nomi va holati bilan",
+  })
+  groups?: Array<{ id: number; name: string; status: string }>;
+
+  @ApiProperty({
     example: 5,
     required: false,
     nullable: true,
