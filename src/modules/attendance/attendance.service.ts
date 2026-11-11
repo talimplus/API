@@ -611,6 +611,21 @@ export class AttendanceService {
       );
     }
 
+    // Sobiq o'quvchi (ko'chirilgan / to'xtatilgan — a'zoligi yopilgan):
+    // uning davomati tarix sifatida faqat ko'rinadi, o'zgartirilmaydi —
+    // a'zolik davri ichidagi kunlarda ham.
+    const former = dto.items.filter(
+      (i) => !!joinDates.get(i.studentId)?.leftAt,
+    );
+    if (former.length) {
+      throw new BadRequestException(
+        `Sobiq o'quvchilarning davomatini o'zgartirib bo'lmaydi: ` +
+          former
+            .map((i) => nameById.get(i.studentId) ?? String(i.studentId))
+            .join(', '),
+      );
+    }
+
     // `leftAt` — exclusive: chiqqan kunidagi dars ham uniki emas.
     const afterLeave = dto.items.filter((i) => {
       const w = joinDates.get(i.studentId);
