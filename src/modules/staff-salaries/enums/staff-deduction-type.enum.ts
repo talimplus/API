@@ -9,4 +9,9 @@ export enum StaffDeductionType {
   UNSETTLED_PAYMENT = 'unsettled_payment',
   /** Boshqa sabab (admin izohda yozadi) */
   OTHER = 'other',
+  /**
+   * Avans — jarima EMAS: pul xodimga oldindan berilgan va oyligidan
+   * ushlanadi (sig'masa keyingi oyliklardan). Hisobotda "berilgan pul".
+   */
+  ADVANCE = 'advance',
 }

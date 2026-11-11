@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -18,7 +19,16 @@ import {
 } from '@nestjs/swagger';
 import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { StaffOverviewService } from '@/modules/staff-salaries/staff-overview.service';
-import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
+import {
+  OutstandingKind,
+  StaffDeductionsService,
+} from '@/modules/staff-salaries/staff-deductions.service';
+import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
+import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deduction-type.enum';
+import {
+  CreateStaffAdvanceDto,
+  CreateStaffBonusDto,
+} from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
 import { CreateStaffDeductionDto } from '@/modules/staff-salaries/dto/create-staff-deduction.dto';
 import { StaffOverviewResponseDto } from '@/modules/staff-salaries/dto/staff-overview-response.dto';
 
@@ -29,6 +39,7 @@ export class StaffOverviewController {
   constructor(
     private readonly overviewService: StaffOverviewService,
     private readonly deductionsService: StaffDeductionsService,
+    private readonly bonusesService: StaffBonusesService,
   ) {}
 
   @Get('me/overview')
@@ -78,6 +89,10 @@ export class StaffOverviewController {
       'qolgani keyingi oyliklardan avtomatik ushlanadi.',
   })
   createDeduction(@Body() dto: CreateStaffDeductionDto, @Req() req: any) {
+    // Avans — alohida endpoint va ruxsat (`POST /staff/advances`, `payroll.pay`).
+    if (dto.type === StaffDeductionType.ADVANCE) {
+      throw new BadRequestException('Avans uchun POST /staff/advances');
+    }
     return this.deductionsService.create(dto, req.user);
   }
 
@@ -89,6 +104,56 @@ export class StaffOverviewController {
       'Allaqachon to‘langan oylikda hisobga olingan jarimani o‘chirib bo‘lmaydi.',
   })
   removeDeduction(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    return this.deductionsService.remove(id, req.user);
+    return this.deductionsService.remove(id, req.user, OutstandingKind.FINE);
+  }
+
+  @Post('advances')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: 'Avans berish (keyingi oylikdan ushlanadi)',
+    description:
+      'Pul hozir beriladi va `forMonth` (default — joriy oy, keyingi oy ham mumkin) ' +
+      "oyligidan ushlanadi; oylikka sig'masa qolgani keyingi oyliklardan. " +
+      "Jarima emas: oylik qatorida `advanceAmount`, hisobotda berilgan pulga qo'shiladi. " +
+      'Javob — `staff_deductions` yozuvi (`type: "advance"`).',
+  })
+  createAdvance(@Body() dto: CreateStaffAdvanceDto, @Req() req: any) {
+    return this.deductionsService.createAdvance(dto, req.user);
+  }
+
+  @Delete('advances/:id')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({ summary: 'Avansni bekor qilish (xato kiritilgan bo‘lsa)' })
+  removeAdvance(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.deductionsService.remove(id, req.user, OutstandingKind.ADVANCE);
+  }
+
+  @Get(':userId/bonuses')
+  @RequirePermissions('staffPerformance.view')
+  @ApiOperation({ summary: 'Xodimning barcha mukofotlari' })
+  bonuses(@Param('userId', ParseIntPipe) userId: number, @Req() req: any) {
+    return this.bonusesService.listForUser(userId, req.user);
+  }
+
+  @Post('bonuses')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: "Mukofot (oylikka qo'shiladi)",
+    description:
+      "`forMonth` (default — joriy oy, kelajak emas) oyligiga qo'shiladi va oylik bilan " +
+      'birga beriladi. To‘langan oylikka qo‘shilsa oylik yana "qisman" bo‘ladi.',
+  })
+  createBonus(@Body() dto: CreateStaffBonusDto, @Req() req: any) {
+    return this.bonusesService.create(dto, req.user);
+  }
+
+  @Delete('bonuses/:id')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: 'Mukofotni bekor qilish',
+    description: 'Oylik bilan berib bo‘lingan mukofot — 400.',
+  })
+  removeBonus(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.bonusesService.remove(id, req.user);
   }
 }

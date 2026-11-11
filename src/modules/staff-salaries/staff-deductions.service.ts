@@ -14,9 +14,18 @@ import { StaffSalaryDeduction } from '@/modules/staff-salaries/entities/staff-sa
 import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deduction-type.enum';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 import { CreateStaffDeductionDto } from '@/modules/staff-salaries/dto/create-staff-deduction.dto';
+import { CreateStaffAdvanceDto } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
+import {
+  round2,
+  salaryCapacity,
+  salaryNet,
+} from '@/modules/staff-salaries/salary-math';
 
-const round2 = (n: number): number =>
-  Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+/** Hali ushlanmagan qism qaysi turdan: jarimalar yoki avanslar. */
+export enum OutstandingKind {
+  FINE = 'fine',
+  ADVANCE = 'advance',
+}
 
 @Injectable()
 export class StaffDeductionsService {
@@ -56,9 +65,7 @@ export class StaffDeductionsService {
 
     const amount = round2(dto.amount);
     if (amount <= 0) {
-      throw new BadRequestException(
-        'Jarima summasi 0 dan katta bo‘lishi kerak',
-      );
+      throw new BadRequestException('Summa 0 dan katta bo‘lishi kerak');
     }
 
     const forMonth = this.normalizeMonth(dto.forMonth);
@@ -87,6 +94,34 @@ export class StaffDeductionsService {
   }
 
   /**
+   * Avans: pul hozir xodimga beriladi va tanlangan oy oyligidan ushlanadi
+   * (sig'masa keyingi oyliklardan — jarima bilan bir xil FIFO). Oy kelajak
+   * bo'lishi mumkin, lekin keyingi oydan uzoq emas.
+   */
+  async createAdvance(dto: CreateStaffAdvanceDto, reqUser: any) {
+    const month = this.normalizeMonth(dto.forMonth);
+    const maxMonth = dayjs()
+      .add(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM-DD');
+    if (month > maxMonth) {
+      throw new BadRequestException(
+        'Avans keyingi oydan uzoq oy oyligiga yozilmaydi',
+      );
+    }
+    return this.create(
+      {
+        userId: dto.userId,
+        amount: dto.amount,
+        forMonth: month.slice(0, 7),
+        type: StaffDeductionType.ADVANCE,
+        reason: dto.comment?.trim() || 'Avans',
+      },
+      reqUser,
+    );
+  }
+
+  /**
    * Jarimani bekor qiladi.
    *
    * O'chirish xodim foydasiga ishlaydi (qo'lga tegadigan summa oshadi), shuning
@@ -94,13 +129,23 @@ export class StaffDeductionsService {
    * hisoblanadi: jarima oylikni to'liq yeb qo'ygani uchun "to'langan" bo'lib
    * turgan qator yana "to'lanmagan" holatiga qaytadi.
    */
-  async remove(id: number, reqUser: any) {
+  async remove(id: number, reqUser: any, kind?: OutstandingKind) {
     const deduction = await this.getOwned(id, reqUser);
+    // Jarima va avans turli ruxsat bilan o'chiriladi — endpoint o'z turini so'raydi.
+    const isAdvanceRow = deduction.type === StaffDeductionType.ADVANCE;
+    if (kind && isAdvanceRow !== (kind === OutstandingKind.ADVANCE)) {
+      throw new NotFoundException(
+        kind === OutstandingKind.ADVANCE
+          ? 'Avans topilmadi'
+          : 'Jarima topilmadi',
+      );
+    }
 
     const applications = await this.applicationRepo.find({
       where: { deductionId: deduction.id },
     });
 
+    const isAdvance = deduction.type === StaffDeductionType.ADVANCE;
     await this.dataSource.transaction(async (manager) => {
       for (const application of applications) {
         const salary = await manager.findOne(StaffSalary, {
@@ -108,15 +153,17 @@ export class StaffDeductionsService {
         });
         if (!salary) continue;
 
+        const take = Number(application.amount);
         const nextDeduction = round2(
-          Math.max(
-            0,
-            Number(salary.deductionAmount ?? 0) - Number(application.amount),
-          ),
+          Math.max(0, Number(salary.deductionAmount ?? 0) - take),
         );
-        const netSalary = round2(
-          Math.max(0, Number(salary.baseSalary ?? 0) - nextDeduction),
-        );
+        const nextAdvance = isAdvance
+          ? round2(Math.max(0, Number(salary.advanceAmount ?? 0) - take))
+          : Number(salary.advanceAmount ?? 0);
+        const netSalary = salaryNet({
+          ...salary,
+          deductionAmount: nextDeduction,
+        });
         const paid = Number(salary.paidAmount ?? 0);
 
         await manager.update(
@@ -124,6 +171,7 @@ export class StaffDeductionsService {
           { id: salary.id },
           {
             deductionAmount: nextDeduction as any,
+            advanceAmount: nextAdvance as any,
             status: this.statusFor(paid, netSalary),
             paidAt: paid >= netSalary ? (salary.paidAt ?? new Date()) : null,
           },
@@ -147,6 +195,83 @@ export class StaffDeductionsService {
   // ─────────────────────────────────────────────────────────────
 
   /**
+   * Oylik kichraysa (mukofot bekor qilindi, hisoblangan oylik kamaydi) unga
+   * qo'llangan ushlanma sig'imdan oshib qoladi. Ortig'i qaytariladi — eng
+   * oxirgi qo'llangandan boshlab — va yana "keyingi oyliklardan ushlanadi"
+   * holatiga o'tadi. Berilgan pul (`paidAmount`) tegilmaydi. Idempotent.
+   */
+  async releaseExcess(salary: StaffSalary): Promise<void> {
+    const room =
+      Number(salary.baseSalary ?? 0) +
+      Number(salary.bonusAmount ?? 0) -
+      Number(salary.paidAmount ?? 0);
+    let excess = round2(
+      Number(salary.deductionAmount ?? 0) - Math.max(0, room),
+    );
+    if (excess <= 0) return;
+
+    const applications = await this.applicationRepo.find({
+      where: { staffSalaryId: salary.id },
+      relations: ['deduction'],
+    });
+    applications.sort(
+      (a, b) =>
+        String(b.deduction?.sourceForMonth ?? '').localeCompare(
+          String(a.deduction?.sourceForMonth ?? ''),
+        ) || b.deductionId - a.deductionId,
+    );
+
+    let deductionAmount = Number(salary.deductionAmount ?? 0);
+    let advanceAmount = Number(salary.advanceAmount ?? 0);
+    await this.dataSource.transaction(async (manager) => {
+      for (const app of applications) {
+        if (excess <= 0) break;
+        const back = round2(Math.min(Number(app.amount), excess));
+        if (back <= 0) continue;
+        const left = round2(Number(app.amount) - back);
+        if (left > 0) {
+          await manager.update(
+            StaffSalaryDeduction,
+            { id: app.id },
+            { amount: left as any },
+          );
+        } else {
+          await manager.delete(StaffSalaryDeduction, { id: app.id });
+        }
+        await manager.update(
+          StaffDeduction,
+          { id: app.deductionId },
+          {
+            appliedAmount: round2(
+              Number(app.deduction.appliedAmount) - back,
+            ) as any,
+            settledAt: null,
+          },
+        );
+        deductionAmount = round2(deductionAmount - back);
+        if (app.deduction.type === StaffDeductionType.ADVANCE) {
+          advanceAmount = round2(advanceAmount - back);
+        }
+        excess = round2(excess - back);
+      }
+      const net = salaryNet({ ...salary, deductionAmount });
+      const paid = Number(salary.paidAmount ?? 0);
+      await manager.update(
+        StaffSalary,
+        { id: salary.id },
+        {
+          deductionAmount: deductionAmount as any,
+          advanceAmount: advanceAmount as any,
+          status: this.statusFor(paid, net),
+          paidAt: paid >= net ? (salary.paidAt ?? new Date()) : null,
+        },
+      );
+    });
+    salary.deductionAmount = deductionAmount as any;
+    salary.advanceAmount = advanceAmount as any;
+  }
+
+  /**
    * Xodimning ochiq jarimalarini shu oy oyligiga qo'llaydi (eskisidan boshlab).
    *
    * Idempotent: faqat hali ushlanmagan qismni va faqat oylikka sig'adigan
@@ -155,14 +280,11 @@ export class StaffDeductionsService {
    * berilgan bo'lib qolardi.
    */
   async applyOutstanding(salary: StaffSalary): Promise<number> {
-    const baseSalary = Number(salary.baseSalary ?? 0);
-    const paidAmount = Number(salary.paidAmount ?? 0);
     const alreadyApplied = Number(salary.deductionAmount ?? 0);
+    const alreadyAdvance = Number(salary.advanceAmount ?? 0);
 
-    // Ushlab qolish mumkin bo'lgan eng katta summa
-    const capacity = round2(
-      Math.max(0, baseSalary - alreadyApplied - paidAmount),
-    );
+    // Ushlab qolish mumkin bo'lgan eng katta summa (mukofot ham oylikka kiradi)
+    const capacity = salaryCapacity(salary);
     if (capacity <= 0) return alreadyApplied;
 
     const monthEnd = dayjs(salary.forMonth).endOf('month').format('YYYY-MM-DD');
@@ -178,6 +300,7 @@ export class StaffDeductionsService {
 
     let left = capacity;
     let applied = alreadyApplied;
+    let advance = alreadyAdvance;
 
     await this.dataSource.transaction(async (manager) => {
       for (const deduction of open) {
@@ -221,18 +344,22 @@ export class StaffDeductionsService {
 
         left = round2(left - take);
         applied = round2(applied + take);
+        if (deduction.type === StaffDeductionType.ADVANCE) {
+          advance = round2(advance + take);
+        }
       }
 
       if (applied !== alreadyApplied) {
         await manager.update(
           StaffSalary,
           { id: salary.id },
-          { deductionAmount: applied as any },
+          { deductionAmount: applied as any, advanceAmount: advance as any },
         );
       }
     });
 
     salary.deductionAmount = applied as any;
+    salary.advanceAmount = advance as any;
     return applied;
   }
 
@@ -240,19 +367,36 @@ export class StaffDeductionsService {
   // O'qish
   // ─────────────────────────────────────────────────────────────
 
-  /** Xodimning hali ushlanmagan jarimalari yig'indisi (keyingi oyliklarga qoladi) */
-  async getOutstanding(userId: number): Promise<number> {
+  /** Turi bo'yicha shart: jarimalar (avanssiz) yoki faqat avanslar. */
+  private kindClause(kind: OutstandingKind): string {
+    return kind === OutstandingKind.ADVANCE
+      ? `d."type" = '${StaffDeductionType.ADVANCE}'`
+      : `d."type" <> '${StaffDeductionType.ADVANCE}'`;
+  }
+
+  /**
+   * Xodimning hali ushlanmagan qoldig'i (keyingi oyliklarga qoladi):
+   * default — jarimalar, `ADVANCE` — avanslar.
+   */
+  async getOutstanding(
+    userId: number,
+    kind: OutstandingKind = OutstandingKind.FINE,
+  ): Promise<number> {
     const row = await this.deductionRepo
       .createQueryBuilder('d')
       .select('COALESCE(SUM(d."amount" - d."appliedAmount"), 0)', 'total')
       .where('d."userId" = :userId', { userId })
       .andWhere('d."amount" > d."appliedAmount"')
+      .andWhere(this.kindClause(kind))
       .getRawOne<{ total: string }>();
     return round2(Number(row?.total ?? 0));
   }
 
   /** Bir nechta xodim uchun birdan (ro'yxat uchun N+1 dan qochish) */
-  async getOutstandingMap(userIds: number[]): Promise<Map<number, number>> {
+  async getOutstandingMap(
+    userIds: number[],
+    kind: OutstandingKind = OutstandingKind.FINE,
+  ): Promise<Map<number, number>> {
     const result = new Map<number, number>();
     if (!userIds.length) return result;
 
@@ -262,6 +406,7 @@ export class StaffDeductionsService {
       .addSelect('COALESCE(SUM(d."amount" - d."appliedAmount"), 0)', 'total')
       .where('d."userId" IN (:...userIds)', { userIds })
       .andWhere('d."amount" > d."appliedAmount"')
+      .andWhere(this.kindClause(kind))
       .groupBy('d."userId"')
       .getRawMany<{ userId: number; total: string }>();
 

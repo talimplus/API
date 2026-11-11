@@ -1,3 +1,4 @@
+import { salaryNet } from '@/modules/staff-salaries/salary-math';
 import {
   BadRequestException,
   Injectable,
@@ -470,11 +471,8 @@ export class TeacherEarningsService {
     if (salaryRow) {
       salaryRow.baseSalary = savedSnapshot.totalEarning as any;
       const paidAmount = Number(salaryRow.paidAmount ?? 0);
-      const net = Math.max(
-        0,
-        Number(salaryRow.baseSalary ?? 0) -
-          Number(salaryRow.deductionAmount ?? 0),
-      );
+      // Mukofot qo'shilib, jarima/avans ayirilgan — yagona formula.
+      const net = salaryNet(salaryRow);
       if (net > 0 && paidAmount >= net) {
         salaryRow.status = StaffSalaryStatus.PAID;
         salaryRow.paidAt = salaryRow.paidAt ?? new Date();

@@ -19,7 +19,15 @@ import {
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
 import { CurrentUser } from '@/common/types/current.user';
-import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
+import {
+  OutstandingKind,
+  StaffDeductionsService,
+} from '@/modules/staff-salaries/staff-deductions.service';
+import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
+import {
+  salaryMoneyView,
+  salaryNet,
+} from '@/modules/staff-salaries/salary-math';
 
 @Injectable()
 export class StaffSalariesService {
@@ -35,6 +43,7 @@ export class StaffSalariesService {
     private readonly teacherEarningsService: TeacherEarningsService,
     private readonly deductionsService: StaffDeductionsService,
     private readonly userPayService: UserPayService,
+    private readonly bonusesService: StaffBonusesService,
   ) {}
 
   private normalizeForMonth(forMonth?: string): string {
@@ -58,14 +67,9 @@ export class StaffSalariesService {
     return Math.round((n + Number.EPSILON) * 100) / 100;
   }
 
-  /** Jarimalar ushlab qolingandan keyin qo'lga tegadigan summa */
+  /** Mukofot qo'shilib, jarima va avans ushlangandan keyin qo'lga tegadigani */
   private netSalary(salary: StaffSalary): number {
-    return this.round2(
-      Math.max(
-        0,
-        Number(salary.baseSalary ?? 0) - Number(salary.deductionAmount ?? 0),
-      ),
-    );
+    return salaryNet(salary);
   }
 
   /**
@@ -145,6 +149,8 @@ export class StaffSalariesService {
     const existingByUserId = new Map(existing.map((r) => [r.userId, r]));
 
     const monthYm = month.slice(0, 7);
+    // Mukofot oylikka qo'shiladi — qator shu yig'indi bilan yaratiladi/yangilanadi.
+    const bonusByUser = await this.bonusesService.sumMap(userIds, month);
 
     const toCreate: StaffSalary[] = [];
     for (const u of eligible) {
@@ -186,13 +192,21 @@ export class StaffSalariesService {
         baseSalary = this.round2(baseSalary + commissionTotal);
       }
 
-      if (baseSalary <= 0) continue;
+      const bonus = bonusByUser.get(u.id) ?? 0;
+      // Faqat mukofoti bor (oyligi 0) xodimga ham qator kerak — aks holda mukofot ko'rinmaydi.
+      if (baseSalary <= 0 && bonus <= 0 && !existingByUserId.get(u.id))
+        continue;
 
       const existingRow = existingByUserId.get(u.id);
       if (existingRow) {
+        // Mukofot to'langan oylikka ham qo'shiladi (oylik yana "qisman" bo'ladi).
+        if (Number(existingRow.bonusAmount ?? 0) !== bonus) {
+          await this.bonusesService.syncSalary(u.id, month);
+        }
         // If not paid yet, keep baseSalary in sync with latest earnings (commission updates, etc.)
         // This includes manager/reception commission updates from new confirmed receipts
-        if (existingRow.status !== StaffSalaryStatus.PAID) {
+        // (0 chiqqan hisob eski qiymatni o'chirmaydi — avvalgi xatti-harakat.)
+        if (existingRow.status !== StaffSalaryStatus.PAID && baseSalary > 0) {
           const currentBase = Number((existingRow as any).baseSalary ?? 0);
           if (currentBase !== baseSalary) {
             await this.staffSalaryRepo.update(
@@ -210,6 +224,7 @@ export class StaffSalariesService {
           user: u as any,
           forMonth: month as any,
           baseSalary,
+          bonusAmount: bonus as any,
           paidAmount: 0,
           status: StaffSalaryStatus.UNPAID,
         }),
@@ -269,6 +284,8 @@ export class StaffSalariesService {
     // Idempotent — faqat sig'adigan va hali ushlanmagan qism qo'llanadi.
     for (const row of rows) {
       if (row.status === StaffSalaryStatus.PAID) continue;
+      // Oylik kamaygan bo'lsa ortiqcha ushlanma avval qaytadi, keyin ochiqlari qo'llanadi.
+      await this.deductionsService.releaseExcess(row);
       await this.deductionsService.applyOutstanding(row);
       this.applyStatus(row);
       await this.staffSalaryRepo.update(
@@ -277,9 +294,14 @@ export class StaffSalariesService {
       );
     }
 
-    const outstandingByUser = await this.deductionsService.getOutstandingMap(
-      rows.map((r) => r.userId),
-    );
+    const userIdsOfRows = rows.map((r) => r.userId);
+    const [outstandingByUser, advanceOutstandingByUser] = await Promise.all([
+      this.deductionsService.getOutstandingMap(userIdsOfRows),
+      this.deductionsService.getOutstandingMap(
+        userIdsOfRows,
+        OutstandingKind.ADVANCE,
+      ),
+    ]);
 
     const teacherEarningById = new Map<number, any>();
     const teacherUserIds = rows
@@ -296,10 +318,6 @@ export class StaffSalariesService {
     }
 
     return rows.map((r: any) => {
-      const baseSalary = Number(r.baseSalary ?? 0);
-      const paidAmount = Number(r.paidAmount ?? 0);
-      const deductionAmount = Number(r.deductionAmount ?? 0);
-      const netSalary = this.round2(Math.max(0, baseSalary - deductionAmount));
       const paymentHistory = paymentHistoryMap.get(r.id) || [];
       const out: any = {
         ...r,
@@ -308,13 +326,11 @@ export class StaffSalariesService {
         paidAt: r.paidAt
           ? (r.paidAt.toISOString?.() ?? String(r.paidAt))
           : null,
-        baseSalary,
-        paidAmount,
-        deductionAmount,
-        netSalary,
-        remaining: this.round2(Math.max(0, netSalary - paidAmount)),
+        ...salaryMoneyView(r),
         /** Hali ushlanmagan jarima — keyingi oyliklardan ushlanadi */
         deductionOutstanding: outstandingByUser.get(r.userId) ?? 0,
+        /** Hali ushlanmagan avans — keyingi oyliklardan ushlanadi */
+        advanceOutstanding: advanceOutstandingByUser.get(r.userId) ?? 0,
         paymentHistory: paymentHistory.map((p) => ({
           id: p.id,
           amount: Number(p.amount ?? 0),
@@ -433,15 +449,13 @@ export class StaffSalariesService {
       paidAt: saved.paidAt
         ? (saved.paidAt.toISOString?.() ?? String(saved.paidAt))
         : null,
-      baseSalary: Number(saved.baseSalary ?? 0),
-      paidAmount: Number(saved.paidAmount ?? 0),
-      deductionAmount: Number(saved.deductionAmount ?? 0),
-      netSalary: this.netSalary(saved),
-      remaining: this.round2(
-        Math.max(0, this.netSalary(saved) - Number(saved.paidAmount ?? 0)),
-      ),
+      ...salaryMoneyView(saved),
       deductionOutstanding: await this.deductionsService.getOutstanding(
         saved.userId,
+      ),
+      advanceOutstanding: await this.deductionsService.getOutstanding(
+        saved.userId,
+        OutstandingKind.ADVANCE,
       ),
       paymentHistory: paymentHistory.map((p) => ({
         id: p.id,

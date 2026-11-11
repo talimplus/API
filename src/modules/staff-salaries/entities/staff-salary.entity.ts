@@ -43,6 +43,18 @@ export class StaffSalary {
   @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
   deductionAmount: number;
 
+  /**
+   * `deductionAmount` ning AVANSdan iborat qismi (oldindan berilgan pul).
+   * Jarima = `deductionAmount − advanceAmount`; berilgan pul jami =
+   * `paidAmount + advanceAmount`.
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  advanceAmount: number;
+
+  /** Shu oy mukofotlari yig'indisi (`staff_bonuses`) — oylikka qo'shiladi. */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  bonusAmount: number;
+
   @Column({
     type: 'enum',
     enum: StaffSalaryStatus,

@@ -5,6 +5,8 @@ import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.enti
 import { StaffSalaryPayment } from '@/modules/staff-salaries/entities/staff-salary-payment.entity';
 import { StaffDeduction } from '@/modules/staff-salaries/entities/staff-deduction.entity';
 import { StaffSalaryDeduction } from '@/modules/staff-salaries/entities/staff-salary-deduction.entity';
+import { StaffBonus } from '@/modules/staff-salaries/entities/staff-bonus.entity';
+import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
 import { PaymentReceipt } from '@/modules/payments/entities/payment-receipt.entity';
 import { User } from '@/modules/users/entities/user.entity';
 import { StaffSalariesService } from '@/modules/staff-salaries/staff-salaries.service';
@@ -22,6 +24,7 @@ import { StaffAttendanceModule } from '@/modules/staff-attendance/staff-attendan
       StaffSalaryPayment,
       StaffDeduction,
       StaffSalaryDeduction,
+      StaffBonus,
       PaymentReceipt,
       User,
     ]),
@@ -32,6 +35,7 @@ import { StaffAttendanceModule } from '@/modules/staff-attendance/staff-attendan
   providers: [
     StaffSalariesService,
     StaffDeductionsService,
+    StaffBonusesService,
     StaffOverviewService,
   ],
   controllers: [StaffSalariesController, StaffOverviewController],

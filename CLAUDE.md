@@ -749,6 +749,32 @@ Davr bo'yicha cheklanmaydi — qarz yopilmaguncha ko'rinib turadi.
   `amount: 0` yuborilsa faqat jarima yoziladi (to'lov tarixiga qator qo'shilmaydi).
 - Ruxsatlar: `staffPerformance.view` (ko'rish), `payroll.deduct` (jarima yozish/o'chirish).
 
+**Avans va mukofot** (2026-11-11, migratsiya `…073`):
+
+| Nima | Qayerda | Ma'nosi |
+|---|---|---|
+| Avans | `staff_deductions.type = 'advance'` | Pul HOZIR beriladi; tanlangan oy (default joriy, keyingi oy ham mumkin) oyligidan ushlanadi, sig'masa keyingi oyliklardan — jarima bilan bir xil FIFO. Jarima emas |
+| Mukofot | `staff_bonuses` | Tanlangan oy (kelajak emas) oyligiga qo'shiladi, oylik bilan beriladi |
+| `staff_salaries.advanceAmount` | | `deductionAmount` ning avans qismi |
+| `staff_salaries.bonusAmount` | | shu oy mukofotlari yig'indisi |
+
+- Yagona formula — `staff-salaries/salary-math.ts`: `net = base + bonus − deduction`
+  (qo'lga beriladigan), `fines = deduction − advance`, `earned = base + bonus − fines`,
+  `capacity = base + bonus − deduction − paid`. Hamma joy shundan o'qiydi
+  (oylik ro'yxati, xodim sahifasi, o'qituvchi daromadi sinxroni, o'qituvchi dashboardi).
+- Statistika: oylik `amountDue` = earned, `amountPaid` = paid + avans (avans ham
+  kassadan chiqqan), `remaining` = net − paid.
+- `releaseExcess` — oylik kichraysa (mukofot bekor, hisoblangan oylik kamaydi)
+  ortiqcha ushlanma eng oxirgi qo'llangandan boshlab qaytadi va yana "ochiq"
+  bo'ladi. `findAll` har o'qishda `releaseExcess` → `applyOutstanding`.
+- Endpointlar (`/staff`): `POST/DELETE advances`, `POST/DELETE bonuses`
+  (`payroll.pay`), `GET :userId/bonuses` (`staffPerformance.view`). `POST deductions`
+  avansni qabul qilmaydi, `DELETE deductions/:id` avansni o'chirmaydi (alohida ruxsat).
+- Berib bo'lingan mukofotni bekor qilib bo'lmaydi (400).
+- Javoblarda: `bonusAmount`, `advanceAmount`, `fineAmount`, `earnedAmount`,
+  `deductionOutstanding` (faqat jarima), `advanceOutstanding`; overview'da `advances`,
+  `bonuses`, `summary.advanceThisMonth/advanceOutstanding/bonusThisMonth`.
+
 ### 6.10 Ota-onalar uchun Telegram bot (`telegram`)
 
 **Har bir tashkilotning o'z boti** (loyiha SaaS — markaz ota-onaga o'z nomi

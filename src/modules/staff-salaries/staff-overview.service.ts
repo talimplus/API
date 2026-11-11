@@ -17,7 +17,13 @@ import {
 } from '@/modules/payments/entities/payment-receipt.entity';
 import { StaffAttendanceService } from '@/modules/staff-attendance/staff-attendance.service';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
-import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
+import {
+  OutstandingKind,
+  StaffDeductionsService,
+} from '@/modules/staff-salaries/staff-deductions.service';
+import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
+import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deduction-type.enum';
+import { salaryMoneyView } from '@/modules/staff-salaries/salary-math';
 
 const round2 = (n: number): number =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -48,6 +54,7 @@ export class StaffOverviewService {
     private readonly salaryRepo: Repository<StaffSalary>,
     private readonly attendanceService: StaffAttendanceService,
     private readonly deductionsService: StaffDeductionsService,
+    private readonly bonusesService: StaffBonusesService,
   ) {}
 
   /**
@@ -81,8 +88,9 @@ export class StaffOverviewService {
       lateRecords,
       receipts,
       months,
-      deductions,
+      allDeductions,
       groups,
+      bonuses,
     ] = await Promise.all([
       this.attendanceService.getUserSummary(userId, from, to),
       this.attendanceService.listUserRecords(userId, from, to),
@@ -92,7 +100,16 @@ export class StaffOverviewService {
       user.role === UserRole.TEACHER
         ? this.loadTeacherGroups(userId, reqUser.organizationId)
         : Promise.resolve([]),
+      this.bonusesService.listForUser(userId, reqUser),
     ]);
+
+    // Avans jarima emas (oldindan berilgan pul) — ro'yxatlar alohida.
+    const deductions = allDeductions.filter(
+      (d) => d.type !== StaffDeductionType.ADVANCE,
+    );
+    const advances = allDeductions.filter(
+      (d) => d.type === StaffDeductionType.ADVANCE,
+    );
 
     const pending = receipts.filter(
       (r) => r.status === PaymentReceiptStatus.PENDING,
@@ -104,8 +121,12 @@ export class StaffOverviewService {
     const monthDeductions = deductions.filter(
       (d) => d.sourceForMonth === month,
     );
-    const deductionOutstanding =
-      await this.deductionsService.getOutstanding(userId);
+    const [deductionOutstanding, advanceOutstanding] = await Promise.all([
+      this.deductionsService.getOutstanding(userId),
+      this.deductionsService.getOutstanding(userId, OutstandingKind.ADVANCE),
+    ]);
+    const sumFor = (list: { amount: number }[]) =>
+      round2(list.reduce((acc, x) => acc + x.amount, 0));
 
     const salary = await this.salaryRepo.findOne({
       where: { userId, forMonth: month as any },
@@ -129,12 +150,19 @@ export class StaffOverviewService {
           monthDeductions.reduce((sum, d) => sum + d.amount, 0),
         ),
         deductionOutstanding,
+        advanceThisMonth: sumFor(
+          advances.filter((a) => a.sourceForMonth === month),
+        ),
+        advanceOutstanding,
+        bonusThisMonth: sumFor(bonuses.filter((b) => b.forMonth === month)),
       },
       months,
       lateRecords: lateRecords.filter((r) => (r.lateMinutes ?? 0) > 0),
       attendanceRecords: lateRecords,
       unsettledReceipts: receipts.map((r) => this.receiptView(r)),
       deductions,
+      advances,
+      bonuses,
       salary: salary ? await this.salaryView(salary) : null,
       groups,
     };
@@ -229,19 +257,10 @@ export class StaffOverviewService {
   }
 
   private async salaryView(salary: StaffSalary) {
-    const baseSalary = Number(salary.baseSalary ?? 0);
-    const deductionAmount = Number(salary.deductionAmount ?? 0);
-    const paidAmount = Number(salary.paidAmount ?? 0);
-    const netSalary = round2(Math.max(0, baseSalary - deductionAmount));
-
     return {
       id: salary.id,
       forMonth: dayjs(salary.forMonth).format('YYYY-MM-DD'),
-      baseSalary,
-      deductionAmount,
-      netSalary,
-      paidAmount,
-      remaining: round2(Math.max(0, netSalary - paidAmount)),
+      ...salaryMoneyView(salary),
       status: salary.status,
       appliedDeductions: await this.deductionsService.listForSalary(salary.id),
     };

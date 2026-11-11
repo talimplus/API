@@ -6,6 +6,7 @@ import { Payment } from '@/modules/payments/entities/payment.entity';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { StudentStatus } from '@/common/enums/students-status.enums';
+import { salaryMoneyView } from '@/modules/staff-salaries/salary-math';
 
 const TREND_MONTHS = 6;
 const DEBTORS_LIMIT = 100;
@@ -112,6 +113,7 @@ export class TeacherDashboardService {
       trendAtt,
       debtors,
       earning,
+      salary,
     ] = await Promise.all([
       // `= ANY('{}')` hech narsa qaytarmaydi — guruhsiz o'qituvchi uchun ham xavfsiz.
       this.membersByGroup(groupIds),
@@ -121,6 +123,7 @@ export class TeacherDashboardService {
       this.attendanceTrend(groupIds, trendStart, monthEnd),
       this.debtors(groupIds, monthStart),
       this.earning(teacher.id, monthStart),
+      this.salary(teacher.id, monthStart),
     ]);
 
     const emptyPay = {
@@ -204,6 +207,7 @@ export class TeacherDashboardService {
         attendance: { ...attTotals, rate: rate(attTotals) },
       },
       earning,
+      salary,
       groups: groupRows,
       trend,
       debtors,
@@ -351,6 +355,55 @@ export class TeacherDashboardService {
       monthStatus: r.monthStatus ?? null,
       pendingAmount: num(r.pendingAmount),
     }));
+  }
+
+  /**
+   * Shu oy oyligi: hisob (oylik + mukofot − jarima − avans), to'langani, holati,
+   * va shu oyga yozilgan avans/mukofotlar. Oylik qatori yo'q bo'lsa ham
+   * ro'yxatlar va hali ushlanmagan avans qaytadi.
+   */
+  private async salary(teacherId: number, monthStart: string) {
+    const [[row], bonuses, advances, [out]] = await Promise.all([
+      this.q(
+        `SELECT "baseSalary", "bonusAmount", "deductionAmount", "advanceAmount",
+                "paidAmount", status
+           FROM staff_salaries WHERE "userId" = $1 AND "forMonth" = $2::date`,
+        [teacherId, monthStart],
+      ),
+      this.q(
+        `SELECT id, amount, reason, "createdAt" FROM staff_bonuses
+          WHERE "userId" = $1 AND "forMonth" = $2::date ORDER BY id`,
+        [teacherId, monthStart],
+      ),
+      this.q(
+        `SELECT id, amount, "appliedAmount", reason, "createdAt" FROM staff_deductions
+          WHERE "userId" = $1 AND "sourceForMonth" = $2::date AND type = 'advance'
+          ORDER BY id`,
+        [teacherId, monthStart],
+      ),
+      this.q(
+        `SELECT COALESCE(SUM(amount - "appliedAmount"), 0) AS total FROM staff_deductions
+          WHERE "userId" = $1 AND type = 'advance' AND amount > "appliedAmount"`,
+        [teacherId],
+      ),
+    ]);
+    return {
+      row: row ? { ...salaryMoneyView(row), status: row.status } : null,
+      bonuses: bonuses.map((b) => ({
+        id: Number(b.id),
+        amount: num(b.amount),
+        reason: b.reason,
+        createdAt: b.createdAt,
+      })),
+      advances: advances.map((a) => ({
+        id: Number(a.id),
+        amount: num(a.amount),
+        appliedAmount: num(a.appliedAmount),
+        comment: a.reason,
+        createdAt: a.createdAt,
+      })),
+      advanceOutstanding: num(out?.total),
+    };
   }
 
   /** O'qituvchining shu oydagi hisoblangan daromadi (oylik + foiz); yo'q bo'lsa null. */

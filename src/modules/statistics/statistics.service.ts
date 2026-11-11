@@ -25,6 +25,15 @@ const PENDING_SQL = `(SELECT COALESCE(SUM(r.amount), 0) FROM payment_receipts r
 /** O'quvchi oy pulini to'liq topshirgan (tasdiqlangan + tasdiq kutayotgan). */
 const HANDED_OVER_SQL = `(p.amountPaid + ${PENDING_SQL} >= p.amountDue)`;
 
+/**
+ * Oylik hisoboti (`salary-math` bilan bir xil): xodim topgani = oylik +
+ * mukofot − jarima; berilgan = to'lovlar + avans (avans ham kassadan chiqqan);
+ * qolgani = qo'lga hali berilmagani.
+ */
+const PAYROLL_DUE_SQL = `COALESCE(SUM(ss."baseSalary" + ss."bonusAmount" - (ss."deductionAmount" - ss."advanceAmount")), 0) as "amountDue"`;
+const PAYROLL_PAID_SQL = `COALESCE(SUM(ss."paidAmount" + ss."advanceAmount"), 0) as "amountPaid"`;
+const PAYROLL_REMAINING_SQL = `COALESCE(SUM(GREATEST(ss."baseSalary" + ss."bonusAmount" - ss."deductionAmount" - ss."paidAmount", 0)), 0) as "remainingAmount"`;
+
 @Injectable()
 export class StatisticsService {
   constructor(
@@ -176,9 +185,9 @@ export class StatisticsService {
     const payrollAggQb = this.staffSalaryRepo
       .createQueryBuilder('ss')
       .select([
-        'COALESCE(SUM(ss.baseSalary), 0) as "amountDue"',
-        'COALESCE(SUM(ss.paidAmount), 0) as "amountPaid"',
-        'COALESCE(SUM(ss.baseSalary - ss.paidAmount), 0) as "remainingAmount"',
+        PAYROLL_DUE_SQL,
+        PAYROLL_PAID_SQL,
+        PAYROLL_REMAINING_SQL,
         'COUNT(ss.id) as "totalCount"',
         `SUM(CASE WHEN ss.status = '${StaffSalaryStatus.PAID}' THEN 1 ELSE 0 END) as "paidCount"`,
         `SUM(CASE WHEN ss.status = '${StaffSalaryStatus.PARTIAL}' THEN 1 ELSE 0 END) as "partialCount"`,
@@ -234,9 +243,9 @@ export class StatisticsService {
       .clone()
       .select([
         `${monthOf('ss.forMonth')} as "month"`,
-        'COALESCE(SUM(ss.baseSalary), 0) as "amountDue"',
-        'COALESCE(SUM(ss.paidAmount), 0) as "amountPaid"',
-        'COALESCE(SUM(ss.baseSalary - ss.paidAmount), 0) as "remainingAmount"',
+        PAYROLL_DUE_SQL,
+        PAYROLL_PAID_SQL,
+        PAYROLL_REMAINING_SQL,
       ])
       .groupBy(monthOf('ss.forMonth'));
 
