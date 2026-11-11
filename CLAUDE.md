@@ -447,6 +447,20 @@ finished→ active
 - `activatedAt` — **birinchi** faollashish (new/ignored → active) sanasi, o'tgan
   oylarning quyi chegarasi. **Qaytishda (stopped/finished → active) qayta
   yozilmaydi** — ilgari yozilardi va to'xtashdan oldingi oylar qarzi o'chib ketardi.
+- **Qayta faollashtirish sanasi** (2026-11-11): qaytishda (stopped/finished → active)
+  body `returnDate` (default bugun) va ixtiyoriy `groupId`. Quyi chegara — status
+  o'zgargan kun (`stopped`: `stoppedAt`; aks holda oxirgi `status_changed` voqeasi —
+  `effectiveDate` yoki `occurredAt`), `GET /students/:id/reactivation`
+  (`students.changeStatus`) uni `statusChangedOn` qilib beradi (+ `today`, `groups`).
+  Shu kun tanlansa uzilish yo'q (xato bosilgan status bekor bo'ladi); keyingi kun —
+  oradagi kunlar to'lovga kirmaydi (`finished` da ochiq oynalar status kuni yopilib,
+  `returnDate` dan qayta ochiladi), oraliqda `present/late` bo'lsa — 422 `returnDate`.
+  O'tgan oydan qaytsa o'sha oydan beri qatorlar yaratilib, force qayta hisoblanadi.
+  Davom etadigan (tugamagan) guruhi yo'q va `groupId` berilmagan bo'lsa — 422 `groupId`
+  (yagona guruhidan chiqarilgan o'quvchi junction'da guruhsiz qoladi).
+- To'xtatgan o'quvchini `transfer` qilish noto'g'ri holat beradi (status `stopped`
+  qoladi, to'lov yaratilmaydi) — front unga ko'chirish tugmasini ko'rsatmaydi,
+  qaytarish qayta faollashtirish orqali.
 - **To'xtatish sanasi** (2026-10-30): `change-status?status=stopped` body `stopDate`
   (exclusive, o'tgan kun bo'lishi mumkin, default bugun). Bugundan keyin, ochilishdan,
   `activatedAt` va ochiq a'zolik boshlanishidan oldin — 422; shu kundan keyin

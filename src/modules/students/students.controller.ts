@@ -266,6 +266,27 @@ export class StudentsController {
     );
   }
 
+  @Get(':id/reactivation')
+  @RequirePermissions('students.changeStatus')
+  @ApiOperation({
+    summary:
+      "Qayta faollashtirish oynasi uchun: status o'zgargan kun (default va eng erta sana) va bugun",
+  })
+  @ApiResponse({
+    status: 200,
+    schema: {
+      example: {
+        status: 'stopped',
+        statusChangedOn: '2026-11-03',
+        today: '2026-11-11',
+        groups: [{ id: 12, name: 'IELTS-3', finished: false }],
+      },
+    },
+  })
+  async reactivation(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.studentService.reactivationInfo(req.user.organizationId, id);
+  }
+
   @Put('change-status/:id')
   @RequirePermissions('students.changeStatus')
   @ApiOperation({ summary: 'Change student status' })

@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 import { StudentStatus } from '@/common/enums/students-status.enums';
 import { StudentReturnLikelihood } from '@/common/enums/student-return-likelihood.enum';
 
@@ -52,4 +58,30 @@ export class ChangeStudentStatusDto {
   @IsOptional()
   @IsDateString()
   stopDate?: string;
+
+  @ApiProperty({
+    required: false,
+    example: '2026-11-01',
+    description:
+      "Faqat QAYTISHDA (stopped/finished → active): o'quvchi qaytadan " +
+      "o'qiy boshlagan kun. Status o'zgargan kundan (`GET /students/:id/reactivation` " +
+      "→ `statusChangedOn`) oldin va bugundan keyin bo'lolmaydi. Status o'zgargan " +
+      "kun tanlansa — uzilish yo'q (xato bosilgan status to'liq bekor bo'ladi). " +
+      "Oradagi kunlarga 'keldi/kechikdi' davomati bo'lsa — 422. Default — bugun.",
+  })
+  @IsOptional()
+  @IsDateString()
+  returnDate?: string;
+
+  @ApiProperty({
+    required: false,
+    example: 12,
+    description:
+      "Faqat QAYTISHDA: o'quvchini shu guruhga ham qo'shadi (`returnDate` dan). " +
+      "Davom etadigan guruhi qolmagan o'quvchi uchun (masalan yagona guruhidan " +
+      "chiqarilgan) — majburiy. Guruh shu filialdan va tugamagan bo'lishi kerak.",
+  })
+  @IsOptional()
+  @IsInt()
+  groupId?: number;
 }

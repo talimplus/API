@@ -2208,6 +2208,8 @@ export class StudentsService {
       comment?: string;
       startDate?: string;
       stopDate?: string;
+      returnDate?: string;
+      groupId?: number;
     },
     actorId?: number | null,
   ) {
@@ -2300,6 +2302,42 @@ export class StudentsService {
       );
     }
 
+    // Qaytish sanasi (stopped/finished → active). Status xato bosilgan bo'lsa
+    // admin uni status o'zgargan kundan qaytaradi — uzilish qolmaydi;
+    // keyinroq qaytgan bo'lsa oradagi kunlar to'lovga kirmaydi.
+    const returning = status === StudentStatus.ACTIVE && isReturn;
+    const returnFrom =
+      returning && body?.returnDate
+        ? dayjs(body.returnDate).format('YYYY-MM-DD')
+        : today;
+    const statusChangedOn = returning
+      ? await this.statusChangedOn(student, tzGroup)
+      : null;
+    // Qaytishda yangi guruhga qo'shish (yagona guruhidan chiqarilgan o'quvchi).
+    const addGroup =
+      returning && body?.groupId
+        ? await this.resolveReturnGroup(organizationId, student, body.groupId)
+        : null;
+    if (
+      returning &&
+      !addGroup &&
+      !((student as any).groups ?? []).some(
+        (g: Group) => g.status !== GroupStatus.FINISHED,
+      )
+    ) {
+      throw new ValidationException({
+        groupId: "O'quvchining davom etadigan guruhi yo'q — guruhni tanlang",
+      });
+    }
+    if (returning && returnFrom !== today) {
+      await this.assertReturnDate(
+        student,
+        returnFrom,
+        statusChangedOn,
+        tzGroup,
+      );
+    }
+
     if (
       status === StudentStatus.ACTIVE &&
       prevStatus !== StudentStatus.ACTIVE
@@ -2348,6 +2386,9 @@ export class StudentsService {
             : null,
         comment: String(body?.comment ?? '').trim() || null,
         ...(stopping && stopDate !== today ? { effectiveDate: stopDate } : {}),
+        ...(returning && returnFrom !== today
+          ? { effectiveDate: returnFrom }
+          : {}),
       },
     });
 
@@ -2361,9 +2402,50 @@ export class StudentsService {
         "O'quvchi to'xtatildi",
       );
     }
+    // Qaytish oyi o'tgan oy bo'lsa — o'sha oydan beri qatorlar yaratiladi va
+    // qayta hisoblanadi (aks holda oradagi oylar bepul qolardi).
+    const returnMonthsBack = returning
+      ? Math.max(
+          1,
+          dayjs(today)
+            .startOf('month')
+            .diff(dayjs(returnFrom).startOf('month'), 'month') + 1,
+        )
+      : 1;
     if (status === StudentStatus.ACTIVE && isReturn) {
+      // `finished` da a'zolik oynalari yopilmaydi — keyinroq qaytgan bo'lsa
+      // oradagi davr to'lovga kirmasligi uchun oynani status o'zgargan kuni
+      // yopib, qaytish kunidan yangisini ochamiz.
+      const gapFrom =
+        prevStatus === StudentStatus.FINISHED &&
+        statusChangedOn &&
+        returnFrom > statusChangedOn
+          ? statusChangedOn
+          : null;
+      if (addGroup && !groupIds.includes(addGroup.id)) {
+        await this.studentRepo
+          .createQueryBuilder()
+          .relation(Student, 'groups')
+          .of(saved.id)
+          .add(addGroup.id);
+        await this.studentRepo.update(saved.id, {
+          studyDays: await this.computeStudyDays([...groupIds, addGroup.id]),
+        } as any);
+        // Guruh boshlanishidan oldin a'zo bo'lolmaydi.
+        const start = this.toDateOnlyStr(addGroup.startDate);
+        await this.enrollmentsService.open(
+          saved.id,
+          addGroup.id,
+          start && start > returnFrom ? start : returnFrom,
+        );
+      }
       for (const gid of groupIds) {
-        await this.enrollmentsService.open(saved.id, gid, today);
+        if (gapFrom) {
+          await this.enrollmentsService.close(saved.id, gid, gapFrom, {
+            reason: "O'quvchi tugatgan edi",
+          });
+        }
+        await this.enrollmentsService.open(saved.id, gid, returnFrom);
       }
       // Shu oyning o'zida qaytdi: to'xtatishda joriy oy to'xtagan kungacha
       // hisoblanib (ko'pincha PAID bo'lib) qolgan — yangi oyna bo'yicha
@@ -2371,7 +2453,7 @@ export class StudentsService {
       // qolardi. Avval "qaytariladigan" deb yozilgan pul qarzni yopishga qaytadi.
       await this.paymentsService
         .recalculateOpenPaymentsForStudent(saved.id, {
-          maxMonthsBack: 1,
+          maxMonthsBack: returnMonthsBack,
           includePaid: true,
           force: true,
         })
@@ -2381,9 +2463,23 @@ export class StudentsService {
     if (status === StudentStatus.ACTIVE) {
       // Create/ensure payments for current month for all groups the student belongs to.
       // (Payment creation is group-based; if student has no groups, nothing is created.)
-      await this.paymentsService.ensurePaymentsForStudent(saved.id, {
-        onlyCurrentMonth: true,
-      });
+      // O'tgan oydan qaytganda — o'sha oydan beri yetishmagan qatorlar ham.
+      await this.paymentsService.ensurePaymentsForStudent(
+        saved.id,
+        returnMonthsBack > 1
+          ? { onlyCurrentMonth: false, maxMonthsBack: returnMonthsBack }
+          : { onlyCurrentMonth: true },
+      );
+      if (returning && returnMonthsBack > 1) {
+        // Yangi yaratilgan o'tgan oy qatorlari ham yangi oyna bo'yicha.
+        await this.paymentsService
+          .recalculateOpenPaymentsForStudent(saved.id, {
+            maxMonthsBack: returnMonthsBack,
+            includePaid: true,
+            force: true,
+          })
+          .catch(() => undefined);
+      }
       if (startsInPast) {
         await this.startDateService.applyActivation(saved, backdateFrom!);
       }
@@ -2395,6 +2491,130 @@ export class StudentsService {
     }
 
     return saved;
+  }
+
+  /**
+   * O'quvchining hozirgi statusi (stopped/finished) qaysi kuni qo'yilgani —
+   * qaytish sanasining quyi chegarasi. `stopped` uchun `stoppedAt`; aks holda
+   * tarixdagi oxirgi `status_changed` (effectiveDate yoki yozilgan vaqt).
+   * Topilmasa (masalan guruh cron bilan yopilgan) — null.
+   */
+  private async statusChangedOn(
+    student: Student,
+    tzGroup?: Group | null,
+  ): Promise<string | null> {
+    const tz = tzGroup?.timezone || 'Asia/Tashkent';
+    if (student.status === StudentStatus.STOPPED && student.stoppedAt) {
+      return dayjs(student.stoppedAt).tz(tz).format('YYYY-MM-DD');
+    }
+    const [row] = await this.studentRepo.query(
+      `SELECT "payload"->>'effectiveDate' AS "effectiveDate", "occurredAt"
+         FROM "student_events"
+        WHERE "studentId" = $1 AND "type" = $2 AND "payload"->>'toStatus' = $3
+        ORDER BY "occurredAt" DESC, "id" DESC
+        LIMIT 1`,
+      [student.id, StudentEventType.STATUS_CHANGED, student.status],
+    );
+    if (row?.effectiveDate) return String(row.effectiveDate).slice(0, 10);
+    if (row?.occurredAt) {
+      return dayjs(row.occurredAt).tz(tz).format('YYYY-MM-DD');
+    }
+    return null;
+  }
+
+  /** Qaytishda qo'shiladigan guruh: shu tashkilot va filial, tugamagan. */
+  private async resolveReturnGroup(
+    organizationId: number,
+    student: Student,
+    groupId: number,
+  ): Promise<Group> {
+    const group = await this.groupRepo.findOne({
+      where: { id: groupId, center: { organization: { id: organizationId } } },
+      relations: ['center'],
+    });
+    if (!group) throw new ValidationException({ groupId: 'Guruh topilmadi' });
+    const centerId = (student as any).centerId ?? null;
+    if (centerId && group.center?.id !== centerId) {
+      throw new ValidationException({
+        groupId: "Guruh o'quvchining filialidan bo'lishi kerak",
+      });
+    }
+    if (group.status === GroupStatus.FINISHED) {
+      throw new ValidationException({
+        groupId: "Tugagan guruhga qo'shib bo'lmaydi",
+      });
+    }
+    return group;
+  }
+
+  private toDateOnlyStr(value: unknown): string | null {
+    return value ? dayjs(value as any).format('YYYY-MM-DD') : null;
+  }
+
+  /** Qaytish sanasi: bugundan keyin emas, status o'zgargan kundan oldin emas. */
+  private async assertReturnDate(
+    student: Student,
+    date: string,
+    floor: string | null,
+    tzGroup?: Group | null,
+  ) {
+    await this.startDateService.assertDate(
+      date,
+      'returnDate',
+      (student as any).centerId ?? null,
+      tzGroup,
+    );
+    if (floor && date < floor) {
+      throw new ValidationException({
+        returnDate: `Status ${floor} da o'zgargan — qaytish sanasi undan oldin bo'lolmaydi`,
+      });
+    }
+    // Oradagi kunlarga "keldi" qo'yilgan bo'lsa, ular to'lovsiz qolib ketardi.
+    if (floor && date > floor) {
+      const [att] = await this.studentRepo.query(
+        `SELECT COUNT(*)::int AS "count", MIN("lessonDate") AS "first" FROM "attendance"
+          WHERE "studentId" = $1 AND "lessonDate" >= $2::date AND "lessonDate" < $3::date
+            AND "status" IN ('present', 'late')`,
+        [student.id, floor, date],
+      );
+      if (Number(att?.count ?? 0) > 0) {
+        const first = dayjs(att.first).format('YYYY-MM-DD');
+        throw new ValidationException({
+          returnDate: `${first} da "keldi" deb belgilangan — qaytish sanasi ${first} dan keyin bo'lolmaydi`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Qayta faollashtirish oynasi uchun: sana chegaralari va guruhlar.
+   * `statusChangedOn` — default va eng erta sana, `today` — eng kech.
+   */
+  async reactivationInfo(organizationId: number, id: number) {
+    const student = await this.studentRepo.findOne({
+      where: { id, center: { organization: { id: organizationId } } },
+      relations: ['groups'],
+    });
+    if (!student) throw new NotFoundException(`O'quvchi topilmadi`);
+    if (
+      student.status !== StudentStatus.STOPPED &&
+      student.status !== StudentStatus.FINISHED
+    ) {
+      throw new BadRequestException(
+        "Faqat to'xtatgan yoki tugatgan o'quvchi qayta faollashtiriladi",
+      );
+    }
+    const tzGroup = (student as any).groups?.[0] ?? null;
+    return {
+      status: student.status,
+      statusChangedOn: await this.statusChangedOn(student, tzGroup),
+      today: this.todayInGroupTz(tzGroup),
+      groups: ((student as any).groups ?? []).map((g: Group) => ({
+        id: g.id,
+        name: g.name,
+        finished: g.status === GroupStatus.FINISHED,
+      })),
+    };
   }
 
   /**
