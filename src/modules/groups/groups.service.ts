@@ -411,6 +411,12 @@ export class GroupsService {
           "Tanlangan xodim o'qituvchi emas — guruhga faqat o'qituvchi biriktiriladi",
       });
     }
+    // Ishdan bo'shatilgan o'qituvchi yangi guruhga biriktirilmaydi.
+    if (teacher?.dismissedAt) {
+      throw new ValidationException({
+        teacherId: "Bu o'qituvchi ishdan bo'shatilgan",
+      });
+    }
   }
 
   /**

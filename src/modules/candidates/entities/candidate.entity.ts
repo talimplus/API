@@ -10,6 +10,8 @@ import {
 } from 'typeorm';
 import { Subject } from '@/modules/subjects/entities/subjects.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { CandidatePosition } from '@/modules/candidates/enums/candidate-position.enum';
+import { CandidateStatus } from '@/modules/candidates/enums/candidate-status.enum';
 
 /**
  * Ishga nomzod (HR): ish so'rab kelgan yoki markaz o'zi topgan odam.
@@ -52,6 +54,22 @@ export class Candidate {
 
   @Column({ type: 'int', nullable: true })
   subjectId?: number | null;
+
+  /** Qaysi lavozimga (o'qituvchi, administrator, menejer, ...). */
+  @Column({ type: 'varchar', length: 30 })
+  position: CandidatePosition;
+
+  /** Holat: yangi / ishga kirdi / 50-50 / kirolmadi. */
+  @Column({ type: 'varchar', length: 20, default: CandidateStatus.NEW })
+  status: CandidateStatus;
+
+  /** "Ishga kirdi" + xodimlarga o'tkazilganda yaratilgan xodim. */
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'hiredUserId' })
+  hiredUser?: User | null;
+
+  @Column({ type: 'int', nullable: true })
+  hiredUserId?: number | null;
 
   @Column({ type: 'text', nullable: true })
   address?: string | null;

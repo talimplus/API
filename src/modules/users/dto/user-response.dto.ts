@@ -45,4 +45,17 @@ export class UserResponseDto {
       "Bu maydon asosan o'qituvchi bo'lsa to'ldiriladi, ya'ni bitta o'quvchidan necha foiz olishi kerakligini ko'rsatadi",
   })
   commissionPercentage: number;
+
+  @ApiProperty({ example: true })
+  isActive: boolean;
+
+  @ApiProperty({
+    example: null,
+    nullable: true,
+    description: "Ishdan bo'shatilgan kun (YYYY-MM-DD); null — ishlayapti",
+  })
+  dismissedAt: string | null;
+
+  @ApiProperty({ example: null, nullable: true })
+  dismissalReason: string | null;
 }

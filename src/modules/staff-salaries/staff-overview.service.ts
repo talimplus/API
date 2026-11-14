@@ -98,7 +98,11 @@ export class StaffOverviewService {
       this.buildMonthSeries(userId, month),
       this.deductionsService.listForUser(userId, reqUser),
       user.role === UserRole.TEACHER
-        ? this.loadTeacherGroups(userId, reqUser.organizationId)
+        ? this.loadTeacherGroups(
+            userId,
+            reqUser.organizationId,
+            Boolean(user.dismissedAt),
+          )
         : Promise.resolve([]),
       this.bonusesService.listForUser(userId, reqUser),
     ]);
@@ -173,9 +177,16 @@ export class StaffOverviewService {
   /**
    * O'qituvchi hozir dars o'tadigan guruhlar (`finished` emas): fan, xona,
    * jadval, o'quvchilar soni. Boshqa xodimlarda bo'sh ro'yxat.
+   * Ishdan bo'shatilgan o'qituvchida (`history`) — u dars o'tgan BARCHA
+   * guruhlar (tugaganlari ham, o'qituvchi tarixidan ham): sahifa uning
+   * arxividir, guruh sahifasidan o'quvchilar va davomat ochiladi.
    * Xom SQL — staff-salaries moduli groups moduliga bog'lanmasin.
    */
-  private async loadTeacherGroups(teacherId: number, organizationId: number) {
+  private async loadTeacherGroups(
+    teacherId: number,
+    organizationId: number,
+    history = false,
+  ) {
     const rows: any[] = await this.userRepo.manager.query(
       `SELECT g.id, g.name, g.status,
               TO_CHAR(g."startDate", 'YYYY-MM-DD') AS "startDate",
@@ -191,10 +202,14 @@ export class StaffOverviewService {
          JOIN centers c ON c.id = g."centerId"
          LEFT JOIN subjects s ON s.id = g."subjectId"
          LEFT JOIN rooms r ON r.id = g."roomId"
-        WHERE g."teacherId" = $1
-          AND c."organizationId" = $2
-          AND g.status <> 'finished'
-        ORDER BY (g.status = 'started') DESC, g.name`,
+        WHERE c."organizationId" = $2
+          AND ${
+            history
+              ? `(g."teacherId" = $1 OR EXISTS (SELECT 1 FROM group_teacher_periods tp
+                   WHERE tp."groupId" = g.id AND tp."teacherId" = $1))`
+              : `g."teacherId" = $1 AND g.status <> 'finished'`
+          }
+        ORDER BY (g.status = 'started') DESC, g."endDate" DESC NULLS FIRST, g.name`,
       [teacherId, organizationId],
     );
 
@@ -307,6 +322,9 @@ export class StaffOverviewService {
       salary: Number(user.salary ?? 0),
       commissionPercentage: Number(user.commissionPercentage ?? 0),
       createdAt: user.createdAt,
+      isActive: user.isActive !== false,
+      dismissedAt: user.dismissedAt ?? null,
+      dismissalReason: user.dismissalReason ?? null,
     };
   }
 

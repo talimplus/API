@@ -21,6 +21,7 @@ import { PaginatedUserResponseDto } from '@/modules/users/dto/paginate-user-repo
 import { UserResponseDto } from '@/modules/users/dto/user-response.dto';
 import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 import { ApiQuery } from '@nestjs/swagger';
+import { DismissUserDto } from '@/modules/users/dto/dismiss-user.dto';
 
 @ApiTags('Users')
 @Controller('users')
@@ -100,13 +101,19 @@ export class UsersController {
   // uchun ham kerak — shuning uchun guruh boshqarish ruxsati ham yetarli.
   @Get('employees')
   @RequirePermissions('users.view', 'groups.create', 'groups.update')
-  @ApiOperation({ summary: 'Get employees (non-students)' })
+  @ApiOperation({
+    summary: 'Get employees (non-students)',
+    description:
+      "Default — ishlayotgan xodimlar. `archived=true` — faqat ishdan bo'shatilganlar (arxiv).",
+  })
+  @ApiQuery({ name: 'archived', required: false, type: Boolean })
   @ApiResponse({ type: PaginatedUserResponseDto })
   async findEmployees(
     @Req() req: any,
     @Query('centerId') centerId?: number,
     @Query('name') name?: string,
     @Query('phone') phone?: string,
+    @Query('archived') archived?: string,
     @Query('page') page?: number,
     @Query('perPage') perPage?: number,
   ) {
@@ -114,6 +121,7 @@ export class UsersController {
       centerId: centerId ? +centerId : undefined,
       name,
       phone,
+      archived: archived === 'true' || archived === '1',
       page: page ? +page : 1,
       perPage: perPage ? +perPage : 10,
     });
@@ -197,6 +205,36 @@ export class UsersController {
     @Req() req: any,
   ) {
     return this.usersService.setActive(id, isActive, req.user);
+  }
+
+  /**
+   * 🚪 Ishdan bo'shatish: akkaunt bloklanadi, xodim arxivga o'tadi, tarixi qoladi.
+   */
+  @Put(':id/dismiss')
+  @RequirePermissions('users.update')
+  @ApiOperation({
+    summary: 'Dismiss staff member (archive, history kept, login blocked)',
+    description:
+      "O'qituvchining tugamagan guruhlari bo'lsa — 400. `dismissedAt` kelajak " +
+      "yoki xodim qo'shilgan kundan oldin bo'lsa — 422.",
+  })
+  @ApiBody({ type: DismissUserDto })
+  @ApiResponse({ type: UserResponseDto })
+  async dismiss(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DismissUserDto,
+    @Req() req: any,
+  ) {
+    return this.usersService.dismiss(id, dto, req.user);
+  }
+
+  /** ↩️ Bo'shatilgan xodimni qayta ishga olish. */
+  @Put(':id/reinstate')
+  @RequirePermissions('users.update')
+  @ApiOperation({ summary: 'Reinstate a dismissed staff member' })
+  @ApiResponse({ type: UserResponseDto })
+  async reinstate(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.usersService.reinstate(id, req.user);
   }
 
   /**

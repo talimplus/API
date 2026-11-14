@@ -15,6 +15,7 @@ import { Center } from '@/modules/centers/entities/centers.entity';
 import { Role } from '@/modules/roles/entities/role.entity';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { IsNotEmpty, IsString, Min } from 'class-validator';
+import { dayjs } from '@/shared/utils/dayjs';
 
 @Entity('users')
 // Telefon faqat xodimlar orasida unique. O'quvchi akkauntlari (role=student)
@@ -68,6 +69,30 @@ export class User {
    */
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
+
+  /**
+   * Ishdan bo'shatilgan kun (inclusive — shu kun oxirgi ish kuni). `null` —
+   * ishlayapti. Bo'shatilgan xodim ham bloklanadi (`isActive = false`), lekin
+   * ro'yxatda "Arxiv"da turadi; tarixi (oylik, avans, mukofot, guruhlar,
+   * cheklar, davomat) to'liq saqlanadi. Bu oydan keyingi oylarga oylik yozilmaydi.
+   */
+  // pg `date` ni JS Date qilib qaytaradi — JSON'da timezone siljimasin.
+  @Column({
+    type: 'date',
+    nullable: true,
+    transformer: {
+      to: (v: string | null) => v,
+      from: (v: Date | string | null) =>
+        v ? dayjs(v).format('YYYY-MM-DD') : null,
+    },
+  })
+  dismissedAt: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  dismissalReason: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  dismissedById: number | null;
 
   @Column({ nullable: true })
   salary: number;

@@ -1,6 +1,7 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -8,7 +9,10 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
+import { CandidatePosition } from '@/modules/candidates/enums/candidate-position.enum';
+import { CandidateStatus } from '@/modules/candidates/enums/candidate-status.enum';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -55,10 +59,24 @@ export class CreateCandidateDto {
   @IsInt({ message: "Tug'ilgan yil butun son bo'lishi kerak" })
   birthYear: number;
 
+  @ApiProperty({ enum: CandidatePosition, example: CandidatePosition.TEACHER })
+  @IsEnum(CandidatePosition, { message: 'Lavozimni tanlang' })
+  position: CandidatePosition;
+
+  @ApiProperty({
+    enum: CandidateStatus,
+    required: false,
+    description: "Bo'lmasa — `new`",
+  })
+  @IsOptional()
+  @IsEnum(CandidateStatus, { message: "Holat noto'g'ri" })
+  status?: CandidateStatus;
+
   @ApiProperty({
     required: false,
     nullable: true,
-    description: 'Fan (ixtiyoriy)',
+    description:
+      "Fan — faqat o'qituvchi (majburiy) va yordamchi o'qituvchi uchun; boshqa lavozimda tozalanadi",
   })
   @IsOptional()
   @Type(() => Number)
@@ -113,6 +131,16 @@ export class QueryCandidatesDto {
   @IsInt()
   subjectId?: number;
 
+  @ApiProperty({ required: false, enum: CandidatePosition })
+  @IsOptional()
+  @IsEnum(CandidatePosition)
+  position?: CandidatePosition;
+
+  @ApiProperty({ required: false, enum: CandidateStatus })
+  @IsOptional()
+  @IsEnum(CandidateStatus)
+  status?: CandidateStatus;
+
   @ApiProperty({ required: false, example: 1 })
   @IsOptional()
   @Type(() => Number)
@@ -145,8 +173,79 @@ export class CandidateResponseDto {
   @ApiProperty({ nullable: true }) subjectId: number | null;
   @ApiProperty({ type: CandidateSubjectDto, nullable: true })
   subject: CandidateSubjectDto | null;
+  @ApiProperty({ enum: CandidatePosition }) position: CandidatePosition;
+  @ApiProperty({ enum: CandidateStatus }) status: CandidateStatus;
+  @ApiProperty({
+    nullable: true,
+    description: "Xodimlarga o'tkazilgan bo'lsa — xodim id",
+  })
+  hiredUserId: number | null;
   @ApiProperty({ nullable: true }) address: string | null;
   @ApiProperty({ nullable: true }) comment: string | null;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
+}
+
+/** `PUT /candidates/:id/status` */
+export class ChangeCandidateStatusDto {
+  @ApiProperty({ enum: CandidateStatus })
+  @IsEnum(CandidateStatus, { message: "Holat noto'g'ri" })
+  status: CandidateStatus;
+}
+
+/**
+ * `POST /candidates/:id/hire` — nomzodni xodimlarga o'tkazish. Ism/familiya/
+ * telefon/filial nomzoddan olinadi (berilsa — almashtiriladi); login, parol
+ * va rol nomzodda yo'q — forma so'raydi.
+ */
+export class HireCandidateDto {
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty({ message: 'Ism majburiy' })
+  firstName?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty({ message: 'Familiya majburiy' })
+  lastName?: string;
+
+  @ApiProperty({ required: false, example: '+998901234567' })
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty({ message: 'Telefon majburiy' })
+  phone?: string;
+
+  @ApiProperty({ example: 'vali.aliyev' })
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty({ message: 'Login majburiy' })
+  login: string;
+
+  @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(6, { message: "Parol kamida 6 belgi bo'lishi kerak" })
+  password: string;
+
+  @ApiProperty({ example: 3, description: 'Xodim roli (`GET /roles`)' })
+  @Type(() => Number)
+  @IsInt({ message: 'Rolni tanlang' })
+  roleId: number;
+
+  @ApiProperty({ required: false, example: 3000000 })
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  salary?: number;
+
+  @ApiProperty({ required: false, example: 40 })
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @Max(100)
+  commissionPercentage?: number;
 }

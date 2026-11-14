@@ -132,6 +132,14 @@ export class StaffSalariesService {
       if (u.createdAt && !dayjs(u.createdAt).isBefore(nextMonthStart)) {
         return false;
       }
+      // Ishdan bo'shatilgan oydan keyingi oylarga oylik yozilmaydi
+      // (bo'shatilgan oyning o'zi qoladi — o'sha oy ishlagan).
+      if (
+        u.dismissedAt &&
+        dayjs(u.dismissedAt).format('YYYY-MM') < month.slice(0, 7)
+      ) {
+        return false;
+      }
       if (u.role === UserRole.TEACHER) {
         return pay.salary > 0 || pay.commissionPercentage > 0;
       }

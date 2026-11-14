@@ -92,7 +92,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `organizations` | `/organizations` | tenant, obuna holati |
 | `subscriptions` | `/subscriptions` | obuna/tarif |
 | `centers` | `/centers` | filiallar (`/centers/all` — ochiq) |
-| `users` | `/users` | xodimlar, `/users/me`, maosh/foiz sozlamalari, **bloklash** (`PUT /users/:id/active`) |
+| `users` | `/users` | xodimlar, `/users/me`, maosh/foiz sozlamalari, **bloklash** (`PUT /users/:id/active`), **ishdan bo'shatish/arxiv** (6.5.2) |
 | `roles` | `/roles` | dinamik rollar, `/roles/permissions` |
 | `rooms`, `subjects` | `/rooms`, `/subjects` | ma'lumotnomalar |
 | `groups` | `/groups`, `/group` | guruh CRUD, status, **narx tarixi** (`group-fee.service.ts`), `groups-lifecycle.service.ts` (kunlik 03:00 auto-finish) |
@@ -102,7 +102,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `students` | `/students`, `/student` | o'quvchi CRUD, status, chegirma davrlari, **boshqa guruhga ko'chirish** |
 | `enrollments` | — | a'zolik oynalari (`joinedAt`/`leftAt`) — billing chegaralari uchun yagona manba |
 | `leads` | `/leads` | potentsial mijoz, `transferToStudent` |
-| `candidates` | `/candidates` | **ishga nomzodlar (HR)**: ish so'rab kelgan/topilgan odamlar bazasi (filialga bog'langan, fan ixtiyoriy, telefon unique emas). Ruxsat: `candidates.view` / `candidates.manage` |
+| `candidates` | `/candidates` | **ishga nomzodlar (HR)**: ish so'rab kelgan/topilgan odamlar bazasi (filialga bog'langan, telefon unique emas). **Lavozim** (`position`: teacher/assistant/admin/manager/sales/marketing/accountant/other; fan faqat teacher — majburiy — va assistant'da, boshqasida tozalanadi), **holat** (`status`: new/hired/maybe/rejected, `PUT /candidates/:id/status`), **xodimlarga o'tkazish** (`POST /candidates/:id/hire` — `users.create` ham kerak; `UsersService.create` + `hiredUserId`, ikki marta emas, o'tkazilgandan keyin holat o'zgarmaydi). Ruxsat: `candidates.view` / `candidates.manage` |
 | `payments` | `/payments` | **eng katta modul** — oylik hisob, cheklar, eksport |
 | `teacher-earnings` | `/teacher-earnings` | o'qituvchi oylik daromadi + carryover |
 | `staff-salaries` | `/staff-salaries`, `/staff` | xodim maoshlari, to'lovlari, **jarimalar** va xodim sahifasi (overview) |
@@ -643,6 +643,28 @@ birlashtiradi:
   **butun tashkilot** CASCADE bilan o'chardi); oylik/komissiya/chek/guruh tarixi
   bor xodim — 400 ("bloklang"). CASCADE bu tarixni yo'qotardi.
 - `GET /users/:id` endi tashkilot bilan chegaralangan.
+
+**Ishdan bo'shatish** (2026-11-13, migratsiya `…074`): `users.dismissedAt` (DATE,
+oxirgi ish kuni) + `dismissalReason` + `dismissedById`. Bloklashdan farqi —
+vaqtincha emas: xodim **arxivga** o'tadi.
+- `PUT /users/:id/dismiss` `{ dismissedAt?, reason? }` (`users.update`): `isActive=false`
+  + sana (default bugun; kelajak yoki xodim qo'shilgan kundan oldin — 422).
+  O'zini, admin va student akkauntini — 400. **O'qituvchining tugamagan guruhi
+  bo'lsa — 400** (guruh nomlari bilan): avval guruh boshqa o'qituvchiga o'tkaziladi.
+- `PUT /users/:id/reinstate` — qayta ishga olish (sana tozalanadi, blok ochiladi).
+  Bo'shatilgan xodimni `PUT /:id/active` bilan ochib bo'lmaydi (400).
+- Login: bo'shatilgan xodimga alohida 401 xabar. Token `isActiveCached` orqali o'ladi.
+- `GET /users/employees` default — faqat ishlayotganlar; `archived=true` — arxiv.
+  `GET /users/teachers` bo'shatilganlarni bermaydi; guruhga biriktirish — 422 `teacherId`.
+- Oylik: bo'shatilgan OYdan keyingi oylarga `staff_salaries` qatori yaratilmaydi
+  (shu oy qoladi — oxirgi oylik beriladi; oy o'rtasida proratsiya YO'Q, kerak bo'lsa
+  admin jarima/mukofot bilan to'g'irlaydi).
+- Xodim sahifasi (`GET /staff/:id/overview`) — uning arxivi: `user.dismissedAt/
+  dismissalReason/isActive`; bo'shatilgan o'qituvchida `groups` — u dars o'tgan
+  BARCHA guruhlar (tugaganlari va `group_teacher_periods` tarixidagilari ham).
+- ⚠️ `mcp/setup-readonly.sql` ustun darajasida GRANT beradi — yangi ustunlar
+  (`users.dismissed*`, `candidates.position/status/hiredUserId`) MCP'da ko'rinishi
+  uchun skriptni qayta ishga tushiring.
 
 ### 6.6 Lead va referral
 

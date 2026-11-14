@@ -20,6 +20,8 @@ import { UpdateMyProfileDto } from '@/modules/users/dto/update-my-profile.dto';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { UserPayService } from '@/modules/users/user-pay.service';
 import { RolesService } from '@/modules/roles/roles.service';
+import { DismissUserDto } from '@/modules/users/dto/dismiss-user.dto';
+import { dayjs } from '@/shared/utils/dayjs';
 
 @Injectable()
 export class UsersService {
@@ -257,7 +259,9 @@ export class UsersService {
       .leftJoinAndSelect('user.center', 'center')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
-      .andWhere('user.role = :role', { role: UserRole.TEACHER });
+      .andWhere('user.role = :role', { role: UserRole.TEACHER })
+      // Ishdan bo'shatilgan o'qituvchi tanlash ro'yxatlarida chiqmaydi.
+      .andWhere('user.dismissedAt IS NULL');
 
     if (centerId) {
       query.andWhere('center.id = :centerId', { centerId });
@@ -352,12 +356,15 @@ export class UsersService {
       centerId,
       name,
       phone,
+      archived = false,
       page = 1,
       perPage = 10,
     }: {
       centerId?: number;
       name?: string;
       phone?: string;
+      /** `true` — faqat ishdan bo'shatilganlar (arxiv), aks holda ishlayotganlar. */
+      archived?: boolean;
       page?: number;
       perPage?: number;
     },
@@ -370,6 +377,9 @@ export class UsersService {
       .leftJoinAndSelect('user.userRole', 'userRole')
       .leftJoin('center.organization', 'organization')
       .where('organization.id = :organizationId', { organizationId })
+      .andWhere(
+        archived ? 'user.dismissedAt IS NOT NULL' : 'user.dismissedAt IS NULL',
+      )
       .andWhere('user.role IN (:...roles)', {
         roles: [
           UserRole.TEACHER,
@@ -395,7 +405,8 @@ export class UsersService {
     }
 
     const [data, total] = await query
-      .orderBy('user.createdAt', 'DESC')
+      .orderBy(archived ? 'user.dismissedAt' : 'user.createdAt', 'DESC')
+      .addOrderBy('user.id', 'DESC')
       .skip(skip)
       .take(perPage)
       .getManyAndCount();
@@ -461,7 +472,101 @@ export class UsersService {
     if (user.role === UserRole.ADMIN && !isActive) {
       throw new BadRequestException("Admin akkauntini bloklab bo'lmaydi");
     }
+    // Bo'shatilgan xodim blokdan chiqarilmaydi — avval qayta ishga olinadi.
+    if (user.dismissedAt && isActive) {
+      throw new BadRequestException(
+        "Xodim ishdan bo'shatilgan — avval uni qayta ishga oling",
+      );
+    }
     user.isActive = isActive;
+    await this.userRepo.save(user);
+    this.activeCache.delete(user.id);
+    this.rolesService.invalidateCache(user.id);
+    return instanceToPlain(user);
+  }
+
+  /**
+   * Xodimni ishdan bo'shatish. O'chirish emas: akkaunt bloklanadi (login rad
+   * etiladi, amaldagi token 15 s ichida o'ladi), xodim "Arxiv"ga o'tadi va
+   * barcha tarixi (oylik, avans, mukofot, jarima, cheklar, guruhlar, davomat)
+   * saqlanadi. Bo'shatilgan oydan keyingi oylarga oylik yozilmaydi.
+   *
+   * O'qituvchining tugamagan guruhlari bo'lsa — 400: avval guruhlar boshqa
+   * o'qituvchiga o'tkaziladi (aks holda guruh "egasiz" qoladi va komissiya
+   * bo'shatilgan odamga yozilaveradi).
+   */
+  async dismiss(id: number, dto: DismissUserDto, currentUser: CurrentUser) {
+    const user = await this.userRepo.findOne({
+      where: { id, organization: { id: currentUser.organizationId } },
+    });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+    if (user.id === currentUser.userId) {
+      throw new BadRequestException("O'zingizni ishdan bo'shata olmaysiz");
+    }
+    if (user.role === UserRole.ADMIN || user.role === UserRole.STUDENT) {
+      throw new BadRequestException("Bu akkauntni ishdan bo'shatib bo'lmaydi");
+    }
+    if (user.dismissedAt) {
+      throw new BadRequestException('Xodim allaqachon ishdan bo‘shatilgan');
+    }
+
+    const today = dayjs().tz('Asia/Tashkent').format('YYYY-MM-DD');
+    const date = dto.dismissedAt
+      ? dayjs(dto.dismissedAt).format('YYYY-MM-DD')
+      : today;
+    if (date > today) {
+      throw new ValidationException({
+        dismissedAt: "Sana bugundan keyin bo'lolmaydi",
+      });
+    }
+    const created = user.createdAt
+      ? dayjs(user.createdAt).tz('Asia/Tashkent').format('YYYY-MM-DD')
+      : null;
+    if (created && date < created) {
+      throw new ValidationException({
+        dismissedAt: "Sana xodim qo'shilgan kundan oldin bo'lolmaydi",
+      });
+    }
+
+    if (user.role === UserRole.TEACHER) {
+      const groups: { name: string }[] = await this.userRepo.manager.query(
+        `SELECT "name" FROM "groups"
+          WHERE "teacherId" = $1 AND "status" <> 'finished'
+          ORDER BY "name"`,
+        [user.id],
+      );
+      if (groups.length) {
+        throw new BadRequestException(
+          "O'qituvchining tugamagan guruhlari bor: " +
+            groups.map((g) => g.name).join(', ') +
+            ". Avval ularni boshqa o'qituvchiga o'tkazing yoki yakunlang.",
+        );
+      }
+    }
+
+    user.isActive = false;
+    user.dismissedAt = date;
+    user.dismissalReason = dto.reason || null;
+    user.dismissedById = currentUser.userId ?? null;
+    await this.userRepo.save(user);
+    this.activeCache.delete(user.id);
+    this.rolesService.invalidateCache(user.id);
+    return instanceToPlain(user);
+  }
+
+  /** Ishdan bo'shatilgan xodimni qayta ishga olish (arxivdan qaytarish). */
+  async reinstate(id: number, currentUser: CurrentUser) {
+    const user = await this.userRepo.findOne({
+      where: { id, organization: { id: currentUser.organizationId } },
+    });
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+    if (!user.dismissedAt) {
+      throw new BadRequestException("Xodim ishdan bo'shatilmagan");
+    }
+    user.isActive = true;
+    user.dismissedAt = null;
+    user.dismissalReason = null;
+    user.dismissedById = null;
     await this.userRepo.save(user);
     this.activeCache.delete(user.id);
     this.rolesService.invalidateCache(user.id);

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,9 +9,17 @@ import { Repository } from 'typeorm';
 import { Candidate } from '@/modules/candidates/entities/candidate.entity';
 import {
   CreateCandidateDto,
+  HireCandidateDto,
   QueryCandidatesDto,
   UpdateCandidateDto,
 } from '@/modules/candidates/dto/candidate.dto';
+import {
+  CandidatePosition,
+  POSITIONS_WITH_SUBJECT,
+} from '@/modules/candidates/enums/candidate-position.enum';
+import { CandidateStatus } from '@/modules/candidates/enums/candidate-status.enum';
+import { UsersService } from '@/modules/users/users.service';
+import { RolesService } from '@/modules/roles/roles.service';
 import { CurrentUser } from '@/common/types/current.user';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { ValidationException } from '@/common/exceptions/validation.exception';
@@ -20,14 +29,36 @@ import { ValidationException } from '@/common/exceptions/validation.exception';
  *
  * - Har bir nomzod bitta filialga tegishli. Admin filialni tanlaydi (yoki
  *   "barcha filiallar"), qolgan xodim faqat o'z filialida ishlaydi.
- * - Fan ixtiyoriy, lekin tanlansa — nomzod filialining fani bo'lishi shart.
+ * - Lavozim majburiy. Fan faqat o'qituvchi (majburiy) va yordamchi o'qituvchi
+ *   uchun; boshqa lavozimda tozalanadi. Tanlansa — nomzod filialining fani.
+ * - Holat: new / hired / maybe / rejected. "Ishga kirdi" bo'lganda nomzodni
+ *   xodimlarga o'tkazish mumkin (`hire`) — xodim yaratiladi va `hiredUserId`
+ *   ga yoziladi (ikki marta o'tkazilmaydi).
  */
 @Injectable()
 export class CandidatesService {
   constructor(
     @InjectRepository(Candidate)
     private readonly repo: Repository<Candidate>,
+    private readonly usersService: UsersService,
+    private readonly rolesService: RolesService,
   ) {}
+
+  /**
+   * Lavozim va fan mosligi: o'qituvchiga fan majburiy, fansiz lavozimda
+   * fan tozalanadi.
+   */
+  private normalizeSubject(row: Candidate) {
+    if (!POSITIONS_WITH_SUBJECT.includes(row.position)) {
+      row.subjectId = null;
+      return;
+    }
+    if (row.position === CandidatePosition.TEACHER && !row.subjectId) {
+      throw new ValidationException({
+        subjectId: "O'qituvchi uchun fanni tanlang",
+      });
+    }
+  }
 
   private isAdmin(user: CurrentUser): boolean {
     return user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN;
@@ -44,6 +75,9 @@ export class CandidatesService {
       birthYear: c.birthYear,
       subjectId: c.subjectId ?? null,
       subject: c.subject ? { id: c.subject.id, name: c.subject.name } : null,
+      position: c.position,
+      status: c.status,
+      hiredUserId: c.hiredUserId ?? null,
       address: c.address ?? null,
       comment: c.comment ?? null,
       createdAt: c.createdAt,
@@ -105,6 +139,12 @@ export class CandidatesService {
     if (query.subjectId) {
       qb.andWhere('c.subjectId = :subjectId', { subjectId: query.subjectId });
     }
+    if (query.position) {
+      qb.andWhere('c.position = :position', { position: query.position });
+    }
+    if (query.status) {
+      qb.andWhere('c.status = :status', { status: query.status });
+    }
     const search = query.search?.trim();
     if (search) {
       // Telefon bazada har xil yozilishi mumkin — raqamlar raqamlar bilan.
@@ -153,10 +193,17 @@ export class CandidatesService {
     }
     this.assertBirthYear(dto.birthYear);
     await this.assertCenter(user.organizationId, centerId);
-    if (dto.subjectId) await this.assertSubject(dto.subjectId, centerId);
+    const probe = {
+      position: dto.position,
+      subjectId: dto.subjectId ?? null,
+    } as Candidate;
+    this.normalizeSubject(probe);
+    if (probe.subjectId) await this.assertSubject(probe.subjectId, centerId);
 
     const saved = await this.repo.save(
       this.repo.create({
+        position: dto.position,
+        status: dto.status ?? CandidateStatus.NEW,
         organizationId: user.organizationId,
         centerId,
         firstName: dto.firstName,
@@ -164,7 +211,7 @@ export class CandidatesService {
         phone: dto.phone,
         experience: dto.experience,
         birthYear: dto.birthYear,
-        subjectId: dto.subjectId ?? null,
+        subjectId: probe.subjectId,
         address: dto.address ?? null,
         comment: dto.comment ?? null,
         createdById: user.userId,
@@ -192,6 +239,8 @@ export class CandidatesService {
       'phone',
       'experience',
       'birthYear',
+      'position',
+      'status',
     ] as const;
     const nulls = required.filter((k) => dto[k] === null);
     if (nulls.length) {
@@ -218,6 +267,9 @@ export class CandidatesService {
     if (dto.address !== undefined) row.address = dto.address ?? null;
     if (dto.comment !== undefined) row.comment = dto.comment ?? null;
     if (dto.subjectId !== undefined) row.subjectId = dto.subjectId ?? null;
+    if (dto.position !== undefined) row.position = dto.position;
+    if (dto.status !== undefined) this.assertStatusChange(row, dto.status);
+    this.normalizeSubject(row);
     // Filial o'zgarsa eski fan ham qayta tekshiriladi.
     if (row.subjectId) await this.assertSubject(row.subjectId, row.centerId);
 
@@ -225,6 +277,61 @@ export class CandidatesService {
     // o'rniga eski relation'ni yozib qo'yadi.
     row.subject = undefined;
     await this.repo.save(row);
+    return this.findOne(user, id);
+  }
+
+  /** Xodimlarga o'tkazilgan nomzodning holati "ishga kirdi" dan qaytmaydi. */
+  private assertStatusChange(row: Candidate, status: CandidateStatus) {
+    if (row.hiredUserId && status !== CandidateStatus.HIRED) {
+      throw new ValidationException({
+        status: "Nomzod xodimlarga o'tkazilgan — holatni o'zgartirib bo'lmaydi",
+      });
+    }
+    row.status = status;
+  }
+
+  async changeStatus(user: CurrentUser, id: number, status: CandidateStatus) {
+    const row = await this.getOwned(user, id);
+    this.assertStatusChange(row, status);
+    row.subject = undefined;
+    await this.repo.save(row);
+    return this.findOne(user, id);
+  }
+
+  /**
+   * Nomzodni xodimlarga o'tkazish: xodim yaratiladi (login/parol/rol formadan,
+   * qolgani nomzoddan), nomzod `hired` bo'ladi va `hiredUserId` yoziladi.
+   * Xodim qo'shish ruxsati (`users.create`) ham talab qilinadi.
+   */
+  async hire(user: CurrentUser, id: number, dto: HireCandidateDto) {
+    if (!(await this.rolesService.userHasPermission(user, ['users.create']))) {
+      throw new ForbiddenException('Sizda xodim qo‘shish ruxsati yo‘q');
+    }
+    const row = await this.getOwned(user, id);
+    if (row.hiredUserId) {
+      throw new BadRequestException("Nomzod allaqachon xodimlarga o'tkazilgan");
+    }
+
+    const created = await this.usersService.create(
+      {
+        firstName: dto.firstName ?? row.firstName,
+        lastName: dto.lastName ?? row.lastName,
+        phone: dto.phone ?? row.phone,
+        login: dto.login,
+        password: dto.password,
+        roleId: dto.roleId,
+        centerId: row.centerId,
+        salary: dto.salary,
+        commissionPercentage: dto.commissionPercentage,
+      },
+      user.organizationId,
+      user.role,
+    );
+
+    await this.repo.update(
+      { id: row.id },
+      { status: CandidateStatus.HIRED, hiredUserId: created.id },
+    );
     return this.findOne(user, id);
   }
 

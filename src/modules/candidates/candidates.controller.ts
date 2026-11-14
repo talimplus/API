@@ -21,7 +21,9 @@ import { RequirePermissions } from '@/decorators/permissions.decorator';
 import { CandidatesService } from '@/modules/candidates/candidates.service';
 import {
   CandidateResponseDto,
+  ChangeCandidateStatusDto,
   CreateCandidateDto,
+  HireCandidateDto,
   QueryCandidatesDto,
   UpdateCandidateDto,
 } from '@/modules/candidates/dto/candidate.dto';
@@ -79,6 +81,41 @@ export class CandidatesController {
     @Req() req: any,
   ) {
     return this.candidatesService.update(req.user, id, dto);
+  }
+
+  @Put(':id/status')
+  @RequirePermissions('candidates.manage')
+  @ApiOperation({
+    summary: 'Nomzod holati (yangi / ishga kirdi / 50-50 / kirolmadi)',
+    description:
+      "Xodimlarga o'tkazilgan nomzodning holati `hired` dan o'zgarmaydi (422).",
+  })
+  @ApiBody({ type: ChangeCandidateStatusDto })
+  @ApiOkResponse({ type: CandidateResponseDto })
+  changeStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ChangeCandidateStatusDto,
+    @Req() req: any,
+  ) {
+    return this.candidatesService.changeStatus(req.user, id, dto.status);
+  }
+
+  @Post(':id/hire')
+  @RequirePermissions('candidates.manage')
+  @ApiOperation({
+    summary: 'Nomzodni xodimlarga o‘tkazish',
+    description:
+      'Xodim yaratiladi (`users.create` ruxsati ham kerak), nomzod `hired` bo‘ladi. ' +
+      'Login/telefon band bo‘lsa — 422 (`login`, `phone`). Ikkinchi marta — 400.',
+  })
+  @ApiBody({ type: HireCandidateDto })
+  @ApiOkResponse({ type: CandidateResponseDto })
+  hire(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: HireCandidateDto,
+    @Req() req: any,
+  ) {
+    return this.candidatesService.hire(req.user, id, dto);
   }
 
   @Delete(':id')

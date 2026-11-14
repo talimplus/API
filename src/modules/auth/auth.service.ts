@@ -79,6 +79,11 @@ export class AuthService {
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) throw new UnauthorizedException('Parol noto‘g‘ri');
+    if (user.dismissedAt) {
+      throw new UnauthorizedException(
+        "Siz ishdan bo'shatilgansiz — akkaunt yopilgan. Markaz administratoriga murojaat qiling",
+      );
+    }
     if (user.isActive === false) {
       throw new UnauthorizedException(
         'Akkaunt bloklangan. Markaz administratoriga murojaat qiling',
