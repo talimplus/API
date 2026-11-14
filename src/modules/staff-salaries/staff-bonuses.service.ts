@@ -44,6 +44,11 @@ export class StaffBonusesService {
         'Bu xodim sizning tashkilotingizga tegishli emas',
       );
     }
+    if (user.dismissedAt) {
+      throw new BadRequestException(
+        "Xodim ishdan bo'shatilgan — unga mukofot yozilmaydi",
+      );
+    }
     const amount = round2(dto.amount);
     if (amount <= 0) {
       throw new BadRequestException('Summa 0 dan katta bo‘lishi kerak');

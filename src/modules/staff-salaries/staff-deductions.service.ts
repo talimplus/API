@@ -62,6 +62,11 @@ export class StaffDeductionsService {
         'Bu xodim sizning tashkilotingizga tegishli emas',
       );
     }
+    if (user.dismissedAt) {
+      throw new BadRequestException(
+        "Xodim ishdan bo'shatilgan — unga jarima yoki avans yozilmaydi",
+      );
+    }
 
     const amount = round2(dto.amount);
     if (amount <= 0) {
