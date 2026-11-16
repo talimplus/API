@@ -633,6 +633,7 @@ export class PaymentsService {
       dateFrom?: string;
       dateTo?: string;
       status?: PaymentReceiptStatus;
+      search?: string;
     },
     opts: { withRelations?: boolean } = {},
   ) {
@@ -643,7 +644,9 @@ export class PaymentsService {
         .leftJoinAndSelect('p.student', 'student')
         .leftJoinAndSelect('p.group', 'group');
     } else {
-      qb.leftJoin('r.payment', 'p').leftJoin('p.student', 'student');
+      qb.leftJoin('r.payment', 'p')
+        .leftJoin('p.student', 'student')
+        .leftJoin('p.group', 'group');
     }
 
     qb.leftJoin('student.center', 'center')
@@ -677,6 +680,31 @@ export class PaymentsService {
       });
     }
 
+    // Qidiruv: o'quvchi ismi/familiyasi (har ikki tartibda), guruh nomi yoki
+    // telefon raqamlari (kamida 3 ta raqam bo'lsa).
+    const search = args.search?.trim();
+    if (search) {
+      const like = `%${search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+      const digits = search.replace(/\D/g, '');
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where("CONCAT(student.firstName, ' ', student.lastName) ILIKE :q", {
+            q: like,
+          })
+            .orWhere(
+              "CONCAT(student.lastName, ' ', student.firstName) ILIKE :q",
+            )
+            .orWhere('group.name ILIKE :q');
+          if (digits.length >= 3) {
+            w.orWhere(
+              "regexp_replace(COALESCE(student.phone, ''), '\\D', '', 'g') LIKE :qd",
+              { qd: `%${digits}%` },
+            );
+          }
+        }),
+      );
+    }
+
     return qb;
   }
 
@@ -686,7 +714,12 @@ export class PaymentsService {
    */
   private buildPendingReceiptsQuery(
     organizationId: number,
-    args: { centerId?: number; dateFrom?: string; dateTo?: string },
+    args: {
+      centerId?: number;
+      dateFrom?: string;
+      dateTo?: string;
+      search?: string;
+    },
   ) {
     return this.buildReceiptsQuery(
       organizationId,
@@ -706,7 +739,12 @@ export class PaymentsService {
    */
   async getReceiptsStats(
     organizationId: number,
-    args: { centerId?: number; dateFrom?: string; dateTo?: string },
+    args: {
+      centerId?: number;
+      dateFrom?: string;
+      dateTo?: string;
+      search?: string;
+    },
   ) {
     const rows = await this.buildReceiptsQuery(organizationId, args)
       .select('r.status', 'status')
@@ -761,6 +799,7 @@ export class PaymentsService {
       perPage?: number;
       dateFrom?: string;
       dateTo?: string;
+      search?: string;
     },
   ) {
     const page = Math.max(1, Number(args.page ?? 1));
@@ -814,6 +853,7 @@ export class PaymentsService {
       centerId?: number;
       dateFrom?: string;
       dateTo?: string;
+      search?: string;
     },
   ) {
     const isAdmin =
@@ -838,6 +878,7 @@ export class PaymentsService {
       centerId: effectiveCenterId,
       dateFrom: hasIds ? undefined : args.dateFrom,
       dateTo: hasIds ? undefined : args.dateTo,
+      search: hasIds ? undefined : args.search,
     });
 
     if (hasIds) {

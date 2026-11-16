@@ -389,6 +389,12 @@ export class PaymentsController {
       "Qabul qilingan sana oralig'i oxiri (YYYY-MM-DD). Shu kun ham kiradi.",
     example: '2026-09-20',
   })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description:
+      "O'quvchi ismi/familiyasi, guruh nomi yoki telefon (kamida 3 raqam).",
+  })
   @RequirePermissions('receipts.view')
   async pendingReceipts(
     @Req() req: any,
@@ -397,6 +403,7 @@ export class PaymentsController {
     @Query('perPage') perPage?: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
   ) {
     const isAdmin =
       req.user.role === UserRole.ADMIN ||
@@ -413,6 +420,7 @@ export class PaymentsController {
       perPage: perPage ? +perPage : 20,
       dateFrom,
       dateTo,
+      search,
     });
   }
 
@@ -450,12 +458,19 @@ export class PaymentsController {
       },
     },
   })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description:
+      "O'quvchi ismi/familiyasi, guruh nomi yoki telefon (kamida 3 raqam).",
+  })
   @RequirePermissions('receipts.view')
   async receiptsStats(
     @Req() req: any,
     @Query('centerId') centerId?: number,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('search') search?: string,
   ) {
     const isAdmin =
       req.user.role === UserRole.ADMIN ||
@@ -470,6 +485,7 @@ export class PaymentsController {
       centerId: effectiveCenterId,
       dateFrom,
       dateTo,
+      search,
     });
   }
 
@@ -522,6 +538,7 @@ export class PaymentsController {
         centerId: effectiveCenterId,
         dateFrom: dto.dateFrom,
         dateTo: dto.dateTo,
+        search: dto.search,
       },
     );
   }

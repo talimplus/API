@@ -64,4 +64,13 @@ export class ConfirmReceiptsDto {
   @IsOptional()
   @IsString()
   dateTo?: string;
+
+  @ApiPropertyOptional({
+    example: 'Ali',
+    description:
+      "Faqat `all: true` uchun: ro'yxatdagi qidiruv bilan bir xil (ism, guruh, telefon).",
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
 }
