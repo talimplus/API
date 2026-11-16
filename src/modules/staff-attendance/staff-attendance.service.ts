@@ -45,6 +45,13 @@ const SHARED_DEVICE_LOOKBACK_DAYS = 60;
 
 const DEFAULT_TIMEZONE = 'Asia/Tashkent';
 
+/**
+ * "Keldim" bosadigan xodim turlari. O'qituvchining kechikishi birinchi
+ * darsidan hisoblanadi; qabulxonada dars yo'q — faqat kelgan vaqt va
+ * joylashuv/Wi-Fi dalili yoziladi.
+ */
+const CHECK_IN_ROLES: UserRole[] = [UserRole.TEACHER, UserRole.RECEPTION];
+
 type LessonDay = { date: string; startTime: string };
 
 @Injectable()
@@ -72,16 +79,17 @@ export class StaffAttendanceService {
    * Hech qanday shart bloklamaydi — joylashuv berilmasa ham, markaz Wi-Fi'sida
    * bo'lmasa ham yozuv yaratiladi. Farq faqat `confidence` va `flags` da.
    *
-   * Yagona shart — **rol**: ishga kelganini faqat o'qituvchining o'zi
-   * belgilaydi. Admin/menejer `'*'` ruxsatiga ega bo'lsa ham o'ziga davomat
-   * yoza olmaydi (hisobot ham faqat o'qituvchilar bo'yicha quriladi).
+   * Yagona shart — **rol**: ishga kelganini o'qituvchi yoki qabulxona
+   * xodimining o'zi belgilaydi. Admin/menejer `'*'` ruxsatiga ega bo'lsa ham
+   * o'ziga davomat yoza olmaydi.
    */
   async checkIn(reqUser: any, dto: CheckInDto, req: any) {
-    if (reqUser?.role !== UserRole.TEACHER) {
+    if (!CHECK_IN_ROLES.includes(reqUser?.role)) {
       throw new ForbiddenException(
-        "\"Keldim\" faqat o'qituvchilar uchun — davomatni o'qituvchining o'zi belgilaydi",
+        '"Keldim" faqat o\'qituvchi va qabulxona xodimlari uchun',
       );
     }
+    const isTeacher = reqUser.role === UserRole.TEACHER;
 
     const center = await this.loadCenter(reqUser.centerId);
     const timezone = center?.timezone || DEFAULT_TIMEZONE;
@@ -118,7 +126,7 @@ export class StaffAttendanceService {
     );
 
     const flags = [...evidence.flags];
-    if (!firstLessonAt) flags.push(AttendanceFlag.NO_LESSON_TODAY);
+    if (isTeacher && !firstLessonAt) flags.push(AttendanceFlag.NO_LESSON_TODAY);
 
     const saved = await this.repo.save(
       this.repo.create({
@@ -328,7 +336,10 @@ export class StaffAttendanceService {
     row.confirmedByUserId = reqUser.userId;
     row.confirmedAt = new Date();
     row.note = dto.note ?? null;
-    row.flags = firstLessonAt ? null : [AttendanceFlag.NO_LESSON_TODAY];
+    row.flags =
+      firstLessonAt || user.role !== UserRole.TEACHER
+        ? null
+        : [AttendanceFlag.NO_LESSON_TODAY];
 
     const saved = await this.repo.save(row);
     const fresh = await this.repo.findOne({
@@ -421,7 +432,7 @@ export class StaffAttendanceService {
     const centerId = this.resolveCenterId(reqUser, centerIdRaw);
     const center = centerId ? await this.loadCenter(centerId) : null;
 
-    // 1) Doiraga kiradigan xodimlar: o'qituvchilar + shu davrda yozuvi borlar
+    // 1) Doiraga kiradigan xodimlar: o'qituvchilar, qabulxona + shu davrda yozuvi borlar
     const teacherQb = this.userRepo
       .createQueryBuilder('user')
       .leftJoin('user.organization', 'organization')
@@ -429,7 +440,7 @@ export class StaffAttendanceService {
       .where('organization.id = :organizationId', {
         organizationId: reqUser.organizationId,
       })
-      .andWhere('user.role = :role', { role: UserRole.TEACHER });
+      .andWhere('user.role IN (:...roles)', { roles: CHECK_IN_ROLES });
     if (centerId) teacherQb.andWhere('center.id = :centerId', { centerId });
     const teachers = await teacherQb.getMany();
 

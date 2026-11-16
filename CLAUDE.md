@@ -691,8 +691,10 @@ vaqtincha emas: xodim **arxivga** o'tadi.
 ### 6.8 Xodim davomati (`staff-attendance`)
 
 Jadval `staff_attendances`, kuniga bitta qator: `(userId, workDate)` unique.
-Hozircha faqat **o'qituvchilar** yoqilgan, lekin model umumiy — keyin boshqa
-xodimlarga kengaytiriladi (ular uchun smena jadvali kerak bo'ladi).
+"Keldim" **o'qituvchi va qabulxona** (`role = reception`) uchun yoqilgan
+(`CHECK_IN_ROLES`). O'qituvchining kechikishi birinchi darsidan hisoblanadi;
+qabulxonada smena jadvali yo'q — kechikish va "kelmagan kun" hisoblanmaydi,
+faqat kelgan vaqt + GPS/Wi-Fi dalili. Boshqa xodimlar — smena jadvali bilan keyin.
 
 **Asosiy tamoyil: hech narsa bloklanmaydi.** "Keldim" tugmasini yo'lda ham bosish
 mumkin — shuning uchun tugmani ishonchli qilishga urinmaymiz, balki har yozuv
