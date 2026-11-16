@@ -6,6 +6,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -28,6 +29,8 @@ import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deducti
 import {
   CreateStaffAdvanceDto,
   CreateStaffBonusDto,
+  UpdateStaffAdvanceDto,
+  UpdateStaffBonusDto,
 } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
 import { CreateStaffDeductionDto } from '@/modules/staff-salaries/dto/create-staff-deduction.dto';
 import { StaffOverviewResponseDto } from '@/modules/staff-salaries/dto/staff-overview-response.dto';
@@ -121,6 +124,23 @@ export class StaffOverviewController {
     return this.deductionsService.createAdvance(dto, req.user);
   }
 
+  @Patch('advances/:id')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: 'Avansni tahrirlash (xato kiritilgan bo‘lsa)',
+    description:
+      'Summa, oy (`forMonth`, keyingi oydan uzoq emas) va izohni o‘zgartiradi. ' +
+      'Avans oyliklardan qaytariladi va yangi qiymat bo‘yicha qaytadan ushlanadi; ' +
+      'berilgan pul tegilmaydi. Javob — yangilangan `staff_deductions` yozuvi.',
+  })
+  updateAdvance(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateStaffAdvanceDto,
+    @Req() req: any,
+  ) {
+    return this.deductionsService.updateAdvance(id, dto, req.user);
+  }
+
   @Delete('advances/:id')
   @RequirePermissions('payroll.pay')
   @ApiOperation({ summary: 'Avansni bekor qilish (xato kiritilgan bo‘lsa)' })
@@ -145,6 +165,22 @@ export class StaffOverviewController {
   })
   createBonus(@Body() dto: CreateStaffBonusDto, @Req() req: any) {
     return this.bonusesService.create(dto, req.user);
+  }
+
+  @Patch('bonuses/:id')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: 'Mukofotni tahrirlash (xato kiritilgan bo‘lsa)',
+    description:
+      'Summa, oy (kelajak emas) va sababni o‘zgartiradi; ikkala oy oyligi qayta hisoblanadi. ' +
+      'Oylik bilan berib bo‘lingan mukofotni kamaytirish yoki boshqa oyga o‘tkazish — 400.',
+  })
+  updateBonus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateStaffBonusDto,
+    @Req() req: any,
+  ) {
+    return this.bonusesService.update(id, dto, req.user);
   }
 
   @Delete('bonuses/:id')

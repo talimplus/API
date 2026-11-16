@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { dayjs } from '@/shared/utils/dayjs';
 import { User } from '@/modules/users/entities/user.entity';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
@@ -14,7 +14,10 @@ import { StaffSalaryDeduction } from '@/modules/staff-salaries/entities/staff-sa
 import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deduction-type.enum';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 import { CreateStaffDeductionDto } from '@/modules/staff-salaries/dto/create-staff-deduction.dto';
-import { CreateStaffAdvanceDto } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
+import {
+  CreateStaffAdvanceDto,
+  UpdateStaffAdvanceDto,
+} from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
 import {
   round2,
   salaryCapacity,
@@ -105,15 +108,7 @@ export class StaffDeductionsService {
    */
   async createAdvance(dto: CreateStaffAdvanceDto, reqUser: any) {
     const month = this.normalizeMonth(dto.forMonth);
-    const maxMonth = dayjs()
-      .add(1, 'month')
-      .startOf('month')
-      .format('YYYY-MM-DD');
-    if (month > maxMonth) {
-      throw new BadRequestException(
-        'Avans keyingi oydan uzoq oy oyligiga yozilmaydi',
-      );
-    }
+    this.assertAdvanceMonth(month);
     return this.create(
       {
         userId: dto.userId,
@@ -146,48 +141,140 @@ export class StaffDeductionsService {
       );
     }
 
-    const applications = await this.applicationRepo.find({
-      where: { deductionId: deduction.id },
-    });
-
-    const isAdvance = deduction.type === StaffDeductionType.ADVANCE;
-    await this.dataSource.transaction(async (manager) => {
-      for (const application of applications) {
-        const salary = await manager.findOne(StaffSalary, {
-          where: { id: application.staffSalaryId },
-        });
-        if (!salary) continue;
-
-        const take = Number(application.amount);
-        const nextDeduction = round2(
-          Math.max(0, Number(salary.deductionAmount ?? 0) - take),
-        );
-        const nextAdvance = isAdvance
-          ? round2(Math.max(0, Number(salary.advanceAmount ?? 0) - take))
-          : Number(salary.advanceAmount ?? 0);
-        const netSalary = salaryNet({
-          ...salary,
-          deductionAmount: nextDeduction,
-        });
-        const paid = Number(salary.paidAmount ?? 0);
-
-        await manager.update(
-          StaffSalary,
-          { id: salary.id },
-          {
-            deductionAmount: nextDeduction as any,
-            advanceAmount: nextAdvance as any,
-            status: this.statusFor(paid, netSalary),
-            paidAt: paid >= netSalary ? (salary.paidAt ?? new Date()) : null,
-          },
-        );
-      }
-
-      await manager.delete(StaffSalaryDeduction, { deductionId: deduction.id });
+    const touched = await this.dataSource.transaction(async (manager) => {
+      const salaries = await this.unapply(manager, deduction);
       await manager.delete(StaffDeduction, { id: deduction.id });
+      return salaries;
     });
+    // Bo'shagan joyga boshqa ochiq jarima/avanslar tushadi.
+    await this.reapplyFrom(deduction.userId, touched[0]);
 
     return { success: true };
+  }
+
+  /**
+   * Xato kiritilgan avansni tuzatadi (summa, oy, izoh). Avans avval barcha
+   * oyliklardan to'liq qaytariladi, keyin yangi summa/oy bo'yicha qaytadan
+   * ushlanadi — xuddi o'chirib qaytadan kiritgandek, faqat yozuv o'sha qoladi.
+   * Berilgan pul (`paidAmount`) tegilmaydi: summa oshsa va oylik berib
+   * bo'lingan bo'lsa, oshgan qismi keyingi oyliklardan ushlanadi.
+   */
+  async updateAdvance(id: number, dto: UpdateStaffAdvanceDto, reqUser: any) {
+    const deduction = await this.getOwned(id, reqUser);
+    if (deduction.type !== StaffDeductionType.ADVANCE) {
+      throw new NotFoundException('Avans topilmadi');
+    }
+    const oldMonth = dayjs(deduction.sourceForMonth).format('YYYY-MM-DD');
+    const month =
+      dto.forMonth !== undefined ? this.normalizeMonth(dto.forMonth) : oldMonth;
+    if (month !== oldMonth) this.assertAdvanceMonth(month);
+    const amount =
+      dto.amount !== undefined ? round2(dto.amount) : Number(deduction.amount);
+    if (amount <= 0) {
+      throw new BadRequestException('Summa 0 dan katta bo‘lishi kerak');
+    }
+    const reason =
+      dto.comment !== undefined
+        ? dto.comment.trim() || 'Avans'
+        : deduction.reason;
+
+    await this.dataSource.transaction(async (manager) => {
+      await this.unapply(manager, deduction);
+      await manager.update(
+        StaffDeduction,
+        { id: deduction.id },
+        {
+          amount: amount as any,
+          appliedAmount: 0 as any,
+          settledAt: null,
+          sourceForMonth: month as any,
+          reason,
+        },
+      );
+    });
+    await this.reapplyFrom(
+      deduction.userId,
+      month < oldMonth ? month : oldMonth,
+    );
+
+    return this.findOne(deduction.id, reqUser);
+  }
+
+  /**
+   * Ushlanmani u qo'llangan barcha oyliklardan qaytaradi (yozuvning o'zi
+   * qoladi). Qaytarilgan oyliklarning `forMonth` lari o'sish tartibida.
+   */
+  private async unapply(
+    manager: EntityManager,
+    deduction: StaffDeduction,
+  ): Promise<string[]> {
+    const applications = await manager.find(StaffSalaryDeduction, {
+      where: { deductionId: deduction.id },
+    });
+    const months: string[] = [];
+
+    const isAdvance = deduction.type === StaffDeductionType.ADVANCE;
+    for (const application of applications) {
+      const salary = await manager.findOne(StaffSalary, {
+        where: { id: application.staffSalaryId },
+      });
+      if (!salary) continue;
+      months.push(dayjs(salary.forMonth).format('YYYY-MM-DD'));
+
+      const take = Number(application.amount);
+      const nextDeduction = round2(
+        Math.max(0, Number(salary.deductionAmount ?? 0) - take),
+      );
+      const nextAdvance = isAdvance
+        ? round2(Math.max(0, Number(salary.advanceAmount ?? 0) - take))
+        : Number(salary.advanceAmount ?? 0);
+      const netSalary = salaryNet({
+        ...salary,
+        deductionAmount: nextDeduction,
+      });
+      const paid = Number(salary.paidAmount ?? 0);
+
+      await manager.update(
+        StaffSalary,
+        { id: salary.id },
+        {
+          deductionAmount: nextDeduction as any,
+          advanceAmount: nextAdvance as any,
+          status: this.statusFor(paid, netSalary),
+          paidAt: paid >= netSalary ? (salary.paidAt ?? new Date()) : null,
+        },
+      );
+    }
+
+    await manager.delete(StaffSalaryDeduction, { deductionId: deduction.id });
+    return months.sort();
+  }
+
+  /**
+   * Xodimning `fromMonth` va undan keyingi barcha oyliklariga ochiq
+   * jarima/avanslarni qaytadan qo'llaydi (eski oydan boshlab, FIFO).
+   */
+  private async reapplyFrom(userId: number, fromMonth?: string): Promise<void> {
+    if (!fromMonth) return;
+    const salaries = await this.salaryRepo
+      .createQueryBuilder('s')
+      .where('s."userId" = :userId', { userId })
+      .andWhere('s."forMonth" >= :fromMonth', { fromMonth })
+      .orderBy('s."forMonth"', 'ASC')
+      .getMany();
+    for (const salary of salaries) await this.applyOutstanding(salary);
+  }
+
+  private assertAdvanceMonth(month: string): void {
+    const maxMonth = dayjs()
+      .add(1, 'month')
+      .startOf('month')
+      .format('YYYY-MM-DD');
+    if (month > maxMonth) {
+      throw new BadRequestException(
+        'Avans keyingi oydan uzoq oy oyligiga yozilmaydi',
+      );
+    }
   }
 
   private statusFor(paid: number, netSalary: number): StaffSalaryStatus {
@@ -355,11 +442,20 @@ export class StaffDeductionsService {
       }
 
       if (applied !== alreadyApplied) {
+        // Ushlanma oylikni berilgan pulgacha yesa — oylik "to'langan" bo'ladi.
+        const net = salaryNet({ ...salary, deductionAmount: applied });
+        const paid = Number(salary.paidAmount ?? 0);
         await manager.update(
           StaffSalary,
           { id: salary.id },
-          { deductionAmount: applied as any, advanceAmount: advance as any },
+          {
+            deductionAmount: applied as any,
+            advanceAmount: advance as any,
+            status: this.statusFor(paid, net),
+            paidAt: paid >= net ? (salary.paidAt ?? new Date()) : null,
+          },
         );
+        salary.status = this.statusFor(paid, net);
       }
     });
 

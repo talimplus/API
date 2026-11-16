@@ -11,7 +11,10 @@ import { User } from '@/modules/users/entities/user.entity';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
 import { StaffBonus } from '@/modules/staff-salaries/entities/staff-bonus.entity';
 import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
-import { CreateStaffBonusDto } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
+import {
+  CreateStaffBonusDto,
+  UpdateStaffBonusDto,
+} from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
 import { round2, salaryNet } from '@/modules/staff-salaries/salary-math';
 import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
 
@@ -95,6 +98,53 @@ export class StaffBonusesService {
     await this.bonusRepo.delete({ id: bonus.id });
     await this.syncSalary(bonus.userId, forMonth);
     return { success: true };
+  }
+
+  /**
+   * Xato kiritilgan mukofotni tuzatadi (summa, oy, sabab). Summa kamaysa yoki
+   * boshqa oyga ko'chsa, eski oy oyligi bilan allaqachon berilgan pul yangi
+   * qo'lga tegadigan summadan oshib ketmasligi kerak — aks holda 400.
+   */
+  async update(id: number, dto: UpdateStaffBonusDto, reqUser: any) {
+    const bonus = await this.getOwned(id, reqUser);
+    const oldMonth = dayjs(bonus.forMonth).format('YYYY-MM-DD');
+    const month =
+      dto.forMonth !== undefined ? this.normalizeMonth(dto.forMonth) : oldMonth;
+    const amount =
+      dto.amount !== undefined ? round2(dto.amount) : Number(bonus.amount);
+    if (amount <= 0) {
+      throw new BadRequestException('Summa 0 dan katta bo‘lishi kerak');
+    }
+    const reason = dto.reason !== undefined ? dto.reason.trim() : bonus.reason;
+    if (!reason) throw new BadRequestException('Sababi majburiy');
+
+    // Eski oydan qancha mukofot chiqib ketadi
+    const leaving =
+      month === oldMonth ? Number(bonus.amount) - amount : Number(bonus.amount);
+    if (leaving > 0) {
+      const salary = await this.salaryRepo.findOne({
+        where: { userId: bonus.userId, forMonth: oldMonth as any },
+      });
+      if (salary) {
+        const nextNet = salaryNet({
+          ...salary,
+          bonusAmount: Number(salary.bonusAmount ?? 0) - leaving,
+        });
+        if (Number(salary.paidAmount ?? 0) > nextNet) {
+          throw new BadRequestException(
+            'Bu mukofot oylik bilan berib bo‘lingan — summasini kamaytirib yoki boshqa oyga o‘tkazib bo‘lmaydi',
+          );
+        }
+      }
+    }
+
+    await this.bonusRepo.update(
+      { id: bonus.id },
+      { amount: amount as any, forMonth: month as any, reason },
+    );
+    await this.syncSalary(bonus.userId, oldMonth);
+    if (month !== oldMonth) await this.syncSalary(bonus.userId, month);
+    return this.findOne(bonus.id, reqUser);
   }
 
   /** Oy mukofotlari yig'indisini oylik qatoriga yozadi va holatni yangilaydi. */

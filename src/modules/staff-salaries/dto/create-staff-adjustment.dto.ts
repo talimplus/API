@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, OmitType, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -76,3 +76,13 @@ export class CreateStaffBonusDto {
   @MaxLength(500)
   reason: string;
 }
+
+/** PATCH /staff/advances/:id — xato kiritilgan avansni tuzatish. */
+export class UpdateStaffAdvanceDto extends PartialType(
+  OmitType(CreateStaffAdvanceDto, ['userId'] as const),
+) {}
+
+/** PATCH /staff/bonuses/:id — xato kiritilgan mukofotni tuzatish. */
+export class UpdateStaffBonusDto extends PartialType(
+  OmitType(CreateStaffBonusDto, ['userId'] as const),
+) {}
