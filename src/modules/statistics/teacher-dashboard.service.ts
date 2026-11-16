@@ -114,6 +114,7 @@ export class TeacherDashboardService {
       debtors,
       earning,
       salary,
+      students,
     ] = await Promise.all([
       // `= ANY('{}')` hech narsa qaytarmaydi — guruhsiz o'qituvchi uchun ham xavfsiz.
       this.membersByGroup(groupIds),
@@ -124,6 +125,7 @@ export class TeacherDashboardService {
       this.debtors(groupIds, monthStart),
       this.earning(teacher.id, monthStart),
       this.salary(teacher.id, monthStart),
+      this.groupStudents(groupIds, monthStart, monthEnd),
     ]);
 
     const emptyPay = {
@@ -145,13 +147,17 @@ export class TeacherDashboardService {
     const groupRows = groups.map((g) => {
       const pay = payments.get(Number(g.id)) ?? emptyPay;
       const att = attendance.get(Number(g.id)) ?? emptyAtt;
+      const list = students.filter((s) => s.groupId === Number(g.id));
       return {
         id: Number(g.id),
         name: g.name,
         status: g.status,
         studentsCount: members.byGroup.get(Number(g.id)) ?? 0,
         ...pay,
+        /** Shu guruhdagi tanlangan oygacha (shu oy ham) to'lanmagan qoldiq. */
+        totalDebt: list.reduce((acc, s) => acc + s.totalDebt, 0),
         attendance: { ...att, rate: rate(att) },
+        students: list,
       };
     });
 
@@ -200,10 +206,8 @@ export class TeacherDashboardService {
         amountPaid: sum('amountPaid'),
         debt: sum('debt'),
         pendingAmount: sum('pendingAmount'),
-        totalDebt: debtors.reduce(
-          (acc: number, d: any) => acc + d.totalDebt,
-          0,
-        ),
+        // Qarzdorlar ro'yxati 100 ta bilan cheklangan — jami to'liq ro'yxatdan.
+        totalDebt: groupRows.reduce((acc, g) => acc + g.totalDebt, 0),
         attendance: { ...attTotals, rate: rate(attTotals) },
       },
       earning,
@@ -354,6 +358,84 @@ export class TeacherDashboardService {
       debtMonths: num(r.debtMonths),
       monthStatus: r.monthStatus ?? null,
       pendingAmount: num(r.pendingAmount),
+    }));
+  }
+
+  /**
+   * Har guruhning tanlangan oydagi BARCHA o'quvchilari (faqat qarzdorlar emas):
+   * a'zolik oynasi shu oyga tushganlar + shu oy to'lov qatori borlar + shu
+   * guruhda eski qarzi qolganlar (guruhdan ketgan bo'lsa ham). Har biri uchun
+   * shu oy qatori (holat, hisoblangan, to'langan, tasdiq kutayotgan, qoldiq)
+   * va tanlangan oygacha jami qarz. Familiya bo'yicha tartiblangan.
+   */
+  private async groupStudents(
+    groupIds: number[],
+    monthStart: string,
+    monthEnd: string,
+  ) {
+    const rows = await this.q(
+      `WITH win AS (
+         SELECT e."studentId", e."groupId",
+                MIN(e."joinedAt") AS "joinedAt",
+                BOOL_OR(e."leftAt" IS NULL) AS "isOpen",
+                MAX(e."leftAt") AS "lastLeftAt",
+                BOOL_OR(e."joinedAt" <= $3::date
+                        AND (e."leftAt" IS NULL OR e."leftAt" > $2::date)) AS "inMonth"
+           FROM student_group_enrollments e
+          WHERE e."groupId" = ANY($1)
+          GROUP BY e."studentId", e."groupId"
+       ),
+       pay AS (
+         SELECT p."studentId", p."groupId",
+                BOOL_OR(p."forMonth" = $2::date) AS "hasRow",
+                MAX(CASE WHEN p."forMonth" = $2::date THEN p.status::text END) AS "monthStatus",
+                SUM(CASE WHEN p."forMonth" = $2::date THEN p."amountDue" ELSE 0 END) AS "amountDue",
+                SUM(CASE WHEN p."forMonth" = $2::date THEN p."amountPaid" ELSE 0 END) AS "amountPaid",
+                SUM(CASE WHEN p."forMonth" = $2::date THEN ${PENDING_SQL} ELSE 0 END) AS "pendingAmount",
+                SUM(CASE WHEN p."forMonth" = $2::date THEN ${DEBT_SQL} ELSE 0 END) AS "monthDebt",
+                SUM(${DEBT_SQL}) AS "totalDebt",
+                COUNT(*) FILTER (WHERE p."amountDue" > p."amountPaid")::int AS "debtMonths"
+           FROM payments p
+          WHERE p."groupId" = ANY($1) AND p."forMonth" <= $2::date
+          GROUP BY p."studentId", p."groupId"
+       ),
+       pairs AS (
+         SELECT "studentId", "groupId" FROM win WHERE "inMonth"
+         UNION
+         SELECT "studentId", "groupId" FROM pay WHERE "hasRow" OR "totalDebt" > 0
+       )
+       SELECT k."studentId", k."groupId", s."firstName", s."lastName", s.phone,
+              s.status AS "studentStatus",
+              TO_CHAR(w."joinedAt", 'YYYY-MM-DD') AS "joinedAt", w."isOpen",
+              TO_CHAR(w."lastLeftAt", 'YYYY-MM-DD') AS "lastLeftAt",
+              p."monthStatus", p."amountDue", p."amountPaid", p."pendingAmount",
+              p."monthDebt", p."totalDebt", p."debtMonths"
+         FROM pairs k
+         JOIN students s ON s.id = k."studentId"
+         LEFT JOIN win w ON w."studentId" = k."studentId" AND w."groupId" = k."groupId"
+         LEFT JOIN pay p ON p."studentId" = k."studentId" AND p."groupId" = k."groupId"
+        ORDER BY s."lastName", s."firstName", k."studentId"`,
+      [groupIds, monthStart, monthEnd],
+    );
+    return rows.map((r) => ({
+      studentId: Number(r.studentId),
+      groupId: Number(r.groupId),
+      firstName: r.firstName,
+      lastName: r.lastName,
+      phone: r.phone ?? null,
+      studentStatus: r.studentStatus,
+      /** Guruhga birinchi qo'shilgan kun (a'zolik oynasi bo'lmasa null). */
+      joinedAt: r.joinedAt ?? null,
+      /** Guruhdan chiqqan kun (exclusive); hali a'zo bo'lsa null. */
+      leftAt: r.isOpen === false ? (r.lastLeftAt ?? null) : null,
+      /** Shu oy to'lov qatorining holati; qator yo'q bo'lsa null. */
+      monthStatus: r.monthStatus ?? null,
+      amountDue: num(r.amountDue),
+      amountPaid: num(r.amountPaid),
+      pendingAmount: num(r.pendingAmount),
+      monthDebt: num(r.monthDebt),
+      totalDebt: num(r.totalDebt),
+      debtMonths: num(r.debtMonths),
     }));
   }
 
