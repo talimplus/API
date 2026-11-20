@@ -4,6 +4,7 @@ import { Student } from '@/modules/students/entities/students.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { StudentsService } from '@/modules/students/students.service';
 import { StudentStartDateService } from '@/modules/students/student-start-date.service';
+import { StudentPersonalFeeService } from '@/modules/students/student-personal-fee.service';
 import { StudentsController } from './students.controller';
 import { GroupFinishController } from './group-finish.controller';
 import { RolesModule } from '@/modules/roles/roles.module';
@@ -52,7 +53,11 @@ import { StudentHistoryModule } from '@/modules/student-history/student-history.
     StudentAliasController,
     GroupFinishController,
   ],
-  providers: [StudentsService, StudentStartDateService],
+  providers: [
+    StudentsService,
+    StudentStartDateService,
+    StudentPersonalFeeService,
+  ],
   exports: [StudentsService],
 })
 export class StudentsModule {}

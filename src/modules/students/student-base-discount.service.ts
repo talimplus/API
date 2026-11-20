@@ -160,6 +160,64 @@ export class StudentBaseDiscountService {
     return { effectiveFrom: from };
   }
 
+  /**
+   * Adashib yozilgan shaxsiy narxni `fromMonth` dan boshlab olib tashlaydi
+   * (o'sha oydan guruh narxi ishlatiladi). `setDiscount` dan farqi — oy admin
+   * tomonidan tanlanadi va o'tgan (to'langan) oy ham bo'lishi mumkin; qayta
+   * hisoblashni chaqiruvchi qiladi. `fromMonth` dan oldingi oylar eski narxda
+   * qoladi, chegirma (foiz/summa) tegilmaydi.
+   *
+   * @param previous — hozirgi `students` ustunlari (tarix bo'lmagan oylar uchun).
+   */
+  async clearPersonalFeeFrom(
+    studentId: number,
+    fromMonth: string,
+    previous: BaseDiscountValue,
+  ): Promise<void> {
+    const periods = await this.getPeriods(studentId);
+
+    // `students.monthlyFee` 0 bo'ladi — NULL qatorlar (u ustunga qaraydi)
+    // eski narxni yo'qotmasin.
+    await this.repo.query(
+      `UPDATE "student_base_discounts" SET "monthlyFee" = $3
+        WHERE "studentId" = $1 AND "fromMonth" < $2::date AND "monthlyFee" IS NULL`,
+      [studentId, fromMonth, previous.monthlyFee],
+    );
+
+    // `fromMonth` dan oldingi oylar tarixda "eng birinchi qator" ga tushmasin.
+    const sorted = [...periods].sort((a, b) =>
+      a.fromMonth.localeCompare(b.fromMonth),
+    );
+    if (!sorted.some((p) => p.fromMonth < fromMonth)) {
+      const first = sorted[0];
+      await this.upsertPeriod(studentId, {
+        fromMonth: dayjs(fromMonth).subtract(1, 'month').format('YYYY-MM-01'),
+        percent: first?.percent ?? previous.percent,
+        amount: first?.amount ?? previous.amount,
+        reason: first ? first.reason : previous.reason,
+        monthlyFee: first?.monthlyFee ?? previous.monthlyFee,
+      });
+    }
+
+    // Shu oyda amal qilgan chegirma saqlanadi (tarix bo'lmasa — `students`).
+    const inEffect = pickBaseDiscountForMonth(periods, fromMonth) ?? {
+      fromMonth,
+      ...previous,
+    };
+    await this.upsertPeriod(studentId, {
+      fromMonth,
+      percent: inEffect.percent,
+      amount: inEffect.amount,
+      reason: inEffect.reason,
+      monthlyFee: 0,
+    });
+    await this.repo.query(
+      `UPDATE "student_base_discounts" SET "monthlyFee" = 0
+        WHERE "studentId" = $1 AND "fromMonth" > $2::date`,
+      [studentId, fromMonth],
+    );
+  }
+
   private async upsertPeriod(
     studentId: number,
     p: Omit<BaseDiscountPeriod, 'monthlyFee'> & { monthlyFee: number | null },

@@ -11,6 +11,13 @@ import {
   Put,
 } from '@nestjs/common';
 import { StudentsService } from '@/modules/students/students.service';
+import { RolesService } from '@/modules/roles/roles.service';
+import { StudentPersonalFeeService } from '@/modules/students/student-personal-fee.service';
+import {
+  ClearPersonalFeeDto,
+  PreviewClearPersonalFeeDto,
+} from '@/modules/students/dto/clear-personal-fee.dto';
+import { assertCanSetPersonalFee } from '@/common/permissions/personal-fee.util';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { UpdateStudentDto } from '@/modules/students/dto/update-student.dto';
 import { StudentStatus } from '@/common/enums/students-status.enums';
@@ -38,7 +45,11 @@ import {
 @ApiTags('Students')
 @Controller('students')
 export class StudentsController {
-  constructor(private readonly studentService: StudentsService) {}
+  constructor(
+    private readonly studentService: StudentsService,
+    private readonly rolesService: RolesService,
+    private readonly personalFeeService: StudentPersonalFeeService,
+  ) {}
 
   @Get()
   @RequirePermissions('students.view')
@@ -176,6 +187,7 @@ export class StudentsController {
   @ApiOperation({ summary: 'Create student' })
   @ApiResponse({ type: StudentResponseDto })
   async create(@Body() dto: CreateStudentDto, @Req() req: any) {
+    await assertCanSetPersonalFee(this.rolesService, req.user, dto.monthlyFee);
     return this.studentService.create(
       dto,
       req.user.centerId,
@@ -238,6 +250,52 @@ export class StudentsController {
       req.user.organizationId,
       id,
       dto,
+    );
+  }
+
+  @Post(':id/personal-fee/clear/preview')
+  @RequirePermissions('students.personalFee')
+  @ApiOperation({
+    summary: "Shaxsiy narxni olib tashlashning ta'siri (preview)",
+    description:
+      "Hech narsa yozmaydi. Tanlangan oydan guruh narxi ishlatilsa o'zgaradigan " +
+      "to'lov qatorlari (to'langan oylar ham). Javob: `{ fromMonth, defaultFromMonth, " +
+      'minMonth, personalFee, rows, totals, paidSalaryMonths }` — `rows/totals/' +
+      'paidSalaryMonths` start-date preview bilan bir xil shakl.',
+  })
+  @ApiBody({ type: PreviewClearPersonalFeeDto })
+  previewClearPersonalFee(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PreviewClearPersonalFeeDto,
+  ) {
+    return this.personalFeeService.preview(
+      req.user.organizationId,
+      id,
+      dto.fromMonth,
+    );
+  }
+
+  @Post(':id/personal-fee/clear')
+  @RequirePermissions('students.personalFee')
+  @ApiOperation({
+    summary: 'Shaxsiy narxni olib tashlash — tanlangan oydan guruh narxi',
+    description:
+      "`students.monthlyFee` 0 bo'ladi, `student_base_discounts` da `fromMonth` dan " +
+      "boshlab narx 0 (chegirma saqlanadi), shu oydan joriy oygacha to'lovlar " +
+      'majburan qayta hisoblanadi (ortiqcha pul — `refundedAmount`). ' +
+      'Javob: `{ studentId, fromMonth }`.',
+  })
+  @ApiBody({ type: ClearPersonalFeeDto })
+  clearPersonalFee(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ClearPersonalFeeDto,
+  ) {
+    return this.personalFeeService.apply(
+      req.user.organizationId,
+      id,
+      dto.fromMonth,
     );
   }
 
@@ -317,6 +375,18 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
   ) {
+    if (dto.monthlyFee !== undefined) {
+      const current = await this.studentService.findById(
+        req.user.organizationId,
+        id,
+      );
+      await assertCanSetPersonalFee(
+        this.rolesService,
+        req.user,
+        dto.monthlyFee,
+        (current as any)?.monthlyFee,
+      );
+    }
     return this.studentService.update(
       req.user.organizationId,
       id,

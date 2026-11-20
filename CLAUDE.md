@@ -491,6 +491,18 @@ finished→ active
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
 - `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
+- **Shaxsiy narx ruxsati** (2026-11-20): `students.personalFee` — hech bir presetda yo'q,
+  default faqat admin (`*`). Ruxsatsiz `monthlyFee` ni o'zgartirish (`POST/PUT /students`,
+  `POST/PUT /leads`, `transfer-to-student`) — 403; o'zgarmagan qiymat o'tadi
+  (`common/permissions/personal-fee.util.ts`, tekshiruv controller/leads servisida).
+- **Adashib yozilgan shaxsiy narxni olib tashlash** (`StudentPersonalFeeService`):
+  `POST /students/:id/personal-fee/clear[/preview]` `{ fromMonth }` (default — faollashgan
+  oy). `student_base_discounts.clearPersonalFeeFrom`: shu oydan narx 0 (chegirma saqlanadi,
+  oldingi oylar eski narxda — kerak bo'lsa baseline qatori yoziladi, NULL qatorlar eski
+  narx bilan to'ldiriladi), `students.monthlyFee = 0`, keyin `rebillAfterBackdating`
+  (PAID ham; ortiqcha — `refundedAmount`). Preview: `computeMonthBilling({ personalFeeClearedFrom })`.
+- **Tizim rolini reset** — `POST /roles/:id/reset` (`RolesService.reset`): nomi va
+  ruxsatlari `role.presets.ts` ga; `GET /roles` da `canReset` / `isDefault`.
 - **Birinchi N oy tekin** (`students.freeMonths`, migratsiya `…069`, 0 — yo'q):
   davr o'quvchining birinchi darsidan (barcha guruhlar bo'yicha
   `max(joinedAt, activatedAt, group.startDate)` ning eng ertasi) N kalendar oy,

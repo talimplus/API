@@ -145,6 +145,7 @@ export class RolesService {
       permissions: role.permissions ?? [],
       isSystem: role.isSystem,
       isLocked: role.isLocked,
+      ...this.presetState(role),
       userCount: countByRole.get(role.id) ?? 0,
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,
@@ -218,6 +219,56 @@ export class RolesService {
       );
     }
 
+    const saved = await this.roleRepo.save(role);
+    this.invalidateCache();
+    return saved;
+  }
+
+  /**
+   * `canReset` — tizim roli, boshlang'ich to'plami bor (`POST /roles/:id/reset`);
+   * `isDefault` — nomi va ruxsatlari hozir o'sha to'plamga teng.
+   */
+  private presetState(role: Role): { canReset: boolean; isDefault: boolean } {
+    if (role.isLocked || !role.isSystem) {
+      return { canReset: false, isDefault: true };
+    }
+    const preset =
+      SYSTEM_ROLE_PRESETS.find((p) => p.key === role.key) ??
+      getPresetByBaseRole(role.baseRole);
+    if (!preset || preset.locked) return { canReset: false, isDefault: true };
+    const current = new Set(role.permissions ?? []);
+    const target = new Set(this.normalizePermissions(preset.permissions));
+    const samePermissions =
+      current.size === target.size &&
+      [...target].every((key) => current.has(key));
+    return {
+      canReset: true,
+      isDefault: samePermissions && role.name === preset.name.uz,
+    };
+  }
+
+  /**
+   * Tizim rolini (manager/reception/teacher/other) boshlang'ich holatiga
+   * qaytaradi: nomi va ruxsatlari `role.presets.ts` dagi hozirgi to'plamga
+   * tenglashadi. O'zi yaratilgan rolning "default"i yo'q — 400.
+   */
+  async reset(id: number, organizationId: number) {
+    const role = await this.findOneInOrganization(id, organizationId);
+    if (role.isLocked) {
+      throw new ForbiddenException('Bu rolni o‘zgartirib bo‘lmaydi');
+    }
+    const preset = role.isSystem
+      ? (SYSTEM_ROLE_PRESETS.find((p) => p.key === role.key) ??
+        getPresetByBaseRole(role.baseRole))
+      : undefined;
+    if (!preset || preset.locked) {
+      throw new BadRequestException(
+        'Faqat tizim rollarini boshlang‘ich holatga qaytarish mumkin',
+      );
+    }
+
+    role.name = preset.name.uz;
+    role.permissions = this.normalizePermissions(preset.permissions);
     const saved = await this.roleRepo.save(role);
     this.invalidateCache();
     return saved;

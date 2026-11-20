@@ -6,12 +6,14 @@ import { LeadsService } from '@/modules/leads/leads.service';
 import { Center } from '@/modules/centers/entities/centers.entity';
 import { Organization } from '@/modules/organizations/entities/organizations.entity';
 import { Group } from '@/modules/groups/entities/groups.entity';
+import { RolesModule } from '@/modules/roles/roles.module';
 import { StudentsModule } from '@/modules/students/students.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Lead, Center, Organization, Group]),
     forwardRef(() => StudentsModule),
+    RolesModule,
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

@@ -14,6 +14,8 @@ export interface BackdateSimulation {
   fromMonth: string; // YYYY-MM-01
   /** Oxirgi taqqoslanadigan oy — qo'llash ham shu oygacha. Default — joriy oy. */
   toMonth?: string; // YYYY-MM-01
+  /** Shu oydan boshlab shaxsiy narx 0 (guruh narxi) deb hisoblanadi. */
+  personalFeeClearedFrom?: string; // YYYY-MM-01
 }
 
 /** Bitta to'lov qatori qanday o'zgarishi (faqat o'zgaradiganlari qaytadi). */

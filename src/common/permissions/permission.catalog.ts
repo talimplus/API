@@ -107,6 +107,16 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
         label: { uz: 'Chegirmalarni boshqarish', ru: 'Управление скидками' },
       },
       {
+        // Tizim rollarining hech birida yo'q — default faqat admin (`*`).
+        // Reception adashib guruh narxini o'quvchiga shaxsiy narx qilib
+        // yozib qo'yardi: keyin guruh narxi o'zgarsa bu o'quvchiga o'tmasdi.
+        key: 'students.personalFee',
+        label: {
+          uz: 'O‘quvchiga shaxsiy oylik narx belgilash',
+          ru: 'Установка личной ежемесячной цены ученика',
+        },
+      },
+      {
         key: 'students.transfer',
         label: {
           uz: 'Boshqa guruhga ko‘chirish',

@@ -15,6 +15,8 @@ import { CurrentUser } from '@/common/types/current.user';
 import { UserRole } from '@/common/enums/user-role.enums';
 import { dayjs } from '@/shared/utils/dayjs';
 import { ValidationException } from '@/common/exceptions/validation.exception';
+import { RolesService } from '@/modules/roles/roles.service';
+import { assertCanSetPersonalFee } from '@/common/permissions/personal-fee.util';
 import { StudentsService } from '@/modules/students/students.service';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ChangeLeadStatusDto } from '@/modules/leads/dto/change-lead-status.dto';
@@ -31,6 +33,7 @@ export class LeadsService {
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
     private readonly studentsService: StudentsService,
+    private readonly rolesService: RolesService,
   ) {}
 
   private async resolveCenterIdOrThrow(
@@ -197,6 +200,11 @@ export class LeadsService {
   }
 
   async create(dto: any, currentUser: CurrentUser) {
+    await assertCanSetPersonalFee(
+      this.rolesService,
+      currentUser,
+      dto.monthlyFee,
+    );
     const isAdmin =
       currentUser.role === UserRole.ADMIN ||
       currentUser.role === UserRole.SUPER_ADMIN;
@@ -317,6 +325,12 @@ export class LeadsService {
     if (dto.birthDate !== undefined) {
       lead.birthDate = dto.birthDate ? new Date(dto.birthDate) : null;
     }
+    await assertCanSetPersonalFee(
+      this.rolesService,
+      currentUser,
+      dto.monthlyFee,
+      lead.monthlyFee,
+    );
     if (dto.monthlyFee !== undefined) lead.monthlyFee = dto.monthlyFee ?? null;
     if (dto.discountPercent !== undefined)
       lead.discountPercent = dto.discountPercent ?? 0;
@@ -453,6 +467,12 @@ export class LeadsService {
     if (lead.status === LeadStatus.CONVERTED && lead.studentId) {
       return { success: true, studentId: lead.studentId };
     }
+
+    await assertCanSetPersonalFee(
+      this.rolesService,
+      currentUser,
+      (dto as any).monthlyFee,
+    );
 
     // Transfer should accept the same body as POST /students.
     // For safety, we always keep centerId from the lead (no cross-center transfers via this endpoint).

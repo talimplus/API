@@ -2334,6 +2334,11 @@ export class PaymentsService {
     windowsOverride?: EnrollmentWindow[];
     /** Preview uchun tayyor tekin davr (`undefined` — keshdan/DB'dan). */
     freeWindowOverride?: FreeWindow | null;
+    /**
+     * Preview: shu oydan (YYYY-MM-01) boshlab shaxsiy narx olib tashlangan deb
+     * hisoblanadi — guruh narxi ishlatiladi (`StudentPersonalFeeService`).
+     */
+    personalFeeClearedFrom?: string;
   }): Promise<{
     studentActiveStart: string;
     lessonsPlanned: number;
@@ -2352,6 +2357,7 @@ export class PaymentsService {
       manualExcludedAmount = 0,
       windowsOverride,
       freeWindowOverride,
+      personalFeeClearedFrom,
     } = args;
 
     // O'quvchining shu GURUHDAGI a'zolik oynasi. Oy o'rtasida qo'shilgan bo'lsa
@@ -2420,10 +2426,10 @@ export class PaymentsService {
     // Guruh narxi ham, shaxsiy narx ham oyga bog'langan: o'tgan/joriy oylar
     // eski narxda qoladi.
     const groupFee = await this.resolveGroupFeeForMonth(group, forMonth);
-    const personalFee = await this.resolvePersonalFeeForMonth(
-      student,
-      forMonth,
-    );
+    const personalFee =
+      personalFeeClearedFrom && forMonth >= personalFeeClearedFrom
+        ? 0
+        : await this.resolvePersonalFeeForMonth(student, forMonth);
 
     const amountDue = this.computeAmountDue({
       personalFee,
@@ -3222,6 +3228,7 @@ export class PaymentsService {
           manualExcludedAmount: Number(row?.manualExcludedAmount ?? 0),
           windowsOverride: windows,
           freeWindowOverride,
+          personalFeeClearedFrom: sim.personalFeeClearedFrom,
         });
         const noLessons = !billing.lessonsPlanned || !billing.lessonsBillable;
         if (!row && noLessons) continue;

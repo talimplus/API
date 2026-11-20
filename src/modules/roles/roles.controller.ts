@@ -68,6 +68,8 @@ export class RolesController {
           permissions: ['payments.view', 'payments.create'],
           isSystem: false,
           isLocked: false,
+          canReset: false,
+          isDefault: true,
           userCount: 2,
         },
       ],
@@ -95,6 +97,19 @@ export class RolesController {
     @Req() req: any,
   ) {
     return this.rolesService.update(id, dto, req.user.organizationId);
+  }
+
+  @Post(':id/reset')
+  @RequirePermissions('roles.manage')
+  @ApiOperation({
+    summary: 'Tizim rolini boshlang‘ich holatga qaytarish',
+    description:
+      'Faqat tizim rollari (manager/reception/teacher/other): nomi va ruxsatlari ' +
+      '`role.presets.ts` dagi hozirgi to‘plamga tenglashadi. Admin/student — 403, ' +
+      'o‘zi yaratilgan rol — 400. Javob — rol (PUT /roles/:id bilan bir xil shakl).',
+  })
+  reset(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.rolesService.reset(id, req.user.organizationId);
   }
 
   @Delete(':id')
