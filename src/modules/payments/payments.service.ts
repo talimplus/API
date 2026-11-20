@@ -45,10 +45,16 @@ import {
   PaymentReceiptStatus,
 } from '@/modules/payments/entities/payment-receipt.entity';
 import { GroupFeeService } from '@/modules/groups/group-fee.service';
+import { returningRows } from '@/shared/utils/returning-rows';
 import {
   StudentBaseDiscountService,
   pickBaseDiscountForMonth,
 } from '@/modules/students/student-base-discount.service';
+import {
+  GroupFeePeriod,
+  StudentGroupFeeService,
+  pickGroupFeeForMonth,
+} from '@/modules/students/student-group-fee.service';
 import {
   EnrollmentsService,
   EnrollmentWindow,
@@ -138,6 +144,7 @@ export class PaymentsService {
     private readonly teacherEarningsService: TeacherEarningsService,
     private readonly groupFeeService: GroupFeeService,
     private readonly baseDiscountService: StudentBaseDiscountService,
+    private readonly groupFeeHistory: StudentGroupFeeService,
     private readonly enrollmentsService: EnrollmentsService,
     private readonly telegramNotifier: TelegramNotifierService,
     private readonly dataSource: DataSource,
@@ -1023,6 +1030,7 @@ export class PaymentsService {
         const studentFee = await this.resolvePersonalFeeForMonth(
           student,
           dayjs(p.forMonth).format('YYYY-MM-01'),
+          p.groupId,
         );
         const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
         let fullAmount: number | null = null;
@@ -1088,6 +1096,9 @@ export class PaymentsService {
           manualExcludedAmount: Number(p.manualExcludedAmount ?? 0),
           manualExcludedLessons: p.manualExcludedLessons ?? null,
           manualExcludedReason: p.manualExcludedReason ?? null,
+          refundedAmount: Number(p.refundedAmount ?? 0),
+          // keyingi oylarga o'tishini kutayotgan ortiqcha pul
+          creditAmount: Number((p as any).creditAmount ?? 0),
         };
       }),
     );
@@ -1104,6 +1115,8 @@ export class PaymentsService {
     // O'quvchidan olinishi kerak bo'lgan summa — oylar bo'yicha yig'indi
     // (qarzdan tasdiqlash kutayotgani ayirilgan).
     const payableNow = sum((m) => m.payableNow);
+    // Keyingi oylarga o'tadigan (hali o'tmagan) ortiqcha pul.
+    const creditAmount = sum((m) => m.creditAmount);
 
     // Distinct schedule days across all of the student's groups (week order).
     const WEEK_ORDER = [
@@ -1115,6 +1128,14 @@ export class PaymentsService {
       'saturday',
       'sunday',
     ];
+    const feeMonth = this.groupFeeHistory.currentMonth();
+    const personalFees = new Map<number, number>();
+    for (const g of student.groups ?? []) {
+      personalFees.set(
+        g.id,
+        await this.resolvePersonalFeeForMonth(student, feeMonth, g.id),
+      );
+    }
     const groups = (student.groups ?? []).map((g: any) => {
       const days = Array.from(
         new Set((g.schedules ?? []).map((s: any) => s.day)),
@@ -1130,6 +1151,8 @@ export class PaymentsService {
         id: g.id,
         name: g.name,
         monthlyFee: Number(g.monthlyFee ?? 0),
+        // Shu guruhdagi shaxsiy narx (joriy oy; 0 — guruh narxi).
+        personalFee: personalFees.get(g.id) ?? 0,
         days, // guruh dars kunlari
         schedule: times, // kun + boshlanish vaqti
       };
@@ -1182,6 +1205,7 @@ export class PaymentsService {
         totalPending, // reception olgan, tasdiq kutayotgan
         totalReceived, // totalPaid + totalPending
         payableNow, // o'quvchidan olinishi kerak
+        creditAmount, // keyingi oylarga o'tadigan ortiqcha pul
       },
       months,
     };
@@ -1503,6 +1527,10 @@ export class PaymentsService {
     number,
     Awaited<ReturnType<StudentBaseDiscountService['getPeriods']>>
   >();
+  private groupFeePeriodsCache = new Map<
+    number,
+    Map<number, GroupFeePeriod[]>
+  >();
   private primaryGroupCache = new Map<string, number | null>();
   private freeWindowCache = new Map<string, FreeWindow | null>();
 
@@ -1511,6 +1539,7 @@ export class PaymentsService {
     this.freeWindowCache.clear();
     this.calendarCache.clear();
     this.basePeriodsCache.clear();
+    this.groupFeePeriodsCache.clear();
     this.primaryGroupCache.clear();
   }
 
@@ -1691,17 +1720,24 @@ export class PaymentsService {
    * tarix bo'lmasa — `students` ustunlaridan (hech qachon o'zgartirilmagan).
    */
   /**
-   * Shu oy uchun amaldagi SHAXSIY narx (0 — guruh narxi ishlatiladi).
-   * Doimiy chegirma bilan bitta tarixda: o'zgartirilsa o'tgan oylar tegilmaydi.
+   * Shu oy uchun SHU GURUHDAGI shaxsiy narx (0 — guruh narxi ishlatiladi).
+   * Har guruhda alohida (`student_group_fees`, 2026-11-20): 200 ming va 500
+   * ming lik guruhlarda o'qiganga bitta narx ikkalasiga qo'llanmaydi.
+   * O'zgartirilsa o'tgan oylar tegilmaydi.
    */
   private async resolvePersonalFeeForMonth(
     student: Student,
     forMonth: string,
+    groupId: number | null | undefined,
   ): Promise<number> {
-    const periods = await this.getBasePeriods(student.id);
-    const picked = pickBaseDiscountForMonth(periods, forMonth);
-    if (picked && picked.monthlyFee != null) return Number(picked.monthlyFee);
-    return Number(student.monthlyFee ?? 0);
+    if (!groupId) return 0;
+    let all = this.groupFeePeriodsCache.get(student.id);
+    if (!all) {
+      all = await this.groupFeeHistory.getPeriods(student.id);
+      this.groupFeePeriodsCache.set(student.id, all);
+    }
+    const picked = pickGroupFeeForMonth(all.get(groupId) ?? [], forMonth);
+    return Number(picked?.monthlyFee ?? 0);
   }
 
   private async resolveBaseDiscountForMonth(
@@ -1924,6 +1960,9 @@ export class PaymentsService {
     this.logger.log('Cron: Current month payments ensuring...');
     try {
       await this.ensurePaymentsForAllActiveStudents({ onlyCurrentMonth: true });
+      // Yangi oy qatorlari paydo bo'ldi — "keyingi oyga o'tkazilgan" pullar shu
+      // yerda o'z oyiga yoziladi.
+      await this.applyAllStudentCredits();
       this.logger.log('Cron: Payment ensure finished');
     } catch (e) {
       this.logger.error(
@@ -2429,7 +2468,7 @@ export class PaymentsService {
     const personalFee =
       personalFeeClearedFrom && forMonth >= personalFeeClearedFrom
         ? 0
-        : await this.resolvePersonalFeeForMonth(student, forMonth);
+        : await this.resolvePersonalFeeForMonth(student, forMonth, group.id);
 
     const amountDue = this.computeAmountDue({
       personalFee,
@@ -3151,6 +3190,149 @@ export class PaymentsService {
       carriedOverAmount: applied,
       refundedAmount: leftover,
     };
+  }
+
+  /**
+   * Qatorlarning `refundedAmount` idagi summani "keyingi oylarga o'tadigan"
+   * pulga (`creditAmount`) aylantiradi va darhol o'quvchining ochiq keyingi
+   * oylariga qo'llaydi. Joy bo'lmasa (keyingi oy qatori hali yo'q) pul
+   * `creditAmount` da kutib turadi — kunlik cron oy ochilganda o'tkazadi.
+   */
+  async carryRefundsForward(
+    studentId: number,
+    items: { paymentId: number; amount: number }[],
+    performedById?: number | null,
+  ): Promise<{ carried: number; applied: number; waiting: number }> {
+    let carried = 0;
+    for (const { paymentId, amount } of items) {
+      const want = this.round2(Number(amount ?? 0));
+      if (want <= 0) continue;
+      // Atomik: refundedAmount dan ko'pi ko'chmaydi.
+      const res = returningRows<{ moved: string }>(
+        await this.dataSource.query(
+          `WITH old AS (
+             SELECT "id", "refundedAmount" AS r FROM "payments"
+              WHERE "id" = $1 AND "studentId" = $3 AND "refundedAmount" > 0
+              FOR UPDATE
+           )
+           UPDATE "payments" p
+              SET "creditAmount" = p."creditAmount" + LEAST(old.r, $2),
+                  "refundedAmount" = p."refundedAmount" - LEAST(old.r, $2),
+                  "refundedAt" = CASE WHEN old.r - LEAST(old.r, $2) > 0
+                                      THEN p."refundedAt" ELSE NULL END
+             FROM old WHERE p."id" = old."id"
+        RETURNING LEAST(old.r, $2) AS "moved"`,
+          [paymentId, want, studentId],
+        ),
+      );
+      carried = this.round2(carried + Number(res[0]?.moved ?? 0));
+    }
+    const applied = await this.applyStudentCredit(studentId, performedById);
+    const [row] = await this.dataSource.query(
+      `SELECT COALESCE(SUM("creditAmount"), 0) AS "waiting"
+         FROM "payments" WHERE "studentId" = $1`,
+      [studentId],
+    );
+    return {
+      carried,
+      applied,
+      waiting: this.round2(Number(row?.waiting ?? 0)),
+    };
+  }
+
+  /**
+   * O'quvchining `creditAmount` dagi pulini keyingi ochiq oylariga ko'chirish
+   * cheki bilan yozadi (avval o'sha guruhning keyingi oylari, keyin boshqa
+   * guruhlarniki; eski oydan boshlab). Manba qatorda `creditAmount` kamayib,
+   * `transferredOutAmount` oshadi — pul kassadan chiqmagan, o'tkazilgan.
+   * Qarzdan tasdiq kutayotgan chek ayiriladi (ortiqcha yopilmasin).
+   * @returns qo'llangan summa
+   */
+  async applyStudentCredit(
+    studentId: number,
+    performedById?: number | null,
+  ): Promise<number> {
+    const sources = await this.paymentRepo
+      .createQueryBuilder('p')
+      .where('p.studentId = :studentId', { studentId })
+      .andWhere('p.creditAmount > 0')
+      .orderBy('p.forMonth', 'ASC')
+      .getMany();
+    let applied = 0;
+    for (const source of sources) {
+      const targets = await this.paymentRepo
+        .createQueryBuilder('p')
+        .leftJoinAndSelect('p.student', 'student')
+        .where('p.studentId = :studentId', { studentId })
+        .andWhere('p.id != :id', { id: source.id })
+        .andWhere('p.status != :paid', { paid: PaymentStatus.PAID })
+        .andWhere('p.forMonth > :month', { month: source.forMonth })
+        .orderBy(
+          `CASE WHEN p.groupId = ${Number(source.groupId) || 0} THEN 0 ELSE 1 END`,
+        )
+        .addOrderBy('p.forMonth', 'ASC')
+        .getMany();
+      const pending = await this.getPendingSumByPayment(
+        targets.map((t) => t.id),
+      );
+      for (const target of targets) {
+        const gap = this.round2(
+          Number(target.amountDue ?? 0) -
+            Number(target.amountPaid ?? 0) -
+            (pending.get(target.id) ?? 0),
+        );
+        if (gap <= 0) continue;
+        // Avval manbadan atomik "olib qo'yamiz" — parallel chaqiruv (cron +
+        // admin) bitta pulni ikki marta o'tkazmasin.
+        const claimed = returningRows<{ chunk: string; left: string }>(
+          await this.dataSource.query(
+            `WITH old AS (
+               SELECT "id", "creditAmount" AS c FROM "payments"
+                WHERE "id" = $1 AND "creditAmount" > 0
+                FOR UPDATE
+             )
+             UPDATE "payments" p
+                SET "creditAmount" = p."creditAmount" - LEAST(old.c, $2),
+                    "transferredOutAmount" = p."transferredOutAmount" + LEAST(old.c, $2)
+               FROM old WHERE p."id" = old."id"
+          RETURNING LEAST(old.c, $2) AS "chunk", old.c - LEAST(old.c, $2) AS "left"`,
+            [source.id, gap],
+          ),
+        );
+        const chunk = this.round2(Number(claimed[0]?.chunk ?? 0));
+        if (chunk <= 0) break;
+        source.creditAmount = this.round2(Number(claimed[0]?.left ?? 0)) as any;
+        await this.createTransferReceipt({
+          payment: target,
+          amount: chunk,
+          fromPaymentId: source.id,
+          comment: "Ortiqcha pul keyingi oyga o'tkazildi",
+          performedById: performedById ?? null,
+        });
+        await this.applyConfirmedMoneyToPayment({
+          payment: target,
+          addAmount: chunk,
+          confirmedById: performedById ?? undefined,
+        });
+        applied = this.round2(applied + chunk);
+        if (Number(source.creditAmount) <= 0) break;
+      }
+    }
+    return applied;
+  }
+
+  /** Kunlik cron: kutib turgan barcha `creditAmount` larni o'tkazadi. */
+  async applyAllStudentCredits(): Promise<void> {
+    const rows: { studentId: number }[] = await this.dataSource.query(
+      `SELECT DISTINCT "studentId" FROM "payments" WHERE "creditAmount" > 0`,
+    );
+    for (const { studentId } of rows) {
+      await this.applyStudentCredit(Number(studentId)).catch((e) =>
+        this.logger.warn(
+          `Credit apply failed student=${studentId}: ${(e as any)?.message ?? e}`,
+        ),
+      );
+    }
   }
 
   /**

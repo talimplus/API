@@ -15,6 +15,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { GroupFeeDto } from '@/modules/students/dto/group-fee.dto';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { IsDateString } from 'class-validator';
 
@@ -130,6 +131,20 @@ export class CreateStudentDto {
   @IsOptional()
   @IsNumber()
   monthlyFee?: number;
+
+  @ApiProperty({
+    type: [GroupFeeDto],
+    required: false,
+    description:
+      'Har bir guruhdagi shaxsiy narx (0 — guruh narxi). Faqat `students.personalFee` ' +
+      "ruxsati bilan o'zgaradi. Ro'yxatda yo'q guruh tegilmaydi. Eski `monthlyFee` " +
+      'berilsa (eski front) — barcha guruhlarga bir xil.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => GroupFeeDto)
+  groupFees?: GroupFeeDto[];
 
   @ApiProperty({
     example: 10,

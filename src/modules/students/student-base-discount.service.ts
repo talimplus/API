@@ -11,7 +11,10 @@ export interface BaseDiscountPeriod {
   percent: number;
   amount: number;
   reason: string | null;
-  /** Shaxsiy narx (0 — guruh narxi); null — tarixda yo'q, `students` dan. */
+  /**
+   * ESKI: shaxsiy narx (2026-11-20 gacha). Endi to'lov undan o'qilmaydi —
+   * `student_group_fees` (guruh bo'yicha). Faqat tarix (timeline) uchun.
+   */
   monthlyFee: number | null;
 }
 
@@ -19,7 +22,6 @@ export interface BaseDiscountValue {
   percent: number;
   amount: number;
   reason: string | null;
-  monthlyFee: number;
 }
 
 /**
@@ -46,8 +48,8 @@ export function pickBaseDiscountForMonth(
 }
 
 /**
- * O'quvchining doimiy chegirmasi VA shaxsiy narxini oy aniqligida boshqaradi
- * (ikkalasi bitta tarixda: bir oy uchun bitta "narx sharti" qatori).
+ * O'quvchining doimiy chegirmasini oy aniqligida boshqaradi (shaxsiy narx —
+ * `StudentGroupFeeService`, guruh bo'yicha).
  *
  * BIZNES QOIDA: chegirma o'zgartirilganda —
  * - o'quvchi shu oy uchun hali pul bermagan bo'lsa → **shu oydan** kuchga kiradi;
@@ -126,12 +128,8 @@ export class StudentBaseDiscountService {
       fromMonth: current,
       ...previous,
     };
-    const inEffectFee = inEffect.monthlyFee ?? previous.monthlyFee;
-
     const sameAsNow =
-      inEffect.percent === next.percent &&
-      inEffect.amount === next.amount &&
-      inEffectFee === next.monthlyFee;
+      inEffect.percent === next.percent && inEffect.amount === next.amount;
     if (sameAsNow) {
       // Qiymat aslida o'zgarmayapti — rejalashtirilgan kelgusi o'zgarish
       // bo'lsa bekor qilinadi (admin fikridan qaytdi).
@@ -160,67 +158,9 @@ export class StudentBaseDiscountService {
     return { effectiveFrom: from };
   }
 
-  /**
-   * Adashib yozilgan shaxsiy narxni `fromMonth` dan boshlab olib tashlaydi
-   * (o'sha oydan guruh narxi ishlatiladi). `setDiscount` dan farqi — oy admin
-   * tomonidan tanlanadi va o'tgan (to'langan) oy ham bo'lishi mumkin; qayta
-   * hisoblashni chaqiruvchi qiladi. `fromMonth` dan oldingi oylar eski narxda
-   * qoladi, chegirma (foiz/summa) tegilmaydi.
-   *
-   * @param previous — hozirgi `students` ustunlari (tarix bo'lmagan oylar uchun).
-   */
-  async clearPersonalFeeFrom(
-    studentId: number,
-    fromMonth: string,
-    previous: BaseDiscountValue,
-  ): Promise<void> {
-    const periods = await this.getPeriods(studentId);
-
-    // `students.monthlyFee` 0 bo'ladi — NULL qatorlar (u ustunga qaraydi)
-    // eski narxni yo'qotmasin.
-    await this.repo.query(
-      `UPDATE "student_base_discounts" SET "monthlyFee" = $3
-        WHERE "studentId" = $1 AND "fromMonth" < $2::date AND "monthlyFee" IS NULL`,
-      [studentId, fromMonth, previous.monthlyFee],
-    );
-
-    // `fromMonth` dan oldingi oylar tarixda "eng birinchi qator" ga tushmasin.
-    const sorted = [...periods].sort((a, b) =>
-      a.fromMonth.localeCompare(b.fromMonth),
-    );
-    if (!sorted.some((p) => p.fromMonth < fromMonth)) {
-      const first = sorted[0];
-      await this.upsertPeriod(studentId, {
-        fromMonth: dayjs(fromMonth).subtract(1, 'month').format('YYYY-MM-01'),
-        percent: first?.percent ?? previous.percent,
-        amount: first?.amount ?? previous.amount,
-        reason: first ? first.reason : previous.reason,
-        monthlyFee: first?.monthlyFee ?? previous.monthlyFee,
-      });
-    }
-
-    // Shu oyda amal qilgan chegirma saqlanadi (tarix bo'lmasa — `students`).
-    const inEffect = pickBaseDiscountForMonth(periods, fromMonth) ?? {
-      fromMonth,
-      ...previous,
-    };
-    await this.upsertPeriod(studentId, {
-      fromMonth,
-      percent: inEffect.percent,
-      amount: inEffect.amount,
-      reason: inEffect.reason,
-      monthlyFee: 0,
-    });
-    await this.repo.query(
-      `UPDATE "student_base_discounts" SET "monthlyFee" = 0
-        WHERE "studentId" = $1 AND "fromMonth" > $2::date`,
-      [studentId, fromMonth],
-    );
-  }
-
   private async upsertPeriod(
     studentId: number,
-    p: Omit<BaseDiscountPeriod, 'monthlyFee'> & { monthlyFee: number | null },
+    p: Omit<BaseDiscountPeriod, 'monthlyFee'>,
   ): Promise<void> {
     await this.repo.query(
       `INSERT INTO "student_base_discounts"
@@ -230,8 +170,9 @@ export class StudentBaseDiscountService {
        DO UPDATE SET "percent" = EXCLUDED."percent",
                      "amount" = EXCLUDED."amount",
                      "reason" = EXCLUDED."reason",
-                     "monthlyFee" = EXCLUDED."monthlyFee"`,
-      [studentId, p.fromMonth, p.percent, p.amount, p.reason, p.monthlyFee],
+                     "monthlyFee" = COALESCE("student_base_discounts"."monthlyFee", EXCLUDED."monthlyFee")`,
+      // Shaxsiy narx endi `student_group_fees` da — bu ustun yozilmaydi.
+      [studentId, p.fromMonth, p.percent, p.amount, p.reason, null],
     );
   }
 

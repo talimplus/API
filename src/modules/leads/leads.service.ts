@@ -16,7 +16,10 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import { dayjs } from '@/shared/utils/dayjs';
 import { ValidationException } from '@/common/exceptions/validation.exception';
 import { RolesService } from '@/modules/roles/roles.service';
-import { assertCanSetPersonalFee } from '@/common/permissions/personal-fee.util';
+import {
+  assertCanSetGroupFees,
+  assertCanSetPersonalFee,
+} from '@/common/permissions/personal-fee.util';
 import { StudentsService } from '@/modules/students/students.service';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ChangeLeadStatusDto } from '@/modules/leads/dto/change-lead-status.dto';
@@ -473,6 +476,7 @@ export class LeadsService {
       currentUser,
       (dto as any).monthlyFee,
     );
+    await assertCanSetGroupFees(this.rolesService, currentUser, dto.groupFees);
 
     // Transfer should accept the same body as POST /students.
     // For safety, we always keep centerId from the lead (no cross-center transfers via this endpoint).

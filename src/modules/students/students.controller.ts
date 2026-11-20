@@ -17,7 +17,11 @@ import {
   ClearPersonalFeeDto,
   PreviewClearPersonalFeeDto,
 } from '@/modules/students/dto/clear-personal-fee.dto';
-import { assertCanSetPersonalFee } from '@/common/permissions/personal-fee.util';
+import {
+  assertCanSetGroupFees,
+  assertCanSetPersonalFee,
+} from '@/common/permissions/personal-fee.util';
+import { OverpaymentMode } from '@/common/enums/overpayment-mode.enum';
 import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { UpdateStudentDto } from '@/modules/students/dto/update-student.dto';
 import { StudentStatus } from '@/common/enums/students-status.enums';
@@ -188,6 +192,7 @@ export class StudentsController {
   @ApiResponse({ type: StudentResponseDto })
   async create(@Body() dto: CreateStudentDto, @Req() req: any) {
     await assertCanSetPersonalFee(this.rolesService, req.user, dto.monthlyFee);
+    await assertCanSetGroupFees(this.rolesService, req.user, dto.groupFees);
     return this.studentService.create(
       dto,
       req.user.centerId,
@@ -272,6 +277,7 @@ export class StudentsController {
     return this.personalFeeService.preview(
       req.user.organizationId,
       id,
+      dto.groupId,
       dto.fromMonth,
     );
   }
@@ -281,10 +287,12 @@ export class StudentsController {
   @ApiOperation({
     summary: 'Shaxsiy narxni olib tashlash — tanlangan oydan guruh narxi',
     description:
-      "`students.monthlyFee` 0 bo'ladi, `student_base_discounts` da `fromMonth` dan " +
-      "boshlab narx 0 (chegirma saqlanadi), shu oydan joriy oygacha to'lovlar " +
-      'majburan qayta hisoblanadi (ortiqcha pul — `refundedAmount`). ' +
-      'Javob: `{ studentId, fromMonth }`.',
+      'Faqat `groupId` guruhida: `student_group_fees` da `fromMonth` dan narx 0, shu ' +
+      "oydan joriy oygacha shu guruh to'lovlari majburan qayta hisoblanadi (PAID ham). " +
+      "Guruh narxi qimmat bo'lsa farq qarz bo'ladi; arzon bo'lsa ortiqcha pul " +
+      "`overpayment` bo'yicha: `refund` — `refundedAmount`, `carry` — keyingi oylarga " +
+      "(`creditAmount` → ko'chirish cheki). Javob: `{ studentId, groupId, fromMonth, " +
+      'overpayment, overpaidAmount, refundedAmount, carriedAmount, appliedAmount, waitingAmount }`.',
   })
   @ApiBody({ type: ClearPersonalFeeDto })
   clearPersonalFee(
@@ -295,7 +303,10 @@ export class StudentsController {
     return this.personalFeeService.apply(
       req.user.organizationId,
       id,
+      dto.groupId,
       dto.fromMonth,
+      dto.overpayment ?? OverpaymentMode.REFUND,
+      req.user?.userId ?? null,
     );
   }
 
@@ -375,8 +386,8 @@ export class StudentsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateStudentDto,
   ) {
-    if (dto.monthlyFee !== undefined) {
-      const current = await this.studentService.findById(
+    if (dto.monthlyFee !== undefined || dto.groupFees?.length) {
+      const current: any = await this.studentService.findById(
         req.user.organizationId,
         id,
       );
@@ -384,7 +395,15 @@ export class StudentsController {
         this.rolesService,
         req.user,
         dto.monthlyFee,
-        (current as any)?.monthlyFee,
+        current?.monthlyFee,
+      );
+      await assertCanSetGroupFees(
+        this.rolesService,
+        req.user,
+        dto.groupFees,
+        new Map(
+          (current?.groupFees ?? []).map((g: any) => [g.groupId, g.monthlyFee]),
+        ),
       );
     }
     return this.studentService.update(

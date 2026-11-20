@@ -49,6 +49,7 @@ import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { StudentEventsService } from '@/modules/student-history/student-events.service';
 import { StudentEventType } from '@/modules/student-history/student-timeline.enums';
 import { StudentBaseDiscountService } from '@/modules/students/student-base-discount.service';
+import { StudentGroupFeeService } from '@/modules/students/student-group-fee.service';
 import {
   TransferPreviewDto,
   TransferStudentsDto,
@@ -82,6 +83,7 @@ export class StudentsService {
     private readonly groupsService: GroupsService,
     private readonly enrollmentsService: EnrollmentsService,
     private readonly baseDiscountService: StudentBaseDiscountService,
+    private readonly groupFeeService: StudentGroupFeeService,
     private readonly studentEvents: StudentEventsService,
     private readonly startDateService: StudentStartDateService,
   ) {}
@@ -447,8 +449,75 @@ export class StudentsService {
     result.freeWindow = await this.paymentsService.resolveFreeWindow(student, {
       fresh: true,
     });
+    // Har bir hozirgi guruhdagi shaxsiy narx (0 — guruh narxi).
+    const groups = ((student as any).groups ?? []) as Group[];
+    const states = await this.groupFeeService.states(
+      student.id,
+      groups.map((g) => g.id),
+    );
+    result.groupFees = states.map((st) => {
+      const g = groups.find((x) => x.id === st.groupId);
+      return {
+        ...st,
+        groupName: g?.name ?? null,
+        groupMonthlyFee: Number(g?.monthlyFee ?? 0),
+      };
+    });
 
     return result;
+  }
+
+  /**
+   * Guruhlardagi shaxsiy narxni yozadi. `groupFees` — faqat hozirgi
+   * guruhlardagilari qo'llanadi; eski front yuborgan yagona `monthlyFee`
+   * (o'zgargan bo'lsa) — barcha hozirgi guruhlarga. Oxirida
+   * `students.monthlyFee` nusxasi yangilanadi.
+   * @returns biror guruhda narx o'zgardimi
+   */
+  private async applyGroupFees(
+    studentId: number,
+    groupIds: number[],
+    groupFees: { groupId: number; monthlyFee: number }[] | undefined,
+    legacyFee: number | undefined,
+  ): Promise<{ changed: boolean; currentMonthGroupIds: number[] }> {
+    const items = new Map<number, number>();
+    if (legacyFee !== undefined) {
+      for (const id of groupIds) items.set(id, Math.max(0, Number(legacyFee)));
+    }
+    for (const gf of groupFees ?? []) {
+      if (groupIds.includes(gf.groupId)) {
+        items.set(gf.groupId, Math.max(0, Number(gf.monthlyFee ?? 0)));
+      }
+    }
+    let changed = false;
+    const currentMonthGroupIds: number[] = [];
+    const current = this.groupFeeService.currentMonth();
+    for (const [groupId, fee] of items) {
+      const { effectiveFrom } = await this.groupFeeService.setFee(
+        studentId,
+        groupId,
+        fee,
+      );
+      if (effectiveFrom) changed = true;
+      if (effectiveFrom === current) currentMonthGroupIds.push(groupId);
+    }
+    await this.syncLegacyFee(studentId, groupIds);
+    return { changed, currentMonthGroupIds };
+  }
+
+  /** `students.monthlyFee` nusxasini hozirgi guruhlar bo'yicha yangilaydi. */
+  private async syncLegacyFee(studentId: number, groupIds?: number[]) {
+    const ids =
+      groupIds ??
+      (
+        await this.studentRepo.query(
+          `SELECT "groupsId" FROM "students_groups_groups" WHERE "studentsId" = $1`,
+          [studentId],
+        )
+      ).map((r: any) => Number(r.groupsId));
+    await this.studentRepo.update(studentId, {
+      monthlyFee: await this.groupFeeService.legacyFee(studentId, ids),
+    });
   }
 
   /**
@@ -1221,7 +1290,8 @@ export class StudentsService {
       lastName: dto.lastName,
       phone: dto.phone,
       secondPhone: (dto as any).secondPhone ?? null,
-      monthlyFee: dto.monthlyFee,
+      // Shaxsiy narx guruh bo'yicha (`applyGroupFees`), bu — faqat nusxa.
+      monthlyFee: 0,
       discountPercent: dto.discountPercent ?? 0,
       discountAmount: dto.discountAmount ?? 0,
       discountReason: dto.discountReason ?? null,
@@ -1253,6 +1323,20 @@ export class StudentsService {
         group.id,
         this.todayInGroupTz(group),
       );
+    }
+
+    if (Number(dto.monthlyFee ?? 0) > 0 || dto.groupFees?.length) {
+      await this.applyGroupFees(
+        savedStudent.id,
+        groups.map((g) => g.id),
+        dto.groupFees,
+        Number(dto.monthlyFee ?? 0) > 0 ? Number(dto.monthlyFee) : undefined,
+      );
+      const fresh = await this.studentRepo.findOne({
+        where: { id: savedStudent.id },
+        select: ['id', 'monthlyFee'],
+      });
+      savedStudent.monthlyFee = fresh?.monthlyFee ?? 0;
     }
 
     if (Array.isArray(discountPeriods)) {
@@ -1506,18 +1590,24 @@ export class StudentsService {
       percent: Number(student.discountPercent ?? 0),
       amount: Number(student.discountAmount ?? 0),
       reason: student.discountReason ?? null,
-      monthlyFee: Number(student.monthlyFee ?? 0),
     };
+    // Shaxsiy narx guruh bo'yicha (`applyGroupFees`). Eski front formani to'liq
+    // yuboradi — `monthlyFee` faqat nusxadan farq qilsa "o'zgardi" deb olinadi.
+    const legacyFee =
+      dto.monthlyFee !== undefined &&
+      Number(dto.monthlyFee ?? 0) !== Number(student.monthlyFee ?? 0)
+        ? Number(dto.monthlyFee ?? 0)
+        : undefined;
+    const groupFees = dto.groupFees;
+    delete (dto as any).monthlyFee;
+    delete (dto as any).groupFees;
     Object.assign(student, dto);
     const saved = await this.studentRepo.save(student);
 
-    // Doimiy chegirma yoki shaxsiy narx o'zgarsa: shu oy uchun pul berilmagan
-    // bo'lsa — shu oydan, berilgan bo'lsa — keyingi oydan kuchga kiradi
-    // (o'tgan oylar tegilmaydi).
+    // Doimiy chegirma o'zgarsa: shu oy uchun pul berilmagan bo'lsa — shu
+    // oydan, berilgan bo'lsa — keyingi oydan kuchga kiradi (o'tgan oylar tegilmaydi).
     const discountTouched =
-      dto.discountPercent !== undefined ||
-      dto.discountAmount !== undefined ||
-      dto.monthlyFee !== undefined;
+      dto.discountPercent !== undefined || dto.discountAmount !== undefined;
     let discountChanged = false;
     if (discountTouched) {
       const { effectiveFrom } = await this.baseDiscountService.setDiscount(
@@ -1527,10 +1617,44 @@ export class StudentsService {
           percent: Number(saved.discountPercent ?? 0),
           amount: Number(saved.discountAmount ?? 0),
           reason: saved.discountReason ?? null,
-          monthlyFee: Number(saved.monthlyFee ?? 0),
         },
       );
       discountChanged = effectiveFrom !== null;
+    }
+    // Guruhdagi shaxsiy narx — xuddi shu qoida, lekin har guruhda alohida
+    // (shu oy uchun SHU guruhda pul olinganmi).
+    if (legacyFee !== undefined || groupFees?.length) {
+      const currentGroupIds: number[] = (
+        await this.studentRepo.query(
+          `SELECT "groupsId" FROM "students_groups_groups" WHERE "studentsId" = $1`,
+          [saved.id],
+        )
+      ).map((r: any) => Number(r.groupsId));
+      const fees = await this.applyGroupFees(
+        saved.id,
+        currentGroupIds,
+        groupFees,
+        legacyFee,
+      );
+      if (fees.changed) discountChanged = true;
+      // Shu oydan kuchga kirgan narx — shu oyda bu guruhda pul yo'q. Qator
+      // summasi 0 bo'lsa u "paid" (0/0) bo'lib, ochiq qatorlar qayta
+      // hisoblanishidan tushib qoladi — shuning uchun majburan.
+      if (
+        fees.currentMonthGroupIds.length &&
+        saved.status === StudentStatus.ACTIVE
+      ) {
+        await this.paymentsService
+          .rebillAfterBackdating({
+            studentIds: [saved.id],
+            groupIds: fees.currentMonthGroupIds,
+            fromDate: this.groupFeeService.currentMonth(),
+          })
+          .catch(() => undefined);
+      }
+    } else if (shouldEnsureCurrentMonthPayments) {
+      // Guruh qo'shildi/olib tashlandi — nusxa shu ro'yxat bo'yicha.
+      await this.syncLegacyFee(saved.id);
     }
 
     if (Array.isArray(discountPeriods)) {

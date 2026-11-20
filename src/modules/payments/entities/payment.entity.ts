@@ -63,6 +63,16 @@ export class Payment {
   transferredOutAmount: number;
 
   /**
+   * Keyingi oylarga o'tadigan ortiqcha pul (o'quvchi balansi, markazda turadi).
+   * Admin "qaytarish" o'rniga "keyingi oyga o'tkazish" ni tanlaganda
+   * `refundedAmount` dan shu yerga o'tadi; o'quvchining keyingi ochiq oyi
+   * paydo bo'lganda (kunlik cron) ko'chirish cheki bilan o'sha oyga yoziladi
+   * va `transferredOutAmount` ga o'tadi (`PaymentsService.applyStudentCredit`).
+   */
+  @Column({ type: 'numeric', precision: 14, scale: 2, default: 0 })
+  creditAmount: number;
+
+  /**
    * Soft deadline (usually 10th of month in group timezone).
    */
   @Column({ type: 'date', nullable: true })

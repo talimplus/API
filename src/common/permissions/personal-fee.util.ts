@@ -22,3 +22,24 @@ export async function assertCanSetPersonalFee(
     'O‘quvchiga shaxsiy narx belgilashga ruxsatingiz yo‘q — guruh narxi ishlatiladi',
   );
 }
+
+/**
+ * Guruhlar bo'yicha shaxsiy narx (`groupFees`): hozirgisidan farq qiladigan
+ * biror qiymat bo'lsa — ruxsat kerak. `current` — `groupId → joriy narx`.
+ */
+export async function assertCanSetGroupFees(
+  roles: RolesService,
+  user: CurrentUser,
+  items: { groupId: number; monthlyFee: number }[] | undefined,
+  current: Map<number, number> = new Map(),
+): Promise<void> {
+  if (!items?.length) return;
+  const changed = items.some(
+    (i) => Number(i.monthlyFee ?? 0) !== Number(current.get(i.groupId) ?? 0),
+  );
+  if (!changed) return;
+  if (await roles.userHasPermission(user, [PERSONAL_FEE_PERMISSION])) return;
+  throw new ForbiddenException(
+    'O‘quvchiga shaxsiy narx belgilashga ruxsatingiz yo‘q — guruh narxi ishlatiladi',
+  );
+}

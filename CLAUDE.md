@@ -275,16 +275,16 @@ Narx `groups.monthlyFee` da emas, **`group_fee_periods`** jadvalida (oy aniqligi
   shu oydan qo'llanadi va joriy oyning **ochiq** to'lovlari qayta hisoblanadi.
 - Yangi narx joriy narx bilan teng bo'lsa — rejalashtirilgan kelgusi o'zgarish bekor bo'ladi.
 - Javobda: `monthlyFee` (joriy oy), `upcomingMonthlyFee` + `upcomingFeeFromMonth` (reja yoki null).
-- **O'quvchining shaxsiy narxi ustun:** `students.monthlyFee > 0` bo'lsa, guruh narxi
-  o'zgarishi bu o'quvchiga umuman ta'sir qilmaydi.
+- **O'quvchining shaxsiy narxi ustun** (shu guruhda): `student_group_fees` da shu
+  guruh uchun narx > 0 bo'lsa, guruh narxi o'zgarishi bu o'quvchiga shu guruhda ta'sir qilmaydi.
 
 ### 6.3 To'lovlar (`payments`) — hisob mantiqi
 
 Bitta qator = `(studentId, groupId, forMonth)` unique. Oy — `YYYY-MM-01` (DATE).
 
 ```
-baseMonthlyFee = student.monthlyFee > 0 ? student.monthlyFee
-                                        : <shu OY uchun guruh narxi>
+baseMonthlyFee = <shu OY, shu GURUH shaxsiy narxi> > 0 ? o'sha
+                                                      : <shu OY uchun guruh narxi>
 amountDue = baseMonthlyFee
           * (lessonsBillable / lessonsPlanned)   // proratsiya
           * (1 - discountPercent / 100)          // chegirma
@@ -367,10 +367,25 @@ amountDue = baseMonthlyFee
 - **Davomat to'lovni o'zgartirmaydi**: `recalcPaymentForAttendanceChange` faqat
   `lessonsExcused` (ma'lumot) ni yangilaydi. Ilgari u PAID qatorni ham bugungi
   narx/oyna bilan qayta hisoblab, soxta "qaytariladigan pul" yozardi.
-- **Shaxsiy narx ham oyga bog'langan**: `student_base_discounts.monthlyFee`
-  (doimiy chegirma bilan bitta tarix, bir xil qoida — pul olinmagan bo'lsa shu
-  oydan, olingan bo'lsa keyingi oydan). `resolvePersonalFeeForMonth`; NULL —
-  `students.monthlyFee`.
+- **Shaxsiy narx HAR GURUHDA alohida va oyga bog'langan** (2026-11-20, migratsiya
+  `…075`): `student_group_fees (studentId, groupId, fromMonth, monthlyFee)`,
+  `StudentGroupFeeService`, `resolvePersonalFeeForMonth(student, oy, groupId)`. Qoida
+  chegirma bilan bir xil, lekin guruh bo'yicha: shu oy uchun SHU guruhda pul olinmagan
+  bo'lsa — shu oydan (va shu guruh qatorlari force qayta hisoblanadi — 0/0 "paid" qator
+  ham), olingan bo'lsa — keyingi oydan. Qator yo'q — guruh narxi; yangi qo'shilgan yoki
+  ko'chirilgan guruhga narx o'zi o'tmaydi. DTO: `groupFees: [{groupId, monthlyFee}]`;
+  `GET /students/:id` → `groupFees` (joriy + `upcoming*`). `students.monthlyFee` endi
+  faqat eski front uchun nusxa (hamma guruhda bir xil bo'lsa o'sha, aks holda 0); eski
+  front yuborgan farqli `monthlyFee` — barcha hozirgi guruhlarga. Lead'ning yagona
+  narxi `transfer-to-student` da tanlangan guruhlarga. `student_base_discounts.monthlyFee`
+  endi yozilmaydi (faqat tarix). Backfill eski hisobni o'zgartirmaydi: tarix har bir
+  guruhga nusxalangan (prod: 2063 qatorda 0 farq).
+- **`payments.creditAmount` — keyingi oylarga o'tadigan ortiqcha pul** (`…075`): admin
+  "qaytarish" o'rniga "keyingi oyga" ni tanlasa `refundedAmount` dan shu yerga o'tadi
+  (`carryRefundsForward`); `applyStudentCredit` o'quvchining keyingi ochiq oylariga
+  (avval o'sha guruh, eski oydan) ko'chirish cheki (`transferFromPaymentId`) bilan yozadi,
+  manbada `transferredOutAmount` ga o'tadi. Kelajak oy qatori yo'q bo'lsa kutadi — kunlik
+  cron (00:10) `applyAllStudentCredits`. Kassadan chiqmagan — statistikada refund emas.
 - **Summadagi chegirma fanga bog'lanmagan bo'lsa** (doimiy `discountAmount` yoki
   `groupId` siz davr) — o'quvchining umumiy to'lovidan **bir marta**: shu oydagi
   "asosiy" guruh (a'zolik oynasi eng erta boshlangani, teng bo'lsa kichik id)
@@ -490,17 +505,18 @@ finished→ active
   `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
-- `students.monthlyFee` — shaxsiy narx (guruh narxidan ustun, darhol kuchga kiradi).
+- `students.monthlyFee` — ESKI front uchun nusxa; shaxsiy narx guruh bo'yicha (6.3).
 - **Shaxsiy narx ruxsati** (2026-11-20): `students.personalFee` — hech bir presetda yo'q,
   default faqat admin (`*`). Ruxsatsiz `monthlyFee` ni o'zgartirish (`POST/PUT /students`,
   `POST/PUT /leads`, `transfer-to-student`) — 403; o'zgarmagan qiymat o'tadi
   (`common/permissions/personal-fee.util.ts`, tekshiruv controller/leads servisida).
-- **Adashib yozilgan shaxsiy narxni olib tashlash** (`StudentPersonalFeeService`):
-  `POST /students/:id/personal-fee/clear[/preview]` `{ fromMonth }` (default — faollashgan
-  oy). `student_base_discounts.clearPersonalFeeFrom`: shu oydan narx 0 (chegirma saqlanadi,
-  oldingi oylar eski narxda — kerak bo'lsa baseline qatori yoziladi, NULL qatorlar eski
-  narx bilan to'ldiriladi), `students.monthlyFee = 0`, keyin `rebillAfterBackdating`
-  (PAID ham; ortiqcha — `refundedAmount`). Preview: `computeMonthBilling({ personalFeeClearedFrom })`.
+- **Adashib yozilgan shaxsiy narxni olib tashlash** (`StudentPersonalFeeService`, bitta
+  GURUHDA): `POST /students/:id/personal-fee/clear[/preview]` `{ groupId, fromMonth,
+  overpayment?: refund|carry }` (default oy — faollashgan oy). `StudentGroupFeeService.clearFrom`:
+  shu guruhda shu oydan narx 0 (oldingi oylar eski narxda — kerak bo'lsa baseline qatori),
+  keyin `rebillAfterBackdating` faqat shu guruh (PAID ham). Guruh narxi qimmat — farq
+  qarz; arzon — ortiqcha pul `refund` da `refundedAmount`, `carry` da `creditAmount` →
+  keyingi oylar. Preview: `computeMonthBilling({ personalFeeClearedFrom })`.
 - **Tizim rolini reset** — `POST /roles/:id/reset` (`RolesService.reset`): nomi va
   ruxsatlari `role.presets.ts` ga; `GET /roles` da `canReset` / `isDefault`.
 - **Birinchi N oy tekin** (`students.freeMonths`, migratsiya `…069`, 0 — yo'q):
