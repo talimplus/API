@@ -25,6 +25,7 @@ import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-date
 import { LessonDatesViewDto } from '@/modules/attendance/dto/lesson-dates-view.dto';
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
 import { AttendanceRowDto } from '@/modules/attendance/dto/attendance-row.dto';
+import { ClearAttendanceDto } from '@/modules/attendance/dto/clear-attendance.dto';
 import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 
 @ApiTags('Group Attendance')
@@ -88,6 +89,27 @@ export class GroupAttendanceController {
     @Req() req: any,
   ) {
     return this.attendanceService.submitAttendance(groupId, dto, req.user);
+  }
+
+  @Post('clear')
+  @RequirePermissions('attendance.manage')
+  @ApiOperation({
+    summary: "Davomat belgisini olib tashlash (boshlang'ich holat)",
+    description:
+      "Adashib qo'yilgan belgi o'chadi — katak belgilanmagan holatga qaytadi. " +
+      'Bugungi dars — `attendance.manage`, o‘tgan dars — `attendance.managePast` (default admin). ' +
+      "Belgi bo'lmasa ham xato bermaydi. Javob: `{ cleared: boolean }`.",
+  })
+  @ApiParam({ name: 'groupId', type: Number })
+  @ApiOkResponse({ description: '{ cleared: boolean }' })
+  @ApiBadRequestResponse({ description: "Guruh faol emas, sobiq o'quvchi." })
+  @ApiForbiddenResponse({ description: "Ruxsat yo'q yoki o'tgan kun." })
+  clear(
+    @Param('groupId', ParseIntPipe) groupId: number,
+    @Body() dto: ClearAttendanceDto,
+    @Req() req: any,
+  ) {
+    return this.attendanceService.clearAttendance(groupId, dto, req.user);
   }
 
   @Post('reschedule')

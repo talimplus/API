@@ -721,6 +721,7 @@ vaqtincha emas: xodim **arxivga** o'tadi.
   (hech bir presetda yo'q, default admin). Har o'zgarish `attendance_changes` ga yoziladi;
   guruh o'qituvchisidan boshqa odam (admin ham) belgilagani guruh va o'quvchi tarixida
   (`attendance_marked`) va jurnalda (`markedByOther`) ko'rinadi.
+  `POST …/attendance/clear` — belgini olib tashlash (qoidalar bir xil; jurnalda `newStatus = 'cleared'`).
 - Davomat statuslari: `present`, `absent`, `late`, `excused` (sababli — izoh majburiy).
 - Davomat to'lov summasini o'zgartirmaydi (faqat `lessonsExcused` ma'lumoti).
 - **Kelmaganlar ro'yxati** (qabulxona): `GET /attendance/absences`

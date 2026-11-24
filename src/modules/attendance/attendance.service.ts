@@ -1,10 +1,14 @@
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
-import { AttendanceChange } from '@/modules/attendance/entities/attendance-change.entity';
+import {
+  ATTENDANCE_CLEARED,
+  AttendanceChange,
+} from '@/modules/attendance/entities/attendance-change.entity';
 import { RolesService } from '@/modules/roles/roles.service';
 import { AttendanceStatus } from '@/modules/attendance/enums/attendance-status.enum';
 import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-dates.query.dto';
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
+import { ClearAttendanceDto } from '@/modules/attendance/dto/clear-attendance.dto';
 import { RescheduleLessonDto } from '@/modules/attendance/dto/reschedule-lesson.dto';
 import { computeLessonDates } from '@/modules/attendance/utils/lesson-dates';
 import {
@@ -529,16 +533,7 @@ export class AttendanceService {
 
     // O'tgan kun davomati yopiq: faqat `attendance.managePast` (default —
     // admin). Kelajak pastda rad etiladi.
-    if (
-      dto.lessonDate < today &&
-      !(await this.rolesService.userHasPermission(user, [
-        'attendance.managePast',
-      ]))
-    ) {
-      throw new ForbiddenException(
-        "O'tgan kun davomatini faqat admin o'zgartira oladi",
-      );
-    }
+    await this.assertLessonDateOpen(user, dto.lessonDate, today);
     if (!isAdmin && !isTeacher && !isReception) {
       throw new ForbiddenException('Not allowed');
     }
@@ -775,6 +770,81 @@ export class AttendanceService {
     }));
   }
 
+  /** O'tgan kun davomati yopiq: faqat `attendance.managePast` (default admin). */
+  private async assertLessonDateOpen(
+    user: any,
+    lessonDate: string,
+    today: string,
+  ) {
+    if (
+      lessonDate < today &&
+      !(await this.rolesService.userHasPermission(user, [
+        'attendance.managePast',
+      ]))
+    ) {
+      throw new ForbiddenException(
+        "O'tgan kun davomatini faqat admin o'zgartira oladi",
+      );
+    }
+  }
+
+  /**
+   * Adashib qo'yilgan belgini olib tashlaydi (katak belgilanmagan holatga
+   * qaytadi). Chegaralar belgilash bilan bir xil: bugun — o'qituvchi ham,
+   * o'tgan dars — faqat admin; sobiq o'quvchiniki tegilmaydi.
+   */
+  async clearAttendance(groupId: number, dto: ClearAttendanceDto, user: any) {
+    const group = await this.getGroupOrThrow(groupId);
+    this.assertCanAccessGroup(user, group);
+    if (group.status !== GroupStatus.STARTED) {
+      throw new BadRequestException(
+        "Faqat boshlangan guruh davomatini o'zgartirish mumkin",
+      );
+    }
+    const timezone = group.timezone || 'Asia/Tashkent';
+    await this.assertLessonDateOpen(
+      user,
+      dto.lessonDate,
+      this.getTodayInGroupTz(timezone),
+    );
+    const isMember = (group.students ?? []).some((s) => s.id === dto.studentId);
+    const windows = await this.getJoinDatesByStudent(groupId, timezone);
+    if (!isMember || windows.get(dto.studentId)?.leftAt) {
+      throw new BadRequestException(
+        "Sobiq o'quvchining davomatini o'zgartirib bo'lmaydi",
+      );
+    }
+
+    const where = {
+      groupId,
+      studentId: dto.studentId,
+      lessonDate: dto.lessonDate as any,
+    };
+    const row = await this.attendanceRepo.findOne({ where });
+    if (!row) return { cleared: false };
+    await this.attendanceRepo.delete({ id: row.id });
+
+    await this.logChanges(
+      group,
+      dto.lessonDate,
+      [
+        {
+          studentId: dto.studentId,
+          status: ATTENDANCE_CLEARED,
+          submittedById: user.userId,
+        },
+      ],
+      new Map([[dto.studentId, row.status]]),
+    );
+    // Sababli darslar soni (ma'lumot) yangilanadi; summa o'zgarmaydi.
+    await this.paymentsService
+      .recalcPaymentForAttendanceChange(dto.studentId, groupId, dto.lessonDate)
+      .catch((e) =>
+        this.logger.warn(`Davomat o'chirilgach to'lov: ${e?.message ?? e}`),
+      );
+    return { cleared: true };
+  }
+
   /** Guruhning hozirgi va oldingi o'qituvchilari (`group_teacher_periods`). */
   private async groupTeacherIds(group: Group): Promise<Set<number>> {
     const rows: { teacherId: number | null }[] =
@@ -798,7 +868,7 @@ export class AttendanceService {
     lessonDate: string,
     rows: {
       studentId: number;
-      status: AttendanceStatus;
+      status: AttendanceStatus | typeof ATTENDANCE_CLEARED;
       submittedById: number;
     }[],
     previous: Map<number, AttendanceStatus>,
