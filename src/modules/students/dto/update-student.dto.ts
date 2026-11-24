@@ -3,6 +3,7 @@ import { CreateStudentDto } from '@/modules/students/dto/create-student.dto';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsNumber,
@@ -114,6 +115,17 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
     type: [Number],
   })
   groupIds?: number[];
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Barcha chegirmalarni (doimiy, davrlar, tekin oylar) SHU OYDAN o'chiradi: shu oy " +
+      "to'lovlari (to'langanlari ham) chegirmasiz qayta hisoblanadi, oldingi oylar " +
+      "tegilmaydi. Berilsa boshqa chegirma maydonlari e'tiborga olinmaydi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  clearDiscount?: boolean;
 
   @ApiProperty({
     example: '2026-10-20',

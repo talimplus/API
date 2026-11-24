@@ -15,6 +15,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { CreateStudentDiscountPeriodDto } from '@/modules/students/dto/create-student-discount-period.dto';
 import { WeekDay } from '@/common/enums/group-schedule.enum';
+import { BaseDiscountDto } from './base-discount.dto';
 import { GroupFeeDto } from '@/modules/students/dto/group-fee.dto';
 import { StudentPreferredTime } from '@/common/enums/student-preferred-time.enum';
 import { IsDateString } from 'class-validator';
@@ -178,6 +179,20 @@ export class CreateStudentDto {
   @IsOptional()
   @IsString()
   discountReason?: string;
+
+  @ApiProperty({
+    required: false,
+    type: [BaseDiscountDto],
+    description:
+      "Doimiy chegirmalar guruh bo'yicha — TO'LIQ ro'yxat: yo'q guruh chegirmasi " +
+      "olib tashlanadi. Berilsa `discountPercent/Amount/Reason` e'tiborga olinmaydi. " +
+      "Har guruhga (va 'barcha guruhlar'ga) bittadan.",
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BaseDiscountDto)
+  baseDiscounts?: BaseDiscountDto[];
 
   @ApiProperty({
     example: 1,

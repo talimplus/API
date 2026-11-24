@@ -205,10 +205,17 @@ export class StudentStartDateService {
   /**
    * O'qishni to'xtatgan kun (`stopDate`, exclusive): bugundan keyin, tashkilot
    * ochilishidan, faollashgan kundan va ochiq a'zoliklar boshlanishidan oldin
-   * bo'lolmaydi. Shu kundan keyin "keldi"/"kechikdi" belgisi bo'lsa — o'quvchi
-   * o'qigan, to'xtatish sanasi noto'g'ri (422 `stopDate`).
+   * bo'lolmaydi. Shu kundan boshlab "keldi"/"kechikdi"/"sababli" belgisi bo'lsa
+   * — to'xtatish sanasi noto'g'ri (422 `stopDate`, eng erta mumkin sana bilan).
+   * Bugungi sana ham tekshiriladi.
    */
-  async assertStopDate(student: Student, date: string, group?: Group | null) {
+  async assertStopDate(
+    student: Student,
+    date: string,
+    today: string,
+    group?: Group | null,
+  ) {
+    if (date === today) return this.assertNoMarksFrom(student.id, date);
     await this.assertDate(date, 'stopDate', student.centerId, group);
     if (student.activatedAt) {
       const activated = dayjs(student.activatedAt)
@@ -231,17 +238,42 @@ export class StudentStartDateService {
         stopDate: `O'quvchi ${lastJoin} da guruhga qo'shilgan — to'xtatish sanasi undan oldin bo'lolmaydi`,
       });
     }
-    const [att] = await this.studentRepo.query(
-      `SELECT COUNT(*)::int AS "count", MAX("lessonDate") AS "last" FROM "attendance"
-        WHERE "studentId" = $1 AND "lessonDate" >= $2::date
-          AND "status" IN ('present', 'late')`,
-      [student.id, date],
+    await this.assertNoMarksFrom(student.id, date);
+  }
+
+  /**
+   * `date` dan boshlab o'quvchi qatnashgan ("keldi"/"kechikdi") yoki sababli
+   * deb belgilangan dars bo'lmasligi shart; "kelmadi" va belgilanmagan darslar
+   * to'sqinlik qilmaydi. `groupId` — faqat shu guruh darslari.
+   */
+  private async assertNoMarksFrom(
+    studentId: number,
+    date: string,
+    groupId: number | null = null,
+  ) {
+    const [last] = await this.studentRepo.query(
+      `SELECT TO_CHAR(a."lessonDate", 'YYYY-MM-DD') AS "date", a."status", g."name" AS "groupName"
+         FROM "attendance" a LEFT JOIN "groups" g ON g."id" = a."groupId"
+        WHERE a."studentId" = $1 AND a."lessonDate" >= $2::date
+          AND ($3::int IS NULL OR a."groupId" = $3)
+          AND a."status" IN ('present', 'late', 'excused')
+        ORDER BY a."lessonDate" DESC, a."id" DESC
+        LIMIT 1`,
+      [studentId, date, groupId],
     );
-    if (Number(att?.count ?? 0) > 0) {
-      throw new ValidationException({
-        stopDate: `${date} dan keyin ${att.count} ta darsga "keldi" deb belgilangan (oxirgisi ${toDateOnly(att.last)}) — to'xtatish sanasi undan keyin bo'lishi kerak`,
-      });
-    }
+    if (!last) return;
+    const labels: Record<string, string> = {
+      present: 'keldi',
+      late: 'kechikdi',
+      excused: 'sababli',
+    };
+    const fmt = (d: string) => dayjs(d).format('DD.MM.YYYY');
+    const earliest = dayjs(last.date).add(1, 'day').format('YYYY-MM-DD');
+    throw new ValidationException({
+      stopDate:
+        `${fmt(last.date)} kuni "${last.groupName ?? ''}" guruhida "${labels[last.status]}" deb belgilangan — ` +
+        `faqat ${fmt(earliest)} dan to'xtatish mumkin`,
+    });
   }
 
   /**
@@ -277,21 +309,7 @@ export class StudentStartDateService {
         });
       }
     }
-    const [att] = await this.studentRepo.query(
-      `SELECT COUNT(*)::int AS "count", MAX("lessonDate") AS "last" FROM "attendance"
-        WHERE "studentId" = $1 AND "groupId" = $2 AND "lessonDate" >= $3::date
-          AND "status" IN ('present', 'late')`,
-      [student.id, group.id, date],
-    );
-    if (Number(att?.count ?? 0) > 0) {
-      const last = toDateOnly(att.last) as string;
-      throw new ValidationException({
-        stopDate:
-          date === today && last === today
-            ? 'Bugungi darsga "keldi" deb belgilangan — bu dars puli olinishi uchun o\'quvchini ertaga chiqaring'
-            : `${date} dan boshlab bu guruhda ${att.count} ta darsga "keldi" deb belgilangan (oxirgisi ${last}) — sana undan keyin bo'lishi kerak`,
-      });
-    }
+    await this.assertNoMarksFrom(student.id, date, group.id);
   }
 
   /** Tashqaridan (changeStatus) `activatedAt` qiymatini hisoblash uchun. */

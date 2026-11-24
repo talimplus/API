@@ -16,7 +16,10 @@ import { Group } from '@/modules/groups/entities/groups.entity';
  * To'lovlar uchun shaxsiy narxning YAGONA MANBASI. `students.monthlyFee` —
  * faqat eski front uchun nusxa (hamma guruhda bir xil bo'lsa o'sha, aks holda 0).
  *
- * Oy uchun narx — `fromMonth <= forMonth` ga mos eng oxirgi qator, bo'lmasa eng
+ * Ustun nomi `fromMonth`, lekin u SANA: oy o'rtasi ham bo'lishi mumkin
+ * (2026-11-24) — har dars o'z sanasidagi narxda hisoblanadi.
+ *
+ * Dars sanasi uchun narx — `fromMonth <= sana` ga mos eng oxirgi qator, bo'lmasa eng
  * birinchisi; qator yo'q — 0 (guruh narxi). `monthlyFee = 0` — guruh narxi.
  */
 @Entity('student_group_fees')

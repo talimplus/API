@@ -18,6 +18,8 @@ export enum StudentTimelineType {
   TELEGRAM_LINKED = 'telegram_linked',
   TELEGRAM_UNLINKED = 'telegram_unlinked',
   ATTENDANCE = 'attendance',
+  /** Admin yoki guruh o'qituvchisi bo'lmagan xodim qo'ygan/o'zgartirgan belgi. */
+  ATTENDANCE_MARKED = 'attendance_marked',
   // Faqat `student_events` jurnalidan (shu funksiya qo'shilgandan keyin)
   STATUS_CHANGED = 'status_changed',
   PROFILE_UPDATED = 'profile_updated',

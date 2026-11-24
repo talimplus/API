@@ -1,5 +1,7 @@
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { AttendanceLessonOverride } from '@/modules/attendance/entities/attendance-lesson-override.entity';
+import { AttendanceChange } from '@/modules/attendance/entities/attendance-change.entity';
+import { RolesService } from '@/modules/roles/roles.service';
 import { AttendanceStatus } from '@/modules/attendance/enums/attendance-status.enum';
 import { GetLessonDatesQueryDto } from '@/modules/attendance/dto/get-lesson-dates.query.dto';
 import { SubmitAttendanceDto } from '@/modules/attendance/dto/submit-attendance.dto';
@@ -40,6 +42,9 @@ export class AttendanceService {
     @InjectRepository(AttendanceLessonOverride)
     private readonly overrideRepo: Repository<AttendanceLessonOverride>,
 
+    @InjectRepository(AttendanceChange)
+    private readonly changeRepo: Repository<AttendanceChange>,
+
     @InjectRepository(Group)
     private readonly groupRepo: Repository<Group>,
 
@@ -50,6 +55,8 @@ export class AttendanceService {
     private readonly paymentsService: PaymentsService,
 
     private readonly telegramNotifier: TelegramNotifierService,
+
+    private readonly rolesService: RolesService,
   ) {}
 
   private isAdminRole(role: UserRole): boolean {
@@ -454,10 +461,11 @@ export class AttendanceService {
         groupId,
         lessonDate: In(combinedDates as any),
       },
-      relations: ['student'],
+      relations: ['student', 'submittedBy'],
       order: { lessonDate: 'ASC', studentId: 'ASC' },
     });
 
+    const teacherIds = await this.groupTeacherIds(group);
     const byDate: Record<string, any> = {};
     for (const d of combinedDates) {
       byDate[d] = { exists: false, rows: [] };
@@ -475,6 +483,12 @@ export class AttendanceService {
         status: r.status,
         comment: r.comment ?? null,
         submittedById: r.submittedById ?? null,
+        submittedByName: r.submittedBy
+          ? `${r.submittedBy.firstName ?? ''} ${r.submittedBy.lastName ?? ''}`.trim()
+          : null,
+        // Admin yoki shu guruh o'qituvchisi bo'lmagan xodim belgilagan.
+        markedByOther:
+          !!r.submittedById && !teacherIds.has(Number(r.submittedById)),
         submittedAt: r.submittedAt?.toISOString?.() ?? String(r.submittedAt),
         updatedAt: r.updatedAt?.toISOString?.() ?? String(r.updatedAt),
         student: r.student,
@@ -513,17 +527,17 @@ export class AttendanceService {
     const isTeacher = user.role === UserRole.TEACHER;
     const isReception = user.role === UserRole.RECEPTION;
 
-    // Teacher can submit for today or any past date within the current month
-    // (group TZ). Admin and reception can override any past date. Future is
-    // blocked below.
-    if (isTeacher && dto.lessonDate !== today) {
-      const monthStart = dayjs.tz(today, timezone).startOf('month');
-      const lessonDay = dayjs.tz(dto.lessonDate, timezone);
-      if (lessonDay.isBefore(monthStart)) {
-        throw new ForbiddenException(
-          'Teachers can submit only for dates within the current month',
-        );
-      }
+    // O'tgan kun davomati yopiq: faqat `attendance.managePast` (default —
+    // admin). Kelajak pastda rad etiladi.
+    if (
+      dto.lessonDate < today &&
+      !(await this.rolesService.userHasPermission(user, [
+        'attendance.managePast',
+      ]))
+    ) {
+      throw new ForbiddenException(
+        "O'tgan kun davomatini faqat admin o'zgartira oladi",
+      );
     }
     if (!isAdmin && !isTeacher && !isReception) {
       throw new ForbiddenException('Not allowed');
@@ -693,6 +707,8 @@ export class AttendanceService {
       'lessonDate',
     ]);
 
+    await this.logChanges(group, dto.lessonDate, upsertRows, previousStatuses);
+
     // Recalculate payments for affected students: EXCUSED lessons are deducted
     // from billing, and flipping a lesson back to PRESENT/ABSENT restores it.
     // Failures here must not break attendance submission.
@@ -757,6 +773,55 @@ export class AttendanceService {
       updatedAt: r.updatedAt?.toISOString?.() ?? String(r.updatedAt),
       student: r.student,
     }));
+  }
+
+  /** Guruhning hozirgi va oldingi o'qituvchilari (`group_teacher_periods`). */
+  private async groupTeacherIds(group: Group): Promise<Set<number>> {
+    const rows: { teacherId: number | null }[] =
+      await this.groupRepo.manager.query(
+        `SELECT DISTINCT "teacherId" FROM "group_teacher_periods" WHERE "groupId" = $1`,
+        [group.id],
+      );
+    const ids = new Set(
+      rows.filter((r) => r.teacherId).map((r) => Number(r.teacherId)),
+    );
+    if (group.teacher?.id) ids.add(group.teacher.id);
+    return ids;
+  }
+
+  /**
+   * Status o'zgargan belgilarni jurnalga yozadi (tarix uchun). Xato davomat
+   * saqlanishini to'xtatmaydi.
+   */
+  private async logChanges(
+    group: Group,
+    lessonDate: string,
+    rows: {
+      studentId: number;
+      status: AttendanceStatus;
+      submittedById: number;
+    }[],
+    previous: Map<number, AttendanceStatus>,
+  ) {
+    try {
+      const teacherId = group.teacher?.id ?? null;
+      const changes = rows
+        .filter((r) => previous.get(r.studentId) !== r.status)
+        .map((r) => ({
+          groupId: group.id,
+          studentId: r.studentId,
+          lessonDate,
+          oldStatus: previous.get(r.studentId) ?? null,
+          newStatus: r.status,
+          actorId: r.submittedById,
+          byGroupTeacher: r.submittedById === teacherId,
+        }));
+      if (changes.length) await this.changeRepo.insert(changes);
+    } catch (e) {
+      this.logger.warn(
+        `attendance_changes yozilmadi (guruh ${group.id}): ${(e as Error).message}`,
+      );
+    }
   }
 
   async getAttendanceReport(

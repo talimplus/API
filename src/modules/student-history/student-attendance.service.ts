@@ -34,6 +34,8 @@ export interface StudentAttendanceItem {
   comment: string | null;
   /** Kim belgilagan (o'qituvchi/xodim), bo'lmasa null. */
   submittedBy: string | null;
+  /** Belgilagan odam shu guruh o'qituvchisi emas (admin yoki boshqa xodim). */
+  markedByOther: boolean;
 }
 
 /**
@@ -74,6 +76,11 @@ export class StudentAttendanceService {
     const rows: any[] = await this.dataSource.query(
       `SELECT a.id, a."lessonDate", a."groupId", g.name AS "groupName",
               a.status, a.comment,
+              (a."submittedById" IS NOT NULL
+               AND a."submittedById" IS DISTINCT FROM g."teacherId"
+               AND NOT EXISTS (SELECT 1 FROM group_teacher_periods tp
+                                WHERE tp."groupId" = g.id AND tp."teacherId" = a."submittedById")
+              ) AS "markedByOther",
               TRIM(COALESCE(u."firstName", '') || ' ' || COALESCE(u."lastName", '')) AS "submittedBy"
          FROM attendance a
          JOIN groups g ON g.id = a."groupId"
@@ -90,6 +97,7 @@ export class StudentAttendanceService {
       status: r.status,
       comment: r.comment ?? null,
       submittedBy: r.submittedBy || null,
+      markedByOther: !!r.markedByOther,
     }));
 
     // Guruhlar: a'zolik oynalaridan (chiqib ketgan guruh ham), hozirgi

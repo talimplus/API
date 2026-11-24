@@ -101,7 +101,12 @@ export class StudentTimelineService {
         ...(await this.discounts(studentId)),
       );
     }
-    if (canAttendance) drafts.push(...(await this.attendance(studentId)));
+    if (canAttendance) {
+      drafts.push(
+        ...(await this.attendance(studentId)),
+        ...(await this.attendanceChanges(studentId)),
+      );
+    }
 
     drafts.sort((a, b) => b.sortAt - a.sortAt || a.id.localeCompare(b.id));
     return {
@@ -446,11 +451,19 @@ export class StudentTimelineService {
     // Birinchi o'zgarishda eski qiymat ham bir vaqtda yoziladi — bitta
     // saqlashdan faqat eng kech `fromMonth` li qator (yangi qiymat) olinadi.
     const bases = await this.q(
-      `SELECT DISTINCT ON (b."createdAt") b.id, b.percent, b.amount, b."monthlyFee",
-              b.reason, b."createdAt", TO_CHAR(b."fromMonth", 'YYYY-MM') AS "fromMonth"
+      `SELECT DISTINCT ON (b."createdAt", b."groupId") b.id, b.percent, b.amount, b."monthlyFee",
+              b.reason, b."createdAt", TO_CHAR(b."fromMonth", 'YYYY-MM') AS "fromMonth",
+              b."groupId", g.name AS "groupName"
          FROM student_base_discounts b
+         LEFT JOIN groups g ON g.id = b."groupId"
         WHERE b."studentId" = $1
-        ORDER BY b."createdAt", b."fromMonth" DESC`,
+          -- Guruh chegirmasi oldidagi "chegirma yo'q" boshlang'ich qatori — voqea emas
+          AND NOT (b."groupId" IS NOT NULL AND b.percent = 0 AND b.amount = 0
+                   AND NOT EXISTS (SELECT 1 FROM student_base_discounts x
+                                    WHERE x."studentId" = b."studentId"
+                                      AND x."groupId" = b."groupId"
+                                      AND x."fromMonth" < b."fromMonth"))
+        ORDER BY b."createdAt", b."groupId", b."fromMonth" DESC`,
       [studentId],
     );
     return [
@@ -474,6 +487,7 @@ export class StudentTimelineService {
           id: `fee:${b.id}`,
           type: T.FEE_CHANGED,
           category: Cat.PAYMENTS,
+          group: this.ref(b.groupId, b.groupName),
           details: {
             monthlyFee: b.monthlyFee == null ? null : Number(b.monthlyFee),
             percent: Number(b.percent ?? 0),
@@ -564,6 +578,34 @@ export class StudentTimelineService {
         actor: this.ref(r.actorId, r.actorName),
         group: this.ref(r.groupId, r.groupName),
         details: { status: r.status, comment: r.comment ?? null },
+      }),
+    );
+  }
+
+  /** Guruh o'qituvchisidan boshqa odam (admin ham) qo'ygan belgilar. */
+  private async attendanceChanges(studentId: number): Promise<Draft[]> {
+    const rows = await this.q(
+      `SELECT c.id, c."oldStatus", c."newStatus", c."createdAt", c."groupId",
+              g.name AS "groupName", TO_CHAR(c."lessonDate", 'YYYY-MM-DD') AS "lessonDate",
+              u.id AS "actorId", ${this.userName('u')} AS "actorName"
+         FROM attendance_changes c
+         LEFT JOIN groups g ON g.id = c."groupId"
+         LEFT JOIN users u ON u.id = c."actorId"
+        WHERE c."studentId" = $1 AND c."byGroupTeacher" = false`,
+      [studentId],
+    );
+    return rows.map((r) =>
+      this.at(r.createdAt, {
+        id: `attendance-change:${r.id}`,
+        type: T.ATTENDANCE_MARKED,
+        category: Cat.ATTENDANCE,
+        actor: this.ref(r.actorId, r.actorName),
+        group: this.ref(r.groupId, r.groupName),
+        details: {
+          oldStatus: r.oldStatus ?? null,
+          status: r.newStatus,
+          lessonDate: r.lessonDate,
+        },
       }),
     );
   }

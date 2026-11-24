@@ -2,6 +2,8 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Attendance } from './entities/attendance.entity';
 import { AttendanceLessonOverride } from './entities/attendance-lesson-override.entity';
+import { AttendanceChange } from './entities/attendance-change.entity';
+import { RolesModule } from '@/modules/roles/roles.module';
 import { AttendanceService } from './attendance.service';
 import { GroupAttendanceController } from './group-attendance.controller';
 import { AttendanceAbsencesController } from './attendance-absences.controller';
@@ -18,6 +20,7 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
     TypeOrmModule.forFeature([
       Attendance,
       AttendanceLessonOverride,
+      AttendanceChange,
       Group,
       Student,
     ]),
@@ -25,6 +28,7 @@ import { TelegramModule } from '@/modules/telegram/telegram.module';
     forwardRef(() => GroupsModule),
     forwardRef(() => PaymentsModule),
     TelegramModule,
+    RolesModule,
   ],
   controllers: [GroupAttendanceController, AttendanceAbsencesController],
   providers: [AttendanceService, AttendanceAbsencesService],

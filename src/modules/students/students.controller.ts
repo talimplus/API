@@ -278,16 +278,16 @@ export class StudentsController {
       req.user.organizationId,
       id,
       dto.groupId,
-      dto.fromMonth,
+      dto.fromDate,
     );
   }
 
   @Post(':id/personal-fee/clear')
   @RequirePermissions('students.personalFee')
   @ApiOperation({
-    summary: 'Shaxsiy narxni olib tashlash — tanlangan oydan guruh narxi',
+    summary: 'Shaxsiy narxni olib tashlash — tanlangan sanadan guruh narxi',
     description:
-      'Faqat `groupId` guruhida: `student_group_fees` da `fromMonth` dan narx 0, shu ' +
+      'Faqat `groupId` guruhida: `student_group_fees` da `fromDate` dan narx 0, shu ' +
       "oydan joriy oygacha shu guruh to'lovlari majburan qayta hisoblanadi (PAID ham). " +
       "Guruh narxi qimmat bo'lsa farq qarz bo'ladi; arzon bo'lsa ortiqcha pul " +
       "`overpayment` bo'yicha: `refund` — `refundedAmount`, `carry` — keyingi oylarga " +
@@ -304,7 +304,7 @@ export class StudentsController {
       req.user.organizationId,
       id,
       dto.groupId,
-      dto.fromMonth,
+      dto.fromDate,
       dto.overpayment ?? OverpaymentMode.REFUND,
       req.user?.userId ?? null,
     );

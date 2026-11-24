@@ -3,7 +3,7 @@ import { Type } from 'class-transformer';
 import { IsDateString, IsEnum, IsInt, IsOptional } from 'class-validator';
 import { OverpaymentMode } from '@/common/enums/overpayment-mode.enum';
 
-/** Shaxsiy narxni bitta guruhda olib tashlash — qaysi oydan guruh narxi. */
+/** Shaxsiy narxni bitta guruhda olib tashlash — qaysi sanadan guruh narxi. */
 export class ClearPersonalFeeDto {
   @ApiProperty({ example: 12, description: 'Qaysi guruhdagi shaxsiy narx' })
   @Type(() => Number)
@@ -11,13 +11,13 @@ export class ClearPersonalFeeDto {
   groupId: number;
 
   @ApiProperty({
-    example: '2026-09-01',
+    example: '2026-09-15',
     description:
-      'Shu oydan (YYYY-MM-01; kun berilsa oyning 1-sanasiga tushadi) boshlab guruh narxi. ' +
-      "Joriy oydan keyin va 24 oydan uzoq bo'lolmaydi.",
+      "Shu sanadan (YYYY-MM-DD, oy o'rtasi ham) boshlab guruh narxi; oldingi darslar eski narxda. " +
+      "Bugundan keyin va 24 oydan uzoq bo'lolmaydi.",
   })
   @IsDateString()
-  fromMonth: string;
+  fromDate: string;
 
   @ApiProperty({
     enum: OverpaymentMode,
@@ -41,10 +41,10 @@ export class PreviewClearPersonalFeeDto {
 
   @ApiProperty({
     required: false,
-    example: '2026-09-01',
-    description: "Berilmasa — o'quvchi faollashgan oy (`defaultFromMonth`).",
+    example: '2026-09-15',
+    description: "Berilmasa — o'quvchi faollashgan kun (`defaultFromMonth`).",
   })
   @IsOptional()
   @IsDateString()
-  fromMonth?: string;
+  fromDate?: string;
 }

@@ -13,6 +13,7 @@ import {
 import { GroupsService } from './groups.service';
 import { GroupPausesService } from './group-pauses.service';
 import { GroupTimelineService } from './group-timeline.service';
+import { RolesService } from '@/modules/roles/roles.service';
 import { GroupMembersService } from './group-members.service';
 import { CreateGroupPauseDto } from './dto/group-pause.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
@@ -35,6 +36,7 @@ export class GroupsController {
     private readonly groupsService: GroupsService,
     private readonly groupPausesService: GroupPausesService,
     private readonly groupTimelineService: GroupTimelineService,
+    private readonly rolesService: RolesService,
     private readonly groupMembersService: GroupMembersService,
   ) {}
 
@@ -269,14 +271,20 @@ export class GroupsController {
     description:
       '[{ date: YYYY-MM-DD, type, title, data }] — type: group_created, group_started, ' +
       'group_finished, group_end_planned, teacher_assigned, teacher_changed, schedule_set, ' +
-      'schedule_changed, fee_set, fee_changed, pause, lesson_moved, student_joined, ' +
+      'schedule_changed, fee_set, fee_changed, pause, lesson_moved, attendance_marked ' +
+      '(only with attendance.view), student_joined, ' +
       'student_left, student_transferred_in, student_transferred_out',
   })
-  timeline(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+  async timeline(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.groupTimelineService.getTimeline(
       id,
       req.user.organizationId,
       this.scopedCenterId(req),
+      {
+        attendance: await this.rolesService.userHasPermission(req.user, [
+          'attendance.view',
+        ]),
+      },
     );
   }
 

@@ -24,13 +24,13 @@ const MAX_MONTHS_BACK = 23;
  *
  * Reception ba'zan guruh narxini o'quvchining shaxsiy narxi qilib yozib
  * qo'ygan: keyin guruh narxi o'zgarsa bu o'quvchiga o'tmaydi. Admin guruh va
- * oyni tanlaydi (default — o'quvchi faollashgan oy), o'sha oydan boshlab shu
+ * aniq SANANI tanlaydi (default — o'quvchi faollashgan kun), o'sha kundan shu
  * guruhda guruh narxi ishlatiladi va to'lovlar (to'langan oylar ham) qayta
  * hisoblanadi:
  * - yangi narx qimmat — farq qarz bo'lib qoladi;
  * - arzon — ortiqcha pul admin tanlovi bilan qaytariladi (`refund`) yoki
  *   keyingi oylarga o'tkaziladi (`carry`).
- * Tanlangan oydan oldingi oylar eski narxda qoladi; boshqa guruhlar tegilmaydi.
+ * Tanlangan sanadan oldingi darslar (shu oyda ham) eski narxda qoladi; boshqa guruhlar tegilmaydi.
  */
 @Injectable()
 export class StudentPersonalFeeService {
@@ -44,61 +44,62 @@ export class StudentPersonalFeeService {
     private readonly paymentsService: PaymentsService,
   ) {}
 
-  /** Ta'sir (hech narsa yozmaydi). `fromMonth` berilmasa — default oy. */
+  /** Ta'sir (hech narsa yozmaydi). `fromDate` berilmasa — default kun. */
   async preview(
     organizationId: number,
     studentId: number,
     groupId: number,
-    fromMonth?: string,
+    fromDate?: string,
   ) {
     const student = await this.load(organizationId, studentId);
     const group = await this.loadGroup(student, groupId);
-    const defaultFromMonth = this.defaultFromMonth(student);
-    const month = this.normalizeMonth(fromMonth ?? defaultFromMonth);
-    await this.assertHasPersonalFee(student, group, month);
+    const defaultFromDate = this.defaultFromDate(student);
+    const date = this.normalizeDate(fromDate ?? defaultFromDate);
+    await this.assertHasPersonalFee(student, group, date);
 
     const result = await this.paymentsService.previewBackdating([
-      { student, group, fromMonth: month, personalFeeClearedFrom: month },
+      {
+        student,
+        group,
+        fromMonth: dayjs(date).startOf('month').format('YYYY-MM-01'),
+        personalFeeClearedFrom: date,
+      },
     ]);
     return {
       groupId: group.id,
       groupName: group.name,
-      fromMonth: month,
-      defaultFromMonth,
-      minMonth: this.minMonth(),
-      personalFee: await this.groupFees.feeForMonth(
-        student.id,
-        group.id,
-        month,
-      ),
+      fromDate: date,
+      defaultFromDate,
+      minDate: this.minDate(),
+      personalFee: await this.groupFees.feeAt(student.id, group.id, date),
       ...result,
     };
   }
 
   /**
-   * Narxni olib tashlaydi, `fromMonth` dan bugungacha qayta hisoblaydi va
+   * Narxni olib tashlaydi, `fromDate` dan bugungacha qayta hisoblaydi va
    * ortiqcha pulni tanlov bo'yicha qaytaradi yoki keyingi oylarga o'tkazadi.
    */
   async apply(
     organizationId: number,
     studentId: number,
     groupId: number,
-    fromMonth: string,
+    fromDate: string,
     overpayment: OverpaymentMode,
     performedById?: number | null,
   ) {
     const student = await this.load(organizationId, studentId);
     const group = await this.loadGroup(student, groupId);
-    const month = this.normalizeMonth(fromMonth);
-    await this.assertHasPersonalFee(student, group, month);
+    const date = this.normalizeDate(fromDate);
+    await this.assertHasPersonalFee(student, group, date);
 
     const refundsBefore = await this.refundsByPayment(
       student.id,
       group.id,
-      month,
+      date,
     );
 
-    await this.groupFees.clearFrom(student.id, group.id, month);
+    await this.groupFees.clearFrom(student.id, group.id, date);
     await this.studentRepo.update(student.id, {
       monthlyFee: await this.groupFees.legacyFee(
         student.id,
@@ -108,14 +109,14 @@ export class StudentPersonalFeeService {
     await this.paymentsService.rebillAfterBackdating({
       studentIds: [student.id],
       groupIds: [group.id],
-      fromDate: month,
+      fromDate: date,
     });
 
     // Qayta hisoblashda paydo bo'lgan ortiqcha pul (faqat shu amal sabab).
     const refundsAfter = await this.refundsByPayment(
       student.id,
       group.id,
-      month,
+      date,
     );
     const excess = [...refundsAfter]
       .map(([paymentId, after]) => ({
@@ -137,7 +138,7 @@ export class StudentPersonalFeeService {
     return {
       studentId: student.id,
       groupId: group.id,
-      fromMonth: month,
+      fromDate: date,
       overpayment,
       overpaidAmount: Math.round(overpaid * 100) / 100,
       refundedAmount: Math.round((overpaid - carry.carried) * 100) / 100,
@@ -187,52 +188,49 @@ export class StudentPersonalFeeService {
     return dayjs().tz(TZ).startOf('month').format('YYYY-MM-01');
   }
 
-  private minMonth(): string {
+  private minDate(): string {
     return dayjs(this.currentMonth())
       .subtract(MAX_MONTHS_BACK, 'month')
       .format('YYYY-MM-01');
   }
 
-  /** O'quvchi faollashgan oy (chegaradan oldin bo'lsa — chegara). */
-  private defaultFromMonth(student: Student): string {
-    const current = this.currentMonth();
-    if (!student.activatedAt) return current;
-    const month = dayjs(student.activatedAt)
-      .tz(TZ)
-      .startOf('month')
-      .format('YYYY-MM-01');
-    const min = this.minMonth();
-    if (month < min) return min;
-    return month > current ? current : month;
+  /** O'quvchi faollashgan kun (chegaradan oldin bo'lsa — chegara). */
+  private defaultFromDate(student: Student): string {
+    const today = this.groupFees.today();
+    if (!student.activatedAt) return this.currentMonth();
+    const date = dayjs(student.activatedAt).tz(TZ).format('YYYY-MM-DD');
+    const min = this.minDate();
+    if (date < min) return min;
+    return date > today ? today : date;
   }
 
-  private normalizeMonth(value: string): string {
+  private normalizeDate(value: string): string {
     const parsed = dayjs(value);
     if (!value || !parsed.isValid()) {
-      throw new ValidationException({ fromMonth: "Oy noto'g'ri" });
+      throw new ValidationException({ fromDate: "Sana noto'g'ri" });
     }
-    const month = parsed.startOf('month').format('YYYY-MM-01');
-    if (month > this.currentMonth()) {
+    const date = parsed.format('YYYY-MM-DD');
+    if (date > this.groupFees.today()) {
       throw new ValidationException({
-        fromMonth: "Oy joriy oydan keyin bo'lishi mumkin emas",
+        fromDate: "Sana bugundan keyin bo'lishi mumkin emas",
       });
     }
-    if (month < this.minMonth()) {
+    if (date < this.minDate()) {
       throw new ValidationException({
-        fromMonth: `Oy ${this.minMonth()} dan oldin bo'lishi mumkin emas`,
+        fromDate: `Sana ${this.minDate()} dan oldin bo'lishi mumkin emas`,
       });
     }
-    return month;
+    return date;
   }
 
   private async assertHasPersonalFee(
     student: Student,
     group: Group,
-    month: string,
+    date: string,
   ) {
-    if (!(await this.groupFees.hasFeeFrom(student.id, group.id, month))) {
+    if (!(await this.groupFees.hasFeeFrom(student.id, group.id, date))) {
       throw new BadRequestException(
-        "Bu guruhda tanlangan oydan keyin shaxsiy narx yo'q — guruh narxi allaqachon ishlatilmoqda",
+        "Bu guruhda tanlangan sanadan keyin shaxsiy narx yo'q — guruh narxi allaqachon ishlatilmoqda",
       );
     }
   }
@@ -240,13 +238,13 @@ export class StudentPersonalFeeService {
   private async refundsByPayment(
     studentId: number,
     groupId: number,
-    month: string,
+    date: string,
   ): Promise<Map<number, number>> {
     const rows: { id: number; refundedAmount: string }[] =
       await this.studentRepo.query(
         `SELECT "id", "refundedAmount" FROM "payments"
-          WHERE "studentId" = $1 AND "groupId" = $2 AND "forMonth" >= $3::date`,
-        [studentId, groupId, month],
+          WHERE "studentId" = $1 AND "groupId" = $2 AND "forMonth" >= DATE_TRUNC('month', $3::date)`,
+        [studentId, groupId, date],
       );
     return new Map(
       rows.map((r) => [Number(r.id), Number(r.refundedAmount ?? 0)]),

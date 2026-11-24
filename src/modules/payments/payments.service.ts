@@ -53,7 +53,7 @@ import {
 import {
   GroupFeePeriod,
   StudentGroupFeeService,
-  pickGroupFeeForMonth,
+  pickGroupFeeAt,
 } from '@/modules/students/student-group-fee.service';
 import {
   EnrollmentsService,
@@ -1027,12 +1027,21 @@ export class PaymentsService {
               dayjs(p.forMonth).format('YYYY-MM-01'),
             )
           : 0;
-        const studentFee = await this.resolvePersonalFeeForMonth(
+        const monthKey = dayjs(p.forMonth).format('YYYY-MM-01');
+        const studentFee = await this.resolvePersonalFeeAt(
           student,
-          dayjs(p.forMonth).format('YYYY-MM-01'),
+          monthKey,
           p.groupId,
         );
         const baseMonthlyFee = studentFee > 0 ? studentFee : groupFee;
+        // Shaxsiy narx oy o'rtasida o'zgargan — bitta "oylik narx" yo'q.
+        const feeSplit =
+          !!p.groupId &&
+          (await this.getGroupFeePeriods(student.id, p.groupId)).some(
+            (f) =>
+              f.fromMonth > monthKey &&
+              f.fromMonth.slice(0, 7) === monthKey.slice(0, 7),
+          );
         let fullAmount: number | null = null;
         let discountPercent = 0;
         let discountAmount = 0;
@@ -1054,6 +1063,14 @@ export class PaymentsService {
           } catch {
             fullAmount = this.round2(baseMonthlyFee);
           }
+        }
+        if (feeSplit && lessonsPlanned && lessonsBillable) {
+          // To'liq oylik — o'quvchi darslarining o'rtacha narxi bo'yicha.
+          fullAmount = this.round2(
+            ((amountDue + Number(p.manualExcludedAmount ?? 0)) /
+              lessonsBillable) *
+              lessonsPlanned,
+          );
         }
 
         // Bitta dars narxi (chiqarib tashlashda kun -> summa hisoblash uchun).
@@ -1128,12 +1145,12 @@ export class PaymentsService {
       'saturday',
       'sunday',
     ];
-    const feeMonth = this.groupFeeHistory.currentMonth();
+    const feeDate = this.groupFeeHistory.today();
     const personalFees = new Map<number, number>();
     for (const g of student.groups ?? []) {
       personalFees.set(
         g.id,
-        await this.resolvePersonalFeeForMonth(student, feeMonth, g.id),
+        await this.resolvePersonalFeeAt(student, feeDate, g.id),
       );
     }
     const groups = (student.groups ?? []).map((g: any) => {
@@ -1180,8 +1197,15 @@ export class PaymentsService {
         discountPercent: Number(student.discountPercent ?? 0),
         discountAmount: Number((student as any).discountAmount ?? 0),
         discountReason: student.discountReason ?? null,
+        // Doimiy chegirmalar guruh bo'yicha (null — barcha guruhlarga)
+        baseDiscounts:
+          (await this.baseDiscountService.statesFor([student])).get(
+            student.id,
+          ) ?? [],
         activatedAt: student.activatedAt ?? null,
         stoppedAt: student.stoppedAt ?? null,
+        // To'xtatgan kun (o'tgan sana bo'lishi mumkin), qachon va kim belgilagani
+        stopInfo: await this.stopInfoOf(student),
         createdAt: student.createdAt,
         centerId: student.centerId,
         centerName: (student as any).center?.name ?? null,
@@ -1208,6 +1232,32 @@ export class PaymentsService {
         creditAmount, // keyingi oylarga o'tadigan ortiqcha pul
       },
       months,
+    };
+  }
+
+  /** To'xtatgan o'quvchi: qaysi kundan (`date`), qachon va kim belgilagan. */
+  private async stopInfoOf(student: Student) {
+    if (student.status !== StudentStatus.STOPPED || !student.stoppedAt) {
+      return null;
+    }
+    const tz = 'Asia/Tashkent';
+    const [event] = await this.dataSource.query(
+      `SELECT e."occurredAt",
+              NULLIF(TRIM(CONCAT(u."firstName", ' ', u."lastName")), '') AS "by"
+         FROM "student_events" e
+         LEFT JOIN "users" u ON u."id" = e."actorId"
+        WHERE e."studentId" = $1 AND e."type" = 'status_changed'
+          AND e."payload"->>'toStatus' = 'stopped'
+        ORDER BY e."occurredAt" DESC, e."id" DESC
+        LIMIT 1`,
+      [student.id],
+    );
+    return {
+      date: dayjs(student.stoppedAt).tz(tz).format('YYYY-MM-DD'),
+      markedOn: event?.occurredAt
+        ? dayjs(event.occurredAt).tz(tz).format('YYYY-MM-DD')
+        : null,
+      markedBy: event?.by ?? null,
     };
   }
 
@@ -1720,31 +1770,71 @@ export class PaymentsService {
    * tarix bo'lmasa — `students` ustunlaridan (hech qachon o'zgartirilmagan).
    */
   /**
-   * Shu oy uchun SHU GURUHDAGI shaxsiy narx (0 — guruh narxi ishlatiladi).
+   * Shu SANADA shu guruhdagi shaxsiy narx (0 — guruh narxi ishlatiladi).
    * Har guruhda alohida (`student_group_fees`, 2026-11-20): 200 ming va 500
    * ming lik guruhlarda o'qiganga bitta narx ikkalasiga qo'llanmaydi.
    * O'zgartirilsa o'tgan oylar tegilmaydi.
    */
-  private async resolvePersonalFeeForMonth(
+  private async resolvePersonalFeeAt(
     student: Student,
-    forMonth: string,
+    date: string, // YYYY-MM-DD
     groupId: number | null | undefined,
   ): Promise<number> {
     if (!groupId) return 0;
-    let all = this.groupFeePeriodsCache.get(student.id);
+    const periods = await this.getGroupFeePeriods(student.id, groupId);
+    return Number(pickGroupFeeAt(periods, date)?.monthlyFee ?? 0);
+  }
+
+  private async getGroupFeePeriods(studentId: number, groupId: number) {
+    let all = this.groupFeePeriodsCache.get(studentId);
     if (!all) {
-      all = await this.groupFeeHistory.getPeriods(student.id);
-      this.groupFeePeriodsCache.set(student.id, all);
+      all = await this.groupFeeHistory.getPeriods(studentId);
+      this.groupFeePeriodsCache.set(studentId, all);
     }
-    const picked = pickGroupFeeForMonth(all.get(groupId) ?? [], forMonth);
-    return Number(picked?.monthlyFee ?? 0);
+    return all.get(groupId) ?? [];
+  }
+
+  /**
+   * Oydagi to'lov narxi. Shaxsiy narx oy o'rtasida o'zgargan bo'lsa har dars
+   * o'z sanasidagi narxda: o'rtacha = Σ narx(dars) / darslar soni. Shunda
+   * `narx × billable / planned` aynan darslar yig'indisini beradi.
+   */
+  private async resolveBaseFeeForLessons(args: {
+    student: Student;
+    group: Group;
+    forMonth: string;
+    billableDates: string[];
+    personalFeeClearedFrom?: string;
+  }): Promise<number> {
+    const { student, group, forMonth, billableDates } = args;
+    const groupFee = await this.resolveGroupFeeForMonth(group, forMonth);
+    const periods = await this.getGroupFeePeriods(student.id, group.id);
+    const feeOn = (date: string) => {
+      const cleared =
+        args.personalFeeClearedFrom && date >= args.personalFeeClearedFrom;
+      const personal = cleared
+        ? 0
+        : Number(pickGroupFeeAt(periods, date)?.monthlyFee ?? 0);
+      return personal > 0 ? personal : groupFee;
+    };
+    const fees = (billableDates.length ? billableDates : [forMonth]).map(feeOn);
+    if (fees.every((f) => f === fees[0])) return fees[0];
+    return fees.reduce((sum, f) => sum + f, 0) / fees.length;
   }
 
   private async resolveBaseDiscountForMonth(
     student: Student,
     forMonth: string,
+    groupId: number | null = null,
   ): Promise<{ percent: number; amount: number; reason: string | null }> {
-    const periods = await this.getBasePeriods(student.id);
+    const periods = (await this.getBasePeriods(student.id)).filter(
+      (p) => p.groupId === groupId,
+    );
+    // Guruhga bog'langan chegirma faqat tarixda; `students` ustunlari — barcha
+    // guruhlarga berilgani.
+    if (groupId !== null && !periods.length) {
+      return { percent: 0, amount: 0, reason: null };
+    }
     const picked = pickBaseDiscountForMonth(periods, forMonth);
     if (picked) return picked;
     return {
@@ -1783,14 +1873,21 @@ export class PaymentsService {
     const breakdown: ResolvedDiscount['breakdown'] = [];
 
     // Doimiy (davrsiz) chegirma — shu oy uchun amalda bo'lgani tarixdan.
-    const base = await this.resolveBaseDiscountForMonth(student, forMonth);
-    if (base.percent > 0 || base.amount > 0) {
-      breakdown.push({
-        percent: base.percent,
-        amount: base.amount,
-        groupId: null,
-        reason: base.reason ? `Base: ${base.reason}` : 'Base discount',
-      });
+    // Barcha guruhlarga berilgani + shu guruhga berilgani qo'shiladi.
+    for (const scope of groupId ? [null, groupId] : [null]) {
+      const base = await this.resolveBaseDiscountForMonth(
+        student,
+        forMonth,
+        scope,
+      );
+      if (base.percent > 0 || base.amount > 0) {
+        breakdown.push({
+          percent: base.percent,
+          amount: base.amount,
+          groupId: scope,
+          reason: base.reason ? `Base: ${base.reason}` : 'Base discount',
+        });
+      }
     }
 
     for (const r of rows) {
@@ -2374,7 +2471,7 @@ export class PaymentsService {
     /** Preview uchun tayyor tekin davr (`undefined` — keshdan/DB'dan). */
     freeWindowOverride?: FreeWindow | null;
     /**
-     * Preview: shu oydan (YYYY-MM-01) boshlab shaxsiy narx olib tashlangan deb
+     * Preview: shu sanadan (YYYY-MM-DD) boshlab shaxsiy narx olib tashlangan deb
      * hisoblanadi — guruh narxi ishlatiladi (`StudentPersonalFeeService`).
      */
     personalFeeClearedFrom?: string;
@@ -2464,15 +2561,16 @@ export class PaymentsService {
 
     // Guruh narxi ham, shaxsiy narx ham oyga bog'langan: o'tgan/joriy oylar
     // eski narxda qoladi.
-    const groupFee = await this.resolveGroupFeeForMonth(group, forMonth);
-    const personalFee =
-      personalFeeClearedFrom && forMonth >= personalFeeClearedFrom
-        ? 0
-        : await this.resolvePersonalFeeForMonth(student, forMonth, group.id);
+    const baseMonthlyFee = await this.resolveBaseFeeForLessons({
+      student,
+      group,
+      forMonth,
+      billableDates,
+      personalFeeClearedFrom,
+    });
 
     const amountDue = this.computeAmountDue({
-      personalFee,
-      groupFee,
+      baseMonthlyFee,
       lessonsPlanned,
       lessonsBillable, // excused ayirilmaydi
       lessonsPaused,
@@ -3578,10 +3676,8 @@ export class PaymentsService {
   }
 
   private computeAmountDue(args: {
-    /** Shu oy uchun amaldagi shaxsiy narx (`resolvePersonalFeeForMonth`). */
-    personalFee: number;
-    /** Shu oy uchun amaldagi GURUH narxi (`resolveGroupFeeForMonth`). */
-    groupFee: number;
+    /** Shu oy uchun amaldagi narx: shaxsiy yoki guruh (`resolveBaseFeeForLessons`). */
+    baseMonthlyFee: number;
     lessonsPlanned: number;
     lessonsBillable: number;
     /** Pauza sabab o'tmagan darslar — "to'liq oy" hisobiga kiradi. */
@@ -3592,8 +3688,7 @@ export class PaymentsService {
     manualExcludedAmount?: number;
   }): number {
     const {
-      personalFee,
-      groupFee,
+      baseMonthlyFee,
       lessonsPlanned,
       lessonsBillable,
       lessonsPaused = 0,
@@ -3601,12 +3696,6 @@ export class PaymentsService {
       discountAmount = 0,
       manualExcludedAmount = 0,
     } = args;
-    // Narx ustunligi:
-    // - o'quvchining shaxsiy narxi bo'lsa (> 0) -> o'sha ishlatiladi va
-    //   guruh narxi o'zgarsa ham bu o'quvchiga umuman ta'sir qilmaydi;
-    // - aks holda -> shu OY uchun amaldagi guruh narxi.
-    const studentFee = Number(personalFee ?? 0);
-    const baseMonthlyFee = studentFee > 0 ? studentFee : Number(groupFee ?? 0);
     if (!lessonsPlanned) return 0;
 
     // Apply discount AFTER lesson-based prorating

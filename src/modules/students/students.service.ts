@@ -41,6 +41,7 @@ import {
 } from '@/modules/enrollments/enrollments.service';
 import { StudentStartDateService } from '@/modules/students/student-start-date.service';
 import { FinishGroupDto } from '@/modules/students/dto/finish-group.dto';
+import { BaseDiscountDto } from './dto/base-discount.dto';
 import { LeaveGroupDto } from '@/modules/students/dto/leave-group.dto';
 import { assertNotBeforeOrganization } from '@/modules/organizations/organization-opened.util';
 import { PreviewStudentStartDateDto } from '@/modules/students/dto/preview-student-start-date.dto';
@@ -48,7 +49,10 @@ import { GroupsService } from '@/modules/groups/groups.service';
 import { Attendance } from '@/modules/attendance/entities/attendance.entity';
 import { StudentEventsService } from '@/modules/student-history/student-events.service';
 import { StudentEventType } from '@/modules/student-history/student-timeline.enums';
-import { StudentBaseDiscountService } from '@/modules/students/student-base-discount.service';
+import {
+  BaseDiscountValue,
+  StudentBaseDiscountService,
+} from '@/modules/students/student-base-discount.service';
 import { StudentGroupFeeService } from '@/modules/students/student-group-fee.service';
 import {
   TransferPreviewDto,
@@ -266,6 +270,9 @@ export class StudentsService {
       }
     }
 
+    const baseDiscounts = await this.baseDiscountService.statesFor(
+      data as Student[],
+    );
     const subjectsByStudent = await this.loadSubjectsByStudent(
       data as Student[],
     );
@@ -305,6 +312,7 @@ export class StudentsService {
           .filter(Boolean),
         referrerId: referrerByReferred.get(s.id) ?? null,
         discountPeriods: discountPeriodsByStudent.get(s.id) ?? [],
+        baseDiscounts: baseDiscounts.get(s.id) ?? [],
         subject: s.subject
           ? {
               id: s.subject.id,
@@ -445,6 +453,11 @@ export class StudentsService {
     result.discountPeriods = ((student as any).discountPeriods ?? []).map(
       (d: any) => this.toDiscountPeriodView(d),
     );
+    result.baseDiscounts =
+      (await this.baseDiscountService.statesFor([student])).get(student.id) ??
+      [];
+    // Adashib qo'shilgan — tahrirda olib tashlasa bo'ladigan guruhlar.
+    result.removableGroupIds = await this.removableGroupIds(student);
     // Tekin davr sanalari (guruhga qo'shilmagan bo'lsa hali noma'lum — null).
     result.freeWindow = await this.paymentsService.resolveFreeWindow(student, {
       fresh: true,
@@ -521,22 +534,101 @@ export class StudentsService {
   }
 
   /**
-   * Tahrirda o'quvchini davom etayotgan guruhdan olib tashlab bo'lmaydi —
-   * faqat yangi guruh qo'shiladi. Guruh almashtirish `POST /students/transfer`
+   * Adashib qo'shilgan guruhlar — tahrirda shunchaki olib tashlanadi:
+   * - hali boshlamagan o'quvchi (`new`/`ignored`) — istalgan guruh;
+   * - boshqalar — oxirgi 30 kunda qo'shilgan (ko'chirilmagan, yagona oyna),
+   *   davomat belgilanmagan va pul/chek tushmagan guruh.
+   */
+  private async removableGroupIds(student: Student): Promise<number[]> {
+    const ongoing = (student.groups ?? []).filter(
+      (g) => g.status !== GroupStatus.FINISHED,
+    );
+    if (!ongoing.length) return [];
+    const fresh =
+      student.status === StudentStatus.NEW ||
+      student.status === StudentStatus.IGNORED;
+    const rows: { groupId: number }[] = await this.studentRepo.query(
+      `SELECT j."groupsId" AS "groupId"
+         FROM "students_groups_groups" j
+        WHERE j."studentsId" = $1 AND j."groupsId" = ANY($2::int[])
+          AND NOT EXISTS (SELECT 1 FROM "attendance" a
+                           WHERE a."studentId" = $1 AND a."groupId" = j."groupsId")
+          AND NOT EXISTS (
+            SELECT 1 FROM "payments" p
+             WHERE p."studentId" = $1 AND p."groupId" = j."groupsId"
+               AND (p."amountPaid" > 0 OR p."refundedAmount" > 0
+                    OR p."transferredOutAmount" > 0 OR p."creditAmount" > 0
+                    OR EXISTS (SELECT 1 FROM "payment_receipts" r WHERE r."paymentId" = p."id")))
+          AND ($3::boolean OR (
+            (SELECT COUNT(*) FROM "student_group_enrollments" e
+              WHERE e."studentId" = $1 AND e."groupId" = j."groupsId") = 1
+            AND EXISTS (
+              SELECT 1 FROM "student_group_enrollments" e
+               WHERE e."studentId" = $1 AND e."groupId" = j."groupsId"
+                 AND e."leftAt" IS NULL AND e."transferredFromGroupId" IS NULL
+                 AND e."createdAt" > now() - interval '30 days')))`,
+      [student.id, ongoing.map((g) => g.id), fresh],
+    );
+    return rows.map((r) => Number(r.groupId));
+  }
+
+  /** Adashib qo'shilgan guruhning izi: a'zoligi va to'lanmagan qatorlari. */
+  private async eraseMistakenGroup(studentId: number, groupId: number) {
+    await this.studentRepo.query(
+      `DELETE FROM "payments" p
+        WHERE p."studentId" = $1 AND p."groupId" = $2 AND p."amountPaid" = 0
+          AND NOT EXISTS (SELECT 1 FROM "payment_receipts" r WHERE r."paymentId" = p."id")`,
+      [studentId, groupId],
+    );
+    await this.studentRepo.query(
+      `DELETE FROM "student_group_enrollments"
+        WHERE "studentId" = $1 AND "groupId" = $2 AND "leftAt" IS NULL`,
+      [studentId, groupId],
+    );
+    // Keyin qayta qo'shilsa eski narx/chegirma o'zidan o'zi tirilmasin.
+    for (const table of ['student_group_fees', 'student_base_discounts']) {
+      await this.studentRepo.query(
+        `DELETE FROM "${table}" WHERE "studentId" = $1 AND "groupId" = $2`,
+        [studentId, groupId],
+      );
+    }
+    this.enrollmentsService.clearCache();
+  }
+
+  /**
+   * Tahrirda o'quvchini davom etayotgan guruhdan olib tashlab bo'lmaydi
+   * (adashib qo'shilgani bundan mustasno) — faqat yangi guruh qo'shiladi. Guruh almashtirish `POST /students/transfer`
    * orqali: u oyni ikki guruh orasida bo'ladi va ortiqcha pulni chek bilan
    * yangi guruhga o'tkazadi. Tahrirda olib tashlansa pul `refundedAmount` ga
    * (go'yo kassadan qaytarilgandek) tushib, yangi guruhda to'liq qarz
    * yozilardi. Tugagan guruhni ro'yxatdan olib tashlash zararsiz — ruxsat.
    */
-  private assertNoOngoingGroupRemoved(
+  private async assertNoOngoingGroupRemoved(
     student: Student,
     nextGroupIds: number[] | undefined,
-  ) {
-    if (!Array.isArray(nextGroupIds)) return;
-    const removed = (student.groups ?? []).filter(
+  ): Promise<number[]> {
+    if (!Array.isArray(nextGroupIds)) return [];
+    const dropped = (student.groups ?? []).filter(
       (g) => g.status !== GroupStatus.FINISHED && !nextGroupIds.includes(g.id),
     );
-    if (!removed.length) return;
+    if (!dropped.length) return [];
+    const removable = new Set(await this.removableGroupIds(student));
+    const removed = dropped.filter((g) => !removable.has(g.id));
+    if (!removed.length) {
+      // Faol o'quvchi guruhsiz qolmaydi.
+      const ongoing = await this.groupRepo
+        .createQueryBuilder('g')
+        .where('g.id = ANY(:ids)', { ids: nextGroupIds })
+        .andWhere('g.status != :finished', { finished: GroupStatus.FINISHED })
+        .getCount();
+      if (student.status === StudentStatus.ACTIVE && !ongoing) {
+        throw new ValidationException({
+          groupIds:
+            "Faol o'quvchi guruhsiz qolmaydi — avval boshqa guruhni tanlang",
+        });
+      }
+      return dropped.map((g) => g.id);
+    }
     throw new ValidationException({
       groupIds:
         `O'quvchini guruhdan olib tashlab bo'lmaydi: ${removed
@@ -876,6 +968,72 @@ export class StudentsService {
       }),
     );
     await this.discountPeriodRepo.save(toSave);
+  }
+
+  /** Chegirma davrlarini shu oydan tugatadi: o'tgan oylardagi qismi qoladi. */
+  private async truncateDiscountPeriods(studentId: number) {
+    const current = this.baseDiscountService.currentMonth();
+    await this.studentRepo.query(
+      `DELETE FROM "student_discount_periods"
+        WHERE "studentId" = $1 AND "fromMonth" >= $2::date`,
+      [studentId, current],
+    );
+    await this.studentRepo.query(
+      `UPDATE "student_discount_periods" SET "toMonth" = $2::date
+        WHERE "studentId" = $1 AND ("toMonth" IS NULL OR "toMonth" > $2::date)`,
+      [studentId, current],
+    );
+  }
+
+  /** Har doiraga (guruh / barcha guruhlar) bittadan, foiz yoki summa. */
+  private async validateBaseDiscounts(
+    studentId: number | null,
+    list: BaseDiscountDto[],
+  ) {
+    const scopes = list.map((d) => d.groupId ?? null);
+    if (new Set(scopes).size !== scopes.length) {
+      throw new ValidationException({
+        baseDiscounts: 'Bitta guruhga bitta doimiy chegirma beriladi',
+      });
+    }
+    for (const d of list) this.normalizeDiscountValue(d);
+    if (studentId)
+      await this.assertDiscountGroupsInStudentOrg(studentId, scopes);
+  }
+
+  /**
+   * Guruhga bog'langan doimiy chegirmalar ("barcha guruhlar"niki `students`
+   * ustunlari orqali yoziladi). Ro'yxatda yo'q guruhniki — olib tashlanadi.
+   */
+  private async applyGroupBaseDiscounts(
+    studentId: number,
+    list: BaseDiscountDto[],
+  ): Promise<boolean> {
+    const none = { percent: 0, amount: 0, reason: null };
+    const states =
+      (await this.baseDiscountService.statesFor([{ id: studentId }])).get(
+        studentId,
+      ) ?? [];
+    const next = new Map<number, typeof none | BaseDiscountValue>();
+    for (const s of states) if (s.groupId) next.set(s.groupId, none);
+    for (const d of list) {
+      if (!d.groupId) continue;
+      next.set(d.groupId, {
+        ...this.normalizeDiscountValue(d),
+        reason: d.reason ?? null,
+      });
+    }
+    let changed = false;
+    for (const [groupId, value] of next) {
+      const { effectiveFrom } = await this.baseDiscountService.setDiscount(
+        studentId,
+        none,
+        value,
+        groupId,
+      );
+      if (effectiveFrom) changed = true;
+    }
+    return changed;
   }
 
   private async assertNoPaidPaymentsInDiscountPeriods(
@@ -1285,6 +1443,21 @@ export class StudentsService {
 
     if (!user) throw new BadRequestException('Nomalum xatolik');
 
+    if (dto.baseDiscounts) {
+      await this.validateBaseDiscounts(null, dto.baseDiscounts);
+      if (
+        dto.baseDiscounts.some(
+          (d) => d.groupId && !safeGroupIds.includes(d.groupId),
+        )
+      ) {
+        throw new ValidationException({ baseDiscounts: 'Guruh topilmadi' });
+      }
+      const all = dto.baseDiscounts.find((d) => !d.groupId);
+      dto.discountPercent = Number(all?.percent ?? 0);
+      dto.discountAmount = Number(all?.amount ?? 0);
+      dto.discountReason = all?.reason ?? undefined;
+    }
+
     const student = this.studentRepo.create({
       firstName: dto.firstName,
       lastName: dto.lastName,
@@ -1322,6 +1495,15 @@ export class StudentsService {
         savedStudent.id,
         group.id,
         this.todayInGroupTz(group),
+      );
+    }
+
+    for (const d of dto.baseDiscounts ?? []) {
+      if (!d.groupId) continue;
+      await this.baseDiscountService.initGroupDiscount(
+        savedStudent.id,
+        d.groupId,
+        { ...this.normalizeDiscountValue(d), reason: d.reason ?? null },
       );
     }
 
@@ -1389,7 +1571,10 @@ export class StudentsService {
     await this.assertStudentInOrganization(organizationId, id);
 
     const student = await this.findEntityByIdOrThrow(id);
-    this.assertNoOngoingGroupRemoved(student, dto.groupIds);
+    const mistakenGroupIds = await this.assertNoOngoingGroupRemoved(
+      student,
+      dto.groupIds,
+    );
     const profileBefore = await this.snapshotProfile(student, dto);
     const passwordSent = !!dto.password && !!(student as any).user;
     // Login o'quvchida emas, bog'langan akkauntda — yuborilgan qiymat bilan.
@@ -1449,7 +1634,8 @@ export class StudentsService {
         (g: any) => g.id,
       );
       const removedGroupIds: number[] = oldGroupIds.filter(
-        (gid: number) => !dto.groupIds!.includes(gid),
+        (gid: number) =>
+          !dto.groupIds!.includes(gid) && !mistakenGroupIds.includes(gid),
       );
 
       const tzGroup = groups[0] ?? (student as any).groups?.[0] ?? null;
@@ -1470,6 +1656,9 @@ export class StudentsService {
         }
       }
 
+      for (const gid of mistakenGroupIds) {
+        await this.eraseMistakenGroup(id, gid);
+      }
       await this.enrollmentsService.syncForStudent({
         studentId: id,
         previousGroupIds: oldGroupIds,
@@ -1577,12 +1766,42 @@ export class StudentsService {
     delete (dto as any).referrerId;
     delete (dto as any).userId;
     delete (dto as any).id;
+    // Chegirma o'chirildi (tasdiqlangan): shu oydan hammasi chegirmasiz.
+    const clearDiscount = dto.clearDiscount === true;
+    const baseDiscounts = clearDiscount ? undefined : dto.baseDiscounts;
+    delete (dto as any).clearDiscount;
+    delete (dto as any).baseDiscounts;
+    if (clearDiscount) {
+      Object.assign(dto, {
+        discountPercent: 0,
+        discountAmount: 0,
+        discountReason: '',
+      });
+      // Tekin davr shu oyda (yoki keyin) boshlangan bo'lsa — bekor; oldin
+      // boshlangani o'tgan oylarni qayta narxlardi, shuning uchun tegilmaydi.
+      const free = await this.paymentsService.resolveFreeWindow(student, {
+        fresh: true,
+      });
+      const started =
+        free && free.from < this.baseDiscountService.currentMonth();
+      if (started) delete (dto as any).freeMonths;
+      else dto.freeMonths = 0;
+    } else if (baseDiscounts) {
+      await this.validateBaseDiscounts(student.id, baseDiscounts);
+      const all = baseDiscounts.find((d) => !d.groupId);
+      Object.assign(dto, {
+        discountPercent: Number(all?.percent ?? 0),
+        discountAmount: Number(all?.amount ?? 0),
+        discountReason: all?.reason ?? '',
+      });
+    }
+
     // Tekin oylar soni o'zgarsa: eski yoki yangi oraliqqa pul tushgan oy
     // bo'lsa — rad etiladi (to'langan oy qayta narxlanmaydi).
     const freeMonthsChanged =
       dto.freeMonths !== undefined &&
       Number(dto.freeMonths) !== Number(student.freeMonths ?? 0);
-    if (freeMonthsChanged) {
+    if (freeMonthsChanged && !clearDiscount) {
       await this.assertFreeMonthsChangeAllowed(student, Number(dto.freeMonths));
     }
 
@@ -1609,7 +1828,13 @@ export class StudentsService {
     const discountTouched =
       dto.discountPercent !== undefined || dto.discountAmount !== undefined;
     let discountChanged = false;
-    if (discountTouched) {
+    if (clearDiscount) {
+      await this.baseDiscountService.clearFromCurrentMonth(
+        saved.id,
+        previousDiscount,
+      );
+      await this.truncateDiscountPeriods(saved.id);
+    } else if (discountTouched) {
       const { effectiveFrom } = await this.baseDiscountService.setDiscount(
         saved.id,
         previousDiscount,
@@ -1620,6 +1845,13 @@ export class StudentsService {
         },
       );
       discountChanged = effectiveFrom !== null;
+    }
+    if (baseDiscounts) {
+      const changed = await this.applyGroupBaseDiscounts(
+        saved.id,
+        baseDiscounts,
+      );
+      if (changed) discountChanged = true;
     }
     // Guruhdagi shaxsiy narx — xuddi shu qoida, lekin har guruhda alohida
     // (shu oy uchun SHU guruhda pul olinganmi).
@@ -1657,7 +1889,7 @@ export class StudentsService {
       await this.syncLegacyFee(saved.id);
     }
 
-    if (Array.isArray(discountPeriods)) {
+    if (Array.isArray(discountPeriods) && !clearDiscount) {
       await this.replaceDiscountPeriodsForStudent(saved.id, discountPeriods);
     }
 
@@ -1696,6 +1928,23 @@ export class StudentsService {
       await this.paymentsService
         .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
         .catch(() => undefined);
+    }
+
+    // Chegirma o'chirildi: shu oy qatorlari (to'langanlari ham) majburan.
+    if (clearDiscount) {
+      const current = this.baseDiscountService.currentMonth();
+      const rows: { groupId: number }[] = await this.studentRepo.query(
+        `SELECT "groupId" FROM "payments"
+          WHERE "studentId" = $1 AND "forMonth" = $2::date AND "groupId" IS NOT NULL
+         UNION
+         SELECT "groupsId" FROM "students_groups_groups" WHERE "studentsId" = $1`,
+        [saved.id, current],
+      );
+      await this.paymentsService.rebillAfterBackdating({
+        studentIds: [saved.id],
+        groupIds: rows.map((r) => Number(r.groupId)),
+        fromDate: current,
+      });
     }
 
     // `activatedAt` ham surilishi mumkin — shuning uchun save'dan KEYIN.
@@ -2510,9 +2759,12 @@ export class StudentsService {
         ? dayjs(body.stopDate).format('YYYY-MM-DD')
         : today;
     if (stopping) {
-      if (stopDate !== today) {
-        await this.startDateService.assertStopDate(student, stopDate, tzGroup);
-      }
+      await this.startDateService.assertStopDate(
+        student,
+        stopDate,
+        today,
+        tzGroup,
+      );
       student.stoppedAt =
         stopDate === today
           ? new Date()
@@ -2535,7 +2787,7 @@ export class StudentsService {
             ? (body?.returnLikelihood ?? null)
             : null,
         comment: String(body?.comment ?? '').trim() || null,
-        ...(stopping && stopDate !== today ? { effectiveDate: stopDate } : {}),
+        ...(stopping ? { effectiveDate: stopDate } : {}),
         ...(returning && returnFrom !== today
           ? { effectiveDate: returnFrom }
           : {}),

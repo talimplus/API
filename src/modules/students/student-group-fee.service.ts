@@ -8,14 +8,15 @@ import { dayjs } from '@/shared/utils/dayjs';
 /** Bitta guruhdagi shaxsiy narx qatori. */
 export interface GroupFeePeriod {
   groupId: number;
-  fromMonth: string; // YYYY-MM-01
+  /** Kuchga kirgan SANA (YYYY-MM-DD) — odatda oyning 1-sanasi, lekin shart emas. */
+  fromMonth: string;
   monthlyFee: number;
 }
 
 /** Guruh uchun hozirgi va rejalashtirilgan shaxsiy narx (forma/kartochka). */
 export interface GroupFeeState {
   groupId: number;
-  /** Joriy oyda amaldagi shaxsiy narx (0 — guruh narxi). */
+  /** Bugun amaldagi shaxsiy narx (0 — guruh narxi). */
   monthlyFee: number;
   /** Keyingi oydan kuchga kiradigan narx (pul olingan oyda o'zgartirilgan). */
   upcomingMonthlyFee: number | null;
@@ -23,12 +24,12 @@ export interface GroupFeeState {
 }
 
 /**
- * Oy uchun amaldagi qator: `fromMonth <= forMonth` ga mos eng oxirgisi,
+ * Sana uchun amaldagi qator: `fromMonth <= date` ga mos eng oxirgisi,
  * bo'lmasa eng birinchisi. Qator yo'q — `null` (guruh narxi).
  */
-export function pickGroupFeeForMonth(
+export function pickGroupFeeAt(
   periods: GroupFeePeriod[],
-  forMonth: string,
+  date: string, // YYYY-MM-DD
 ): GroupFeePeriod | null {
   if (!periods?.length) return null;
   const sorted = [...periods].sort((a, b) =>
@@ -36,7 +37,7 @@ export function pickGroupFeeForMonth(
   );
   let picked: GroupFeePeriod | null = null;
   for (const p of sorted) {
-    if (p.fromMonth <= forMonth) picked = p;
+    if (p.fromMonth <= date) picked = p;
     else break;
   }
   return picked ?? sorted[0];
@@ -62,10 +63,14 @@ export class StudentGroupFeeService {
     return dayjs().tz(DEFAULT_TIMEZONE).startOf('month').format('YYYY-MM-01');
   }
 
+  today(): string {
+    return dayjs().tz(DEFAULT_TIMEZONE).format('YYYY-MM-DD');
+  }
+
   /** O'quvchining barcha guruhlardagi narx tarixi (`groupId` bo'yicha). */
   async getPeriods(studentId: number): Promise<Map<number, GroupFeePeriod[]>> {
     const rows: any[] = await this.repo.query(
-      `SELECT "groupId", TO_CHAR("fromMonth", 'YYYY-MM-01') AS "fromMonth", "monthlyFee"
+      `SELECT "groupId", TO_CHAR("fromMonth", 'YYYY-MM-DD') AS "fromMonth", "monthlyFee"
          FROM "student_group_fees"
         WHERE "studentId" = $1
         ORDER BY "groupId", "fromMonth"`,
@@ -85,9 +90,9 @@ export class StudentGroupFeeService {
     return map;
   }
 
-  async feeForMonth(studentId: number, groupId: number, forMonth: string) {
+  async feeAt(studentId: number, groupId: number, date: string) {
     const periods = (await this.getPeriods(studentId)).get(groupId) ?? [];
-    return Number(pickGroupFeeForMonth(periods, forMonth)?.monthlyFee ?? 0);
+    return Number(pickGroupFeeAt(periods, date)?.monthlyFee ?? 0);
   }
 
   /** Guruhlar bo'yicha joriy oy narxi va rejalashtirilgan o'zgarish. */
@@ -95,12 +100,12 @@ export class StudentGroupFeeService {
     studentId: number,
     groupIds: number[],
   ): Promise<GroupFeeState[]> {
-    const current = this.currentMonth();
+    const today = this.today();
     const all = await this.getPeriods(studentId);
     return groupIds.map((groupId) => {
       const periods = all.get(groupId) ?? [];
-      const now = pickGroupFeeForMonth(periods, current);
-      const next = periods.find((p) => p.fromMonth > current) ?? null;
+      const now = pickGroupFeeAt(periods, today);
+      const next = periods.find((p) => p.fromMonth > today) ?? null;
       return {
         groupId,
         monthlyFee: Number(now?.monthlyFee ?? 0),
@@ -140,65 +145,71 @@ export class StudentGroupFeeService {
     const next = Math.max(0, Number(fee ?? 0));
     const current = this.currentMonth();
     const periods = (await this.getPeriods(studentId)).get(groupId) ?? [];
-    const now = Number(pickGroupFeeForMonth(periods, current)?.monthlyFee ?? 0);
+    const now = Number(pickGroupFeeAt(periods, this.today())?.monthlyFee ?? 0);
 
     if (now === next) {
       // Qiymat aslida o'zgarmayapti — rejalashtirilgan o'zgarish bekor.
-      await this.deleteAfter(studentId, groupId, current);
+      await this.deleteFrom(studentId, groupId, nextMonth(current));
       return { effectiveFrom: null };
     }
 
     const from = (await this.hasMoneyForMonth(studentId, groupId, current))
-      ? dayjs(current).add(1, 'month').format('YYYY-MM-01')
+      ? nextMonth(current)
       : current;
 
     // `from` dan oldingi oylar eski narxda qolsin ("eng birinchi qator"
     // qoidasi ularni yangi narxga tortmasin).
     if (!periods.some((p) => p.fromMonth < from)) {
-      await this.upsert(studentId, groupId, prevMonth(from), now);
+      await this.upsert(
+        studentId,
+        groupId,
+        prevMonth(from),
+        Number(pickGroupFeeAt(periods, prevMonth(from))?.monthlyFee ?? 0),
+      );
     }
-    await this.deleteAfter(studentId, groupId, current);
+    // Oy o'rtasidagi o'zgarish pul olingan joriy oyda saqlanadi.
+    await this.deleteFrom(studentId, groupId, from);
     await this.upsert(studentId, groupId, from, next);
     return { effectiveFrom: from };
   }
 
   /**
-   * Adashib yozilgan narxni `fromMonth` dan olib tashlaydi (o'tgan oy ham
-   * bo'lishi mumkin). Oldingi oylar eski narxda qoladi; qayta hisoblashni
+   * Adashib yozilgan narxni `fromDate` dan olib tashlaydi (o'tgan, oy
+   * o'rtasidagi sana ham bo'lishi mumkin). Oldingi darslar eski narxda qoladi; qayta hisoblashni
    * chaqiruvchi qiladi.
    */
   async clearFrom(
     studentId: number,
     groupId: number,
-    fromMonth: string,
+    fromDate: string,
   ): Promise<void> {
     const periods = (await this.getPeriods(studentId)).get(groupId) ?? [];
-    if (!periods.some((p) => p.fromMonth < fromMonth)) {
+    if (!periods.some((p) => p.fromMonth < fromDate)) {
       const first = periods[0];
       await this.upsert(
         studentId,
         groupId,
-        prevMonth(fromMonth),
+        prevMonth(fromDate),
         Number(first?.monthlyFee ?? 0),
       );
     }
-    await this.upsert(studentId, groupId, fromMonth, 0);
+    await this.upsert(studentId, groupId, fromDate, 0);
     await this.repo.query(
       `UPDATE "student_group_fees" SET "monthlyFee" = 0
         WHERE "studentId" = $1 AND "groupId" = $2 AND "fromMonth" > $3::date`,
-      [studentId, groupId, fromMonth],
+      [studentId, groupId, fromDate],
     );
   }
 
   /**
-   * `fromMonth` dan keyin shu guruhda shaxsiy narx (> 0) amal qiladimi.
+   * `fromDate` dan keyin shu guruhda shaxsiy narx (> 0) amal qiladimi.
    */
-  async hasFeeFrom(studentId: number, groupId: number, fromMonth: string) {
+  async hasFeeFrom(studentId: number, groupId: number, fromDate: string) {
     const periods = (await this.getPeriods(studentId)).get(groupId) ?? [];
-    const atStart = pickGroupFeeForMonth(periods, fromMonth);
+    const atStart = pickGroupFeeAt(periods, fromDate);
     return (
       Number(atStart?.monthlyFee ?? 0) > 0 ||
-      periods.some((p) => p.fromMonth > fromMonth && p.monthlyFee > 0)
+      periods.some((p) => p.fromMonth > fromDate && p.monthlyFee > 0)
     );
   }
 
@@ -229,15 +240,19 @@ export class StudentGroupFeeService {
     );
   }
 
-  private async deleteAfter(studentId: number, groupId: number, month: string) {
+  private async deleteFrom(studentId: number, groupId: number, date: string) {
     await this.repo.query(
       `DELETE FROM "student_group_fees"
-        WHERE "studentId" = $1 AND "groupId" = $2 AND "fromMonth" > $3::date`,
-      [studentId, groupId, month],
+        WHERE "studentId" = $1 AND "groupId" = $2 AND "fromMonth" >= $3::date`,
+      [studentId, groupId, date],
     );
   }
 }
 
 function prevMonth(month: string): string {
   return dayjs(month).subtract(1, 'month').format('YYYY-MM-01');
+}
+
+function nextMonth(month: string): string {
+  return dayjs(month).add(1, 'month').format('YYYY-MM-01');
 }

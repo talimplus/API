@@ -479,7 +479,7 @@ finished→ active
 - **To'xtatish sanasi** (2026-10-30): `change-status?status=stopped` body `stopDate`
   (exclusive, o'tgan kun bo'lishi mumkin, default bugun). Bugundan keyin, ochilishdan,
   `activatedAt` va ochiq a'zolik boshlanishidan oldin — 422; shu kundan keyin
-  `present/late` davomati bo'lsa — 422 (`assertStopDate`). To'lovlar to'xtatish
+  `present/late/excused` davomati bo'lsa (bugungi ham) — 422, eng erta sana bilan (`assertNoMarksFrom`). To'lovlar to'xtatish
   OYIdan qayta hisoblanadi (o'tgan oy bo'lsa `recalcOpenPaymentRows` force).
 - To'xtatishda (`stopped`) o'quvchining **barcha a'zolik oynalari yopiladi**
   (`leftAt` = bugun), qaytishda har bir guruhda **yangi oyna** ochiladi — to'xtab
@@ -494,7 +494,7 @@ finished→ active
   (`students.changeStatus`, `StudentsService.leaveGroup`) `{ groupId, stopDate?,
   returnLikelihood?, reason? }`. Faqat `ACTIVE` o'quvchi va tugamagan guruh.
   `stopDate` exclusive, default bugun, kelajak bo'lolmaydi; shu kundan boshlab SHU
-  guruhda `present/late` bo'lsa — 422 (bugun uchun ham: bugun kelgan bo'lsa ertaga
+  guruhda `present/late/excused` bo'lsa — 422 (bugun uchun ham: bugun kelgan bo'lsa ertaga
   chiqariladi). A'zolik yopiladi, junction'dan o'chadi, shu guruh to'lovlari sanagacha
   qayta hisoblanadi (ortiqcha pul `refundedAmount` ga, qarz shu guruhda qoladi),
   boshqa guruhlar tegilmaydi (faqat summadagi chegirma to'liq oyli guruhga o'tishi
@@ -505,15 +505,26 @@ finished→ active
   `students_groups_groups.joinedAt` faqat eski ma'lumot uchun zaxira.
 - Chegirma davrlari: `POST/PUT/DELETE /students/:id/discount-periods`;
   to'langan oyga tegadigan o'zgarish bloklanadi.
+- **Adashib qo'shilgan guruh** (2026-11-24, `removableGroupIds`): tahrirda olib tashlanadi —
+  `new/ignored` o'quvchida istalgani, boshqalarda oxirgi 30 kunda qo'shilgan (ko'chirilmagan);
+  ikkalasida ham davomat, pul, chek bo'lmasligi shart. A'zoligi va to'lanmagan qatorlari
+  o'chadi (`eraseMistakenGroup`). Faol o'quvchi guruhsiz qolmaydi.
+- **Doimiy chegirma guruh bo'yicha** (2026-11-24, migratsiya `…076`): `student_base_discounts.groupId`
+  (NULL — barcha guruhlar, har doira o'z tarixiga ega, qo'shiladi). DTO `baseDiscounts`
+  (to'liq ro'yxat). `students.discount*` — faqat "barcha guruhlar"niki.
+- **Chegirmani o'chirish** (`PUT /students/:id` `clearDiscount: true`): shu oydan, pul olingan
+  bo'lsa ham; shu oy qatorlari force qayta hisoblanadi, davrlar shu oyda kesiladi, oldingi
+  oyda boshlangan tekin davr tegilmaydi.
 - `students.monthlyFee` — ESKI front uchun nusxa; shaxsiy narx guruh bo'yicha (6.3).
 - **Shaxsiy narx ruxsati** (2026-11-20): `students.personalFee` — hech bir presetda yo'q,
   default faqat admin (`*`). Ruxsatsiz `monthlyFee` ni o'zgartirish (`POST/PUT /students`,
   `POST/PUT /leads`, `transfer-to-student`) — 403; o'zgarmagan qiymat o'tadi
   (`common/permissions/personal-fee.util.ts`, tekshiruv controller/leads servisida).
 - **Adashib yozilgan shaxsiy narxni olib tashlash** (`StudentPersonalFeeService`, bitta
-  GURUHDA): `POST /students/:id/personal-fee/clear[/preview]` `{ groupId, fromMonth,
-  overpayment?: refund|carry }` (default oy — faollashgan oy). `StudentGroupFeeService.clearFrom`:
-  shu guruhda shu oydan narx 0 (oldingi oylar eski narxda — kerak bo'lsa baseline qatori),
+  GURUHDA): `POST /students/:id/personal-fee/clear[/preview]` `{ groupId, fromDate,
+  overpayment?: refund|carry }` (default — faollashgan kun; 2026-11-24 dan aniq SANA, oy
+  o'rtasi ham: har dars o'z sanasidagi narxda — `resolveBaseFeeForLessons`). `StudentGroupFeeService.clearFrom`:
+  shu guruhda shu sanadan narx 0 (oldingi darslar eski narxda — kerak bo'lsa baseline qatori),
   keyin `rebillAfterBackdating` faqat shu guruh (PAID ham). Guruh narxi qimmat — farq
   qarz; arzon — ortiqcha pul `refund` da `refundedAmount`, `carry` da `creditAmount` →
   keyingi oylar. Preview: `computeMonthBilling({ personalFeeClearedFrom })`.
@@ -706,6 +717,10 @@ vaqtincha emas: xodim **arxivga** o'tadi.
   (`attendance/utils/lesson-dates.ts` → `computeLessonDates`).
 - `AttendanceLessonOverride` — darsni bekor qilish yoki boshqa kunga ko'chirish.
   Jadval o'zgarganda kelajakdagi override'lar tozalanadi.
+- **O'tgan kun davomati yopiq** (2026-11-24): `lessonDate < bugun` uchun `attendance.managePast`
+  (hech bir presetda yo'q, default admin). Har o'zgarish `attendance_changes` ga yoziladi;
+  guruh o'qituvchisidan boshqa odam (admin ham) belgilagani guruh va o'quvchi tarixida
+  (`attendance_marked`) va jurnalda (`markedByOther`) ko'rinadi.
 - Davomat statuslari: `present`, `absent`, `late`, `excused` (sababli — izoh majburiy).
 - Davomat to'lov summasini o'zgartirmaydi (faqat `lessonsExcused` ma'lumoti).
 - **Kelmaganlar ro'yxati** (qabulxona): `GET /attendance/absences`

@@ -16,6 +16,7 @@ export type GroupTimelineEventType =
   | 'fee_changed'
   | 'pause'
   | 'lesson_moved'
+  | 'attendance_marked'
   | 'student_joined'
   | 'student_left'
   | 'student_transferred_in'
@@ -80,6 +81,7 @@ export class GroupTimelineService {
     groupId: number,
     organizationId: number,
     centerId?: number,
+    opts: { attendance?: boolean } = {},
   ): Promise<GroupTimelineEvent[]> {
     const q = (sql: string, params: any[] = [groupId]) =>
       this.dataSource.query(sql, params);
@@ -307,6 +309,48 @@ export class GroupTimelineService {
               data: { ...student, reason: e.leftReason },
             },
       );
+    }
+
+    // Davomat: admin yoki shu guruh o'qituvchisidan boshqa xodim belgilagan.
+    if (opts.attendance) {
+      const marks: {
+        date: string;
+        lessonDate: string;
+        createdByName: string | null;
+        items: {
+          studentId: number;
+          studentName: string;
+          oldStatus: string | null;
+          newStatus: string;
+        }[];
+      }[] = await q(
+        `SELECT TO_CHAR(c."createdAt" AT TIME ZONE $2, 'YYYY-MM-DD') AS "date",
+                TO_CHAR(c."lessonDate", 'YYYY-MM-DD') AS "lessonDate",
+                NULLIF(TRIM(CONCAT(u."firstName", ' ', u."lastName")), '') AS "createdByName",
+                JSON_AGG(JSON_BUILD_OBJECT(
+                  'studentId', c."studentId",
+                  'studentName', TRIM(CONCAT(s."firstName", ' ', s."lastName")),
+                  'oldStatus', c."oldStatus",
+                  'newStatus', c."newStatus") ORDER BY c."id") AS "items"
+           FROM "attendance_changes" c
+           LEFT JOIN "users" u ON u."id" = c."actorId"
+           LEFT JOIN "students" s ON s."id" = c."studentId"
+          WHERE c."groupId" = $1 AND c."byGroupTeacher" = false
+          GROUP BY 1, 2, c."actorId", 3`,
+        [groupId, tz],
+      );
+      for (const m of marks) {
+        events.push({
+          date: m.date,
+          type: 'attendance_marked',
+          title: `Davomat (${m.lessonDate}) ${m.createdByName ?? ''} tomonidan belgilandi`,
+          data: {
+            lessonDate: m.lessonDate,
+            items: m.items,
+            createdByName: m.createdByName,
+          },
+        });
+      }
     }
 
     // Yangisi tepada; bir kunda — guruh hodisalari o'quvchilardan oldin.
