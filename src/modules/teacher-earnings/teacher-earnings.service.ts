@@ -1,11 +1,15 @@
-import { salaryNet } from '@/modules/staff-salaries/salary-math';
+import { isSalaryFrozen } from '@/modules/staff-salaries/salary-math';
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
+import { returningRows } from '@/shared/utils/returning-rows';
 import { TeacherMonthlyEarning } from '@/modules/teacher-earnings/entities/teacher-monthly-earning.entity';
 import { TeacherCommissionCarryOver } from '@/modules/teacher-earnings/entities/teacher-commission-carryover.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -16,7 +20,6 @@ import {
 } from '@/modules/payments/entities/payment.entity';
 import { dayjs } from '@/shared/utils/dayjs';
 import { StaffSalary } from '@/modules/staff-salaries/entities/staff-salary.entity';
-import { StaffSalaryStatus } from '@/modules/staff-salaries/enums/staff-salary-status.enum';
 import { Group } from '@/modules/groups/entities/groups.entity';
 import { UserPayService } from '@/modules/users/user-pay.service';
 import { GroupTeacherPeriod } from '@/modules/groups/entities/group-teacher-period.entity';
@@ -37,7 +40,17 @@ export class TeacherEarningsService {
     @InjectRepository(StaffSalary)
     private readonly staffSalaryRepo: Repository<StaffSalary>,
     private readonly userPayService: UserPayService,
+    @Inject(forwardRef(() => StaffDeductionsService))
+    private readonly deductionsService: StaffDeductionsService,
   ) {}
+
+  /** Bir o'qituvchi + oy uchun carryover hisobi bitta qulf ostida. */
+  private async lockMonth(m: EntityManager, teacherId: number, month: string) {
+    await m.query('SELECT pg_advisory_xact_lock($1, $2)', [
+      teacherId,
+      Number(month.slice(0, 4) + month.slice(5, 7)),
+    ]);
+  }
 
   private round2(n: number): number {
     return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -91,15 +104,18 @@ export class TeacherEarningsService {
    * Oy — ISH oyi: `teacher_monthly_earnings.forMonth`, `staff_salaries.forMonth`
    * va o'quvchi to'lovlarining `payments.forMonth` bir xil oy. Pul keyingi oyda
    * berilsa ham oylik o'zi ishlangan oyda turadi (to'lanmagan bo'lib).
+   *
+   * "Berib bo'lingan" (muzlatilgan) = `isSalaryFrozen`: o'tgan oy va haqiqiy
+   * pul to'lovi bilan yopilgan. Avans bilan yopilgan yoki joriy oy — muzlamaydi.
    */
-  private async isSalaryPaidOut(
+  async isSalaryPaidOut(
     teacherId: number,
     month: string, // YYYY-MM-01
   ): Promise<boolean> {
     const row = await this.staffSalaryRepo.findOne({
       where: { userId: teacherId, forMonth: month as any },
     });
-    return row?.status === StaffSalaryStatus.PAID;
+    return isSalaryFrozen(row);
   }
 
   /**
@@ -357,7 +373,8 @@ export class TeacherEarningsService {
       Math.min(100, Number(pay.commissionPercentage ?? 0)),
     );
     const grossPaid = await this.computeCommissionAmount(teacherId, month);
-    const commissionAmount = this.round2(
+    // Shu oy uchun tushgan pulning to'liq ulushi (carryover ayirilmagan)
+    const grossCommission = this.round2(
       Math.max(0, grossPaid * (commissionPct / 100)),
     );
 
@@ -370,10 +387,7 @@ export class TeacherEarningsService {
       // bir vaqtda ikki qayta hisoblash (masalan chek tasdig'i + ro'yxat) bir
       // xil farqni ikki marta carryover qilib yozib yubormasligi uchun.
       const diff = await this.carryRepo.manager.transaction(async (m) => {
-        await m.query('SELECT pg_advisory_xact_lock($1, $2)', [
-          teacherId,
-          Number(month.slice(0, 4) + month.slice(5, 7)),
-        ]);
+        await this.lockMonth(m, teacherId, month);
         const carried = await m
           .getRepository(TeacherCommissionCarryOver)
           .createQueryBuilder('c')
@@ -383,7 +397,7 @@ export class TeacherEarningsService {
           .getRawOne<{ sum: string }>();
         const counted =
           Number(existing.commissionAmount ?? 0) + Number(carried?.sum ?? 0);
-        const d = this.round2(commissionAmount - counted);
+        const d = this.round2(grossCommission - counted);
         if (d > 0) {
           await m.getRepository(TeacherCommissionCarryOver).save(
             m.getRepository(TeacherCommissionCarryOver).create({
@@ -407,40 +421,91 @@ export class TeacherEarningsService {
       return existing;
     }
 
-    // Carryover'lar o'zgarmas summalar; `appliedForMonth` — qaysi oyga qo'shilgani.
-    // Qayta hisoblashda (force) shu oyga allaqachon qo'shilganlari saqlanadi.
-    const alreadyApplied = await this.carryRepo
-      .createQueryBuilder('c')
-      .select('COALESCE(SUM(c.amount), 0)', 'sum')
-      .where('c.teacherId = :teacherId', { teacherId })
-      .andWhere('c.appliedForMonth = :month', { month })
-      .getRawOne<{ sum: string }>();
-    const alreadyAppliedSum = Number(alreadyApplied?.sum ?? 0);
+    // Carryover hisobi bitta qulf ostida (muzlatilgan yo'l bilan bir xil kalit).
+    const carry = await this.carryRepo.manager.transaction(async (m) => {
+      await this.lockMonth(m, teacherId, month);
+      const repo = m.getRepository(TeacherCommissionCarryOver);
 
-    // Hali qo'llanmagan carryover'lar — faqat o'zidan oldingi oylardan kelganlari.
-    // Oylik berilgan oyga qo'shilmaydi (u muzlatilgan, yuqorida qaytib ketadi).
-    const toApply = paidOut
-      ? []
-      : await this.carryRepo
+      // Shu oydan chiqib, hali hech qayerga qo'shilmagan ulushlar — oy
+      // muzlatilgan paytda yozilgan. Endi oy ochiq (masalan avans bilan
+      // yopilgan edi) — ular o'z oyiga qaytadi va pastdagi `gross` ichida
+      // qayta sanaladi. Ikki marta sanalmaydi: qator o'chiriladi.
+      if (!paidOut) {
+        await m.query(
+          `DELETE FROM "teacher_commission_carryovers"
+            WHERE "teacherId" = $1 AND "sourceForMonth" = $2
+              AND "appliedForMonth" IS NULL`,
+          [teacherId, month],
+        );
+      }
+      // Shu oydan chiqib, boshqa oyga allaqachon qo'shilgan ulush — o'sha
+      // oyda to'lanadi, shu oy komissiyasidan ayiriladi (10-oy: 50% × tushum
+      // − keyingi oyga o'tkazilgan 135 000).
+      const out = await repo
+        .createQueryBuilder('c')
+        .select('COALESCE(SUM(c.amount), 0)', 'sum')
+        .where('c.teacherId = :teacherId', { teacherId })
+        .andWhere('c.sourceForMonth = :month', { month })
+        .andWhere('c.appliedForMonth IS NOT NULL')
+        .getRawOne<{ sum: string }>();
+
+      // Carryover'lar o'zgarmas summalar; `appliedForMonth` — qaysi oyga qo'shilgani.
+      // Qayta hisoblashda (force) shu oyga allaqachon qo'shilganlari saqlanadi.
+      const already = await repo
+        .createQueryBuilder('c')
+        .select('COALESCE(SUM(c.amount), 0)', 'sum')
+        .where('c.teacherId = :teacherId', { teacherId })
+        .andWhere('c.appliedForMonth = :month', { month })
+        .getRawOne<{ sum: string }>();
+
+      // Hali qo'llanmagan carryover'lar — faqat o'zidan oldingi va MUZLATILGAN
+      // oylardan. Ochiq oy ulushi o'z oyiga qaytadi (yuqoridagi DELETE), bu
+      // yerga olinmaydi. Oylik berilgan oyga qo'shilmaydi.
+      let appliedNow = 0;
+      if (!paidOut) {
+        const candidates = await repo
           .createQueryBuilder('c')
           .where('c.teacherId = :teacherId', { teacherId })
           .andWhere('c.appliedForMonth IS NULL')
           .andWhere('c.sourceForMonth < :month', { month })
           .orderBy('c.createdAt', 'ASC')
           .getMany();
-    const toApplySum = this.round2(
-      toApply.reduce((sum, c) => sum + Number(c.amount ?? 0), 0),
-    );
-    if (toApply.length) {
-      const now = new Date();
-      for (const c of toApply) {
-        c.appliedForMonth = month as any;
-        c.appliedAt = now;
+        const frozenBySource = new Map<string, boolean>();
+        const ids: number[] = [];
+        for (const c of candidates) {
+          const src = dayjs(c.sourceForMonth).format('YYYY-MM-01');
+          if (!frozenBySource.has(src)) {
+            frozenBySource.set(src, await this.isSalaryPaidOut(teacherId, src));
+          }
+          if (frozenBySource.get(src)) ids.push(c.id);
+        }
+        if (ids.length) {
+          // Shartli UPDATE — parallel DELETE/UPDATE bilan bir ulush ikki joyga tushmaydi.
+          const rows = returningRows<{ amount: string }>(
+            await m.query(
+              `UPDATE "teacher_commission_carryovers"
+                  SET "appliedForMonth" = $1, "appliedAt" = NOW()
+                WHERE "id" = ANY($2) AND "appliedForMonth" IS NULL
+                RETURNING "amount"`,
+              [month, ids],
+            ),
+          );
+          appliedNow = rows.reduce((sum, r) => sum + Number(r.amount ?? 0), 0);
+        }
       }
-      await this.carryRepo.save(toApply);
-    }
 
-    const carryOverCommission = this.round2(alreadyAppliedSum + toApplySum);
+      return {
+        carriedOut: Number(out?.sum ?? 0),
+        carryOverCommission: this.round2(
+          Number(already?.sum ?? 0) + appliedNow,
+        ),
+      };
+    });
+
+    const commissionAmount = this.round2(
+      Math.max(0, grossCommission - carry.carriedOut),
+    );
+    const carryOverCommission = carry.carryOverCommission;
 
     const totalEarning = this.round2(
       baseSalary + commissionAmount + carryOverCommission,
@@ -462,31 +527,100 @@ export class TeacherEarningsService {
 
     const savedSnapshot = await this.earningRepo.save(snapshot);
 
-    // To'lanmagan (yoki qisman to'langan) oylik qatori daromad bilan sinxronlanadi
-    const salaryRow = paidOut
-      ? null
-      : await this.staffSalaryRepo.findOne({
-          where: { userId: teacherId, forMonth: month as any },
+    // Muzlamagan oylik qatori daromad bilan sinxronlanadi: yangi summa, ochiq
+    // avans/jarimalar sig'gancha ushlanadi, holat qayta qo'yiladi (oshsa —
+    // yana "qisman/to'lanmagan"). Qulf ostida — ikki marta ushlanmaydi.
+    if (!paidOut) {
+      const salaryRow = await this.staffSalaryRepo.findOne({
+        where: { userId: teacherId, forMonth: month as any },
+      });
+      if (salaryRow) {
+        await this.deductionsService.resync(salaryRow.id, {
+          baseSalary: Number(savedSnapshot.totalEarning ?? 0),
         });
-    if (salaryRow) {
-      salaryRow.baseSalary = savedSnapshot.totalEarning as any;
-      const paidAmount = Number(salaryRow.paidAmount ?? 0);
-      // Mukofot qo'shilib, jarima/avans ayirilgan — yagona formula.
-      const net = salaryNet(salaryRow);
-      if (net > 0 && paidAmount >= net) {
-        salaryRow.status = StaffSalaryStatus.PAID;
-        salaryRow.paidAt = salaryRow.paidAt ?? new Date();
-      } else if (paidAmount > 0) {
-        salaryRow.status = StaffSalaryStatus.PARTIAL;
-        salaryRow.paidAt = null;
-      } else {
-        salaryRow.status = StaffSalaryStatus.UNPAID;
-        salaryRow.paidAt = null;
       }
-      await this.staffSalaryRepo.save(salaryRow);
     }
 
     return savedSnapshot;
+  }
+
+  /**
+   * `calculateTeacherEarningsForMonth({ force: true })` nima yozishini
+   * hisoblaydi, lekin HECH NARSA yozmaydi (bir martalik tuzatish skriptining
+   * dry-run rejimi). Oylar bir-biriga bog'liq emas: carryover faqat muzlatilgan
+   * oydan olinadi, ochiq oy ulushi o'z oyida qoladi.
+   */
+  async previewMonth(teacherId: number, month: string /* YYYY-MM-01 */) {
+    const teacher = await this.userRepo.findOne({ where: { id: teacherId } });
+    if (!teacher) return null;
+    const existing = await this.earningRepo.findOne({
+      where: { teacherId, forMonth: month as any },
+    });
+    const paidOut = await this.isSalaryPaidOut(teacherId, month);
+    if (paidOut) return { frozen: true as const, existing };
+
+    const pay = await this.userPayService.getForMonth(teacher, month);
+    const baseSalary = Number(pay.salary ?? 0);
+    const pct = Math.max(
+      0,
+      Math.min(100, Number(pay.commissionPercentage ?? 0)),
+    );
+    const grossPaid = await this.computeCommissionAmount(teacherId, month);
+    const grossCommission = this.round2(Math.max(0, grossPaid * (pct / 100)));
+
+    const sum = async (where: string, params: unknown[]) => {
+      const [row] = await this.carryRepo.manager.query(
+        `SELECT COALESCE(SUM("amount"), 0) AS "sum"
+           FROM "teacher_commission_carryovers"
+          WHERE "teacherId" = $1 AND ${where}`,
+        [teacherId, ...params],
+      );
+      return Number(row?.sum ?? 0);
+    };
+    const absorbed = await sum(
+      `"sourceForMonth" = $2 AND "appliedForMonth" IS NULL`,
+      [month],
+    );
+    const carriedOut = await sum(
+      `"sourceForMonth" = $2 AND "appliedForMonth" IS NOT NULL`,
+      [month],
+    );
+    const already = await sum(`"appliedForMonth" = $2`, [month]);
+
+    const pending: { sourceForMonth: Date | string; amount: string }[] =
+      await this.carryRepo.manager.query(
+        `SELECT "sourceForMonth", "amount" FROM "teacher_commission_carryovers"
+          WHERE "teacherId" = $1 AND "appliedForMonth" IS NULL
+            AND "sourceForMonth" < $2`,
+        [teacherId, month],
+      );
+    let wouldApply = 0;
+    for (const c of pending) {
+      const src = dayjs(c.sourceForMonth).format('YYYY-MM-01');
+      if (await this.isSalaryPaidOut(teacherId, src)) {
+        wouldApply += Number(c.amount ?? 0);
+      }
+    }
+
+    const commissionAmount = this.round2(
+      Math.max(0, grossCommission - carriedOut),
+    );
+    const carryOverCommission = this.round2(already + wouldApply);
+    return {
+      frozen: false as const,
+      existing,
+      grossPaid: this.round2(grossPaid),
+      commissionPercentage: pct,
+      baseSalary,
+      commissionAmount,
+      carryOverCommission,
+      totalEarning: this.round2(
+        baseSalary + commissionAmount + carryOverCommission,
+      ),
+      absorbedCarryover: this.round2(absorbed),
+      carriedOut: this.round2(carriedOut),
+      appliedFromFrozen: this.round2(wouldApply),
+    };
   }
 
   async ensureTeacherEarningsForMonth(

@@ -436,6 +436,21 @@ iyun oyligi iyunda turadi, pul iyulda berilsa ham. Ilgari bu to'lov oyi edi (iyu
   Hisoblangan-bo'lgan summa = snapshot komissiyasi + shu oydan chiqqan carryover'lar,
   shuning uchun bitta pul ikki marta sanalmaydi. Qayta hisoblashda (`force`) allaqachon
   qo'llangan carryover'lar saqlanadi.
+- **"Muzlatilgan" = `isSalaryFrozen`** (`salary-math.ts`, 2026-11-27): o'tgan oy + `paid` +
+  haqiqiy pul berilgan (`paidAmount > 0`) — yoki pul ham ushlanma ham yo'q (eski import).
+  **Avans bilan yopilgan oylik muzlamaydi**, joriy oy ham: yangi chek shu oyga qo'shiladi,
+  `baseSalary` oshadi, holat yana `unpaid/partial`, ochiq avanslar `resync` bilan qo'llanadi.
+  Ilgari avans oylikni to'liq qoplasa qator 'paid' bo'lib qotib, keyingi pul qo'llanmagan
+  carryover'da qolardi (prod org 38). Ochiq oyda: shu oydan chiqib hech qayerga
+  qo'shilmagan carryover o'chadi (pul `gross` da qayta sanaladi), boshqa oyga qo'shilgani
+  komissiyadan ayiriladi (`50% × tushum − o'tkazilgan`); carryover faqat muzlagan oydan olinadi.
+- Holat — `salaryStatusOf`: `paid + avans >= topgani` → `paid`, lekin 0 so'mlik oylik `paid` emas.
+- `StaffDeductionsService.resync(salaryId, {baseSalary?})` — oylikni ushlanmalar bilan moslashning
+  yagona joyi (releaseExcess → applyOutstanding → holat), xodim bo'yicha `pg_advisory_xact_lock`
+  ostida: chek tasdig'idagi fire-and-forget hisob va ro'yxat bir vaqtda avansni ikki marta ushlamaydi.
+- Bir martalik tuzatish: `node dist/src/scripts/recalc-teacher-salaries.js [--apply] [--org=ID] [--all]`
+  (default dry-run, idempotent). Ssenariy testi: `dist/src/scripts/salary-advance-recalc.scenario.js`
+  (faqat nusxa bazada, 19 tekshiruv). Skriptlar `TELEGRAM_DISABLED=true` bilan bot ko'tarmaydi.
 - Qisman to'langan / to'lanmagan oy — daromad bilan sinxronlanadi (`baseSalary = totalEarning`).
 - **Oylik va komissiya foizi oyga bog'langan** (`user_pay_periods`, `UserPayService`,
   `UserPayModule`): `PUT /users/:id` da o'zgarsa **shu oydan** kuchga kiradi,

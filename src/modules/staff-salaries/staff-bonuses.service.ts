@@ -15,7 +15,11 @@ import {
   CreateStaffBonusDto,
   UpdateStaffBonusDto,
 } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
-import { round2, salaryNet } from '@/modules/staff-salaries/salary-math';
+import {
+  round2,
+  salaryNet,
+  salaryStatusOf,
+} from '@/modules/staff-salaries/salary-math';
 import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
 
 /**
@@ -157,15 +161,11 @@ export class StaffBonusesService {
     if (Number(salary.bonusAmount ?? 0) === total) return;
 
     salary.bonusAmount = total as any;
-    const net = salaryNet(salary);
-    const paid = Number(salary.paidAmount ?? 0);
-    salary.status =
-      paid >= net
-        ? StaffSalaryStatus.PAID
-        : paid > 0
-          ? StaffSalaryStatus.PARTIAL
-          : StaffSalaryStatus.UNPAID;
-    salary.paidAt = paid >= net ? (salary.paidAt ?? new Date()) : null;
+    salary.status = salaryStatusOf(salary);
+    salary.paidAt =
+      salary.status === StaffSalaryStatus.PAID
+        ? (salary.paidAt ?? new Date())
+        : null;
     await this.salaryRepo.update(
       { id: salary.id },
       {

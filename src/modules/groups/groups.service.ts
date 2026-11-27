@@ -304,6 +304,8 @@ export class GroupsService {
              FROM "staff_salaries" s
              JOIN "users" u ON u."id" = s."userId"
             WHERE s."userId" = ANY($1) AND s."forMonth" = $2 AND s."status" = $3
+              -- faqat pul berib yopilgan oylik (avans bilan yopilgani qayta hisoblanadi)
+              AND s."paidAmount" > 0
             LIMIT 1`,
           [teacherIds, month, StaffSalaryStatus.PAID],
         );

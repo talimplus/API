@@ -25,8 +25,10 @@ import {
 } from '@/modules/staff-salaries/staff-deductions.service';
 import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
 import {
+  isSalaryFrozen,
   salaryMoneyView,
   salaryNet,
+  salaryStatusOf,
 } from '@/modules/staff-salaries/salary-math';
 
 @Injectable()
@@ -77,19 +79,11 @@ export class StaffSalariesService {
    * (`netSalary = 0`) — beriladigan narsa qolmadi, ya'ni "to'langan".
    */
   private applyStatus(salary: StaffSalary): void {
-    const net = this.netSalary(salary);
-    const paid = Number(salary.paidAmount ?? 0);
-
-    if (paid >= net) {
-      salary.status = StaffSalaryStatus.PAID;
-      salary.paidAt = salary.paidAt ?? new Date();
-    } else if (paid > 0) {
-      salary.status = StaffSalaryStatus.PARTIAL;
-      salary.paidAt = null;
-    } else {
-      salary.status = StaffSalaryStatus.UNPAID;
-      salary.paidAt = null;
-    }
+    salary.status = salaryStatusOf(salary);
+    salary.paidAt =
+      salary.status === StaffSalaryStatus.PAID
+        ? (salary.paidAt ?? new Date())
+        : null;
   }
 
   async ensureSalariesForMonth(
@@ -165,8 +159,9 @@ export class StaffSalariesService {
       let baseSalary = Number(payByUser.get(u.id)?.salary ?? 0);
       if (u.role === UserRole.TEACHER) {
         const existingRow = existingByUserId.get(u.id);
-        const force =
-          !!existingRow && existingRow.status !== StaffSalaryStatus.PAID;
+        // Muzlatilgan (pul berib yopilgan o'tgan oy) oylik qayta hisoblanmaydi —
+        // kech tushgan pul carryover bo'ladi. Avans bilan yopilgani muzlamaydi.
+        const force = !!existingRow && !isSalaryFrozen(existingRow);
 
         const earning =
           await this.teacherEarningsService.calculateTeacherEarningsForMonth(
@@ -214,7 +209,7 @@ export class StaffSalariesService {
         // If not paid yet, keep baseSalary in sync with latest earnings (commission updates, etc.)
         // This includes manager/reception commission updates from new confirmed receipts
         // (0 chiqqan hisob eski qiymatni o'chirmaydi — avvalgi xatti-harakat.)
-        if (existingRow.status !== StaffSalaryStatus.PAID && baseSalary > 0) {
+        if (!isSalaryFrozen(existingRow) && baseSalary > 0) {
           const currentBase = Number((existingRow as any).baseSalary ?? 0);
           if (currentBase !== baseSalary) {
             await this.staffSalaryRepo.update(
@@ -291,15 +286,17 @@ export class StaffSalariesService {
     // Ochiq jarimalarni shu oy oyligiga qo'llaymiz (o'tgan oylardan qolgani ham).
     // Idempotent — faqat sig'adigan va hali ushlanmagan qism qo'llanadi.
     for (const row of rows) {
-      if (row.status === StaffSalaryStatus.PAID) continue;
-      // Oylik kamaygan bo'lsa ortiqcha ushlanma avval qaytadi, keyin ochiqlari qo'llanadi.
-      await this.deductionsService.releaseExcess(row);
-      await this.deductionsService.applyOutstanding(row);
-      this.applyStatus(row);
-      await this.staffSalaryRepo.update(
-        { id: row.id },
-        { status: row.status, paidAt: row.paidAt ?? null },
-      );
+      if (isSalaryFrozen(row)) continue;
+      // Oylik kamaygan bo'lsa ortiqcha ushlanma avval qaytadi, keyin ochiqlari
+      // qo'llanadi, holat qayta qo'yiladi — bitta qulf ostida.
+      const fresh = await this.deductionsService.resync(row.id);
+      if (fresh) {
+        row.baseSalary = fresh.baseSalary;
+        row.deductionAmount = fresh.deductionAmount;
+        row.advanceAmount = fresh.advanceAmount;
+        row.status = fresh.status;
+        row.paidAt = fresh.paidAt;
+      }
     }
 
     const userIdsOfRows = rows.map((r) => r.userId);

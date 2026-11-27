@@ -74,6 +74,9 @@ export class TelegramBotService
   }
 
   async onApplicationBootstrap() {
+    // Bir martalik skriptlar (src/scripts) ilova kontekstini ko'taradi — ular
+    // prod serverdagi bot bilan bir tokenda polling qilmasligi kerak (409).
+    if (process.env.TELEGRAM_DISABLED === 'true') return;
     const configured = await this.settingsRepo.find({
       where: { botToken: Not(IsNull()) },
     });
