@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -51,6 +52,35 @@ export class StaffSalariesController {
       req.user.organizationId,
       userId,
       forMonth,
+    );
+  }
+
+  @Get('forecast')
+  @RequirePermissions('payroll.view', 'staffPerformance.view', 'payroll.pay')
+  @ApiOperation({
+    summary: 'Shu oy uchun taxminiy oylik (avans berishdan oldin)',
+    description:
+      "O'qituvchi guruhlari bo'yicha: to'lashi kerak, to'langan (tasdiqlangan), tasdiqlash " +
+      "kutilmoqda, hali to'lanmagan va ustoz ulushi; `estimate` — hammasi to'lansa taxminan; " +
+      '`advanceGiven` — shu oy uchun berilgan avans. Hech narsa yozmaydi.',
+  })
+  @ApiQuery({ name: 'userId', required: true, example: 358 })
+  @ApiQuery({ name: 'forMonth', required: true, example: '2026-11' })
+  @ApiResponse({ status: 200, description: 'Taxminiy oylik' })
+  async forecast(
+    @Req() req: any,
+    @Query('userId', ParseIntPipe) userId: number,
+    @Query('forMonth') forMonth: string,
+  ) {
+    if (!/^\d{4}-\d{2}$/.test(forMonth ?? '')) {
+      throw new BadRequestException(
+        'forMonth YYYY-MM ko‘rinishida bo‘lishi kerak',
+      );
+    }
+    return this.detailsService.forecast(
+      req.user.organizationId,
+      userId,
+      `${forMonth}-01`,
     );
   }
 

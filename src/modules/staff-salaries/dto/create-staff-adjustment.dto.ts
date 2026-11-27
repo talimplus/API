@@ -13,6 +13,21 @@ import {
 
 const MONTH = /^\d{4}-\d{2}$/;
 
+/** POST /staff/advances/carry — oy avansining oylikdan ortig'ini keyingi oyga o'tkazish. */
+export class CarryStaffAdvanceDto {
+  @ApiProperty({ example: 358 })
+  @Type(() => Number)
+  @IsInt()
+  userId: number;
+
+  @ApiProperty({
+    example: '2026-10',
+    description: 'Avansi oylikdan ko‘p bo‘lgan oy (YYYY-MM)',
+  })
+  @Matches(MONTH, { message: 'forMonth YYYY-MM ko‘rinishida bo‘lishi kerak' })
+  forMonth: string;
+}
+
 /** POST /staff/advances — xodimga avans berish. */
 export class CreateStaffAdvanceDto {
   @ApiProperty({ example: 12 })
@@ -30,8 +45,8 @@ export class CreateStaffAdvanceDto {
     example: '2026-11',
     required: false,
     description:
-      'Qaysi oy oyligidan ushlanadi (ish oyi, YYYY-MM). Default — joriy oy. ' +
-      "Keyingi oy ham bo'lishi mumkin. Oylikka sig'masa qolgani keyingi oyliklardan.",
+      'Qaysi oy oyligi hisobiga (ish oyi, YYYY-MM). Default — joriy oy. ' +
+      "Keyingi oy ham bo'lishi mumkin. Oylikdan ko'p bo'lsa ham shu oyda turadi.",
   })
   @IsOptional()
   @Matches(MONTH, { message: 'forMonth YYYY-MM ko‘rinishida bo‘lishi kerak' })

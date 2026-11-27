@@ -100,6 +100,125 @@ export class StaffSalaryDetailsService {
     return map;
   }
 
+  /**
+   * Shu oy uchun taxminiy oylik — avans berishdan oldin admin ko'radi.
+   * O'qituvchida: guruhlari bo'yicha o'quvchilar shu oy uchun qancha to'lashi
+   * kerak, qanchasi to'lab tasdiqlangan, qanchasi tasdiqlash kutmoqda, qanchasi
+   * hali to'lanmagan — va ularning ustoz ulushi. Hech narsa yozmaydi.
+   */
+  async forecast(organizationId: number, userId: number, month: string) {
+    const [u] = await this.dataSource.query(
+      `SELECT "id", "role", "salary", "commissionPercentage" FROM "users"
+        WHERE "id" = $1 AND "organizationId" = $2`,
+      [userId, organizationId],
+    );
+    if (!u) throw new NotFoundException('Xodim topilmadi');
+    const [s] = await this.dataSource.query(
+      `SELECT * FROM "staff_salaries" WHERE "userId" = $1 AND "forMonth" = $2`,
+      [userId, month],
+    );
+    const pay = await this.userPay.getForMonth(
+      {
+        id: userId,
+        salary: u.salary,
+        commissionPercentage: u.commissionPercentage,
+      },
+      month,
+    );
+    const isTeacher = u.role === UserRole.TEACHER;
+    const percent = isTeacher ? Number(pay.commissionPercentage ?? 0) : 0;
+    const money = salaryMoneyView(s ?? {});
+    const calculated = s
+      ? round2(money.baseSalary + money.bonusAmount)
+      : Number(pay.salary ?? 0);
+
+    const groups: {
+      groupId: number;
+      groupName: string;
+      students: number;
+      due: number;
+      paid: number;
+      pending: number;
+      unpaid: number;
+      factor: number;
+    }[] = [];
+    if (isTeacher) {
+      const factors = await this.earnings.groupShareFactors(userId, month);
+      const ids = Array.from(factors.keys());
+      const rows = ids.length
+        ? await this.dataSource.query(
+            `SELECT g."id" AS "groupId", g."name" AS "groupName",
+                    COUNT(DISTINCT p."studentId")::int AS "students",
+                    COALESCE(SUM(p."amountDue"), 0) AS "due",
+                    COALESCE(SUM(p."amountPaid"), 0) AS "paid",
+                    COALESCE(SUM(pr."pending"), 0) AS "pending",
+                    COALESCE(SUM(GREATEST(0, p."amountDue" - p."amountPaid" - COALESCE(pr."pending", 0))), 0) AS "unpaid"
+               FROM "groups" g
+               JOIN "payments" p ON p."groupId" = g."id" AND p."forMonth" = $2
+               LEFT JOIN LATERAL (
+                 SELECT SUM(r."amount") AS "pending" FROM "payment_receipts" r
+                  WHERE r."paymentId" = p."id" AND r."status" = 'pending'
+               ) pr ON TRUE
+              WHERE g."id" = ANY($1)
+              GROUP BY g."id", g."name"
+              ORDER BY g."name"`,
+            [ids, month],
+          )
+        : [];
+      for (const r of rows) {
+        const factor = factors.get(Number(r.groupId)) ?? 0;
+        const part = (v: unknown) => round2(Number(v ?? 0) * factor);
+        groups.push({
+          groupId: Number(r.groupId),
+          groupName: r.groupName,
+          students: Number(r.students),
+          due: part(r.due),
+          paid: part(r.paid),
+          pending: part(r.pending),
+          unpaid: part(r.unpaid),
+          factor: round2(factor),
+        });
+      }
+    }
+    const total = (k: 'due' | 'paid' | 'pending' | 'unpaid') =>
+      round2(groups.reduce((sum, g) => sum + g[k], 0));
+    const share = (v: number) => round2((v * percent) / 100);
+    const totals = {
+      due: total('due'),
+      paid: total('paid'),
+      pending: total('pending'),
+      unpaid: total('unpaid'),
+    };
+    const shares = {
+      paid: share(totals.paid),
+      pending: share(totals.pending),
+      unpaid: share(totals.unpaid),
+    };
+    const [adv] = await this.dataSource.query(
+      `SELECT COALESCE(SUM("amount"), 0) AS "sum" FROM "staff_deductions"
+        WHERE "userId" = $1 AND "type" = $2 AND "sourceForMonth" = $3`,
+      [userId, StaffDeductionType.ADVANCE, month],
+    );
+    const advanceGiven = Number(adv?.sum ?? 0);
+    return {
+      userId,
+      forMonth: month,
+      isTeacher,
+      percent,
+      fixedSalary: Number(pay.salary ?? 0),
+      calculated,
+      groups,
+      totals,
+      shares,
+      /** Hammasi to'lansa taxminan: hisoblangan + kutilayotgan + to'lanmagan ulushi. */
+      estimate: round2(calculated + shares.pending + shares.unpaid),
+      advanceGiven,
+      paidAmount: money.paidAmount,
+      /** Shu oy uchun berilgan avans (+ jarima, berilgan pul) oylikdan shuncha ko'p. */
+      overAmount: money.overAmount,
+    };
+  }
+
   /** `userId` + `YYYY-MM` bo'yicha (front manzili shunday). */
   async detailsByMonth(organizationId: number, userId: number, ym: string) {
     if (!/^\d{4}-\d{2}$/.test(ym ?? '')) {
@@ -251,6 +370,7 @@ export class StaffSalaryDetailsService {
 
     const money = salaryMoneyView(s);
     return {
+      forecast: await this.forecast(organizationId, userId, month),
       id: Number(s.id),
       userId,
       forMonth: month,
@@ -296,6 +416,7 @@ export class StaffSalaryDetailsService {
         fines: money.fineAmount,
         paid: money.paidAmount,
         remaining: money.remaining,
+        over: money.overAmount,
       },
     };
   }

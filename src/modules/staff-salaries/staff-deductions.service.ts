@@ -21,6 +21,7 @@ import {
 import {
   round2,
   isSalaryFrozen,
+  salaryMoneyView,
   salaryStatusOf,
 } from '@/modules/staff-salaries/salary-math';
 
@@ -201,6 +202,93 @@ export class StaffDeductionsService {
   }
 
   /**
+   * Oy uchun berilgan avans oylikdan ko'p bo'lsa — ORTIG'INI keyingi oyga
+   * o'tkazadi (admin tugmani bosganda; o'zi hech qachon ko'chmaydi).
+   * Eng oxirgi berilgan avansdan boshlab: to'liq ketadigani shunchaki
+   * keyingi oyga ko'chadi, qismi ketadigani ikkiga bo'linadi (asl avans
+   * kamayadi, keyingi oyga yangi avans yoziladi — izohi va kim bergani bilan).
+   */
+  async carryAdvanceExcess(userId: number, forMonth: string, reqUser: any) {
+    const month = this.normalizeMonth(forMonth);
+    const next = dayjs(month).add(1, 'month').format('YYYY-MM-DD');
+    this.assertAdvanceMonth(next);
+    const salary = await this.salaryRepo.findOne({
+      where: { userId, forMonth: month as any },
+      relations: ['user', 'user.organization'],
+    });
+    if (
+      !salary ||
+      (salary as any).user?.organization?.id !== reqUser.organizationId
+    ) {
+      throw new NotFoundException('Oylik topilmadi');
+    }
+    const advance = Number(salary.advanceAmount ?? 0);
+    const others =
+      Number(salary.deductionAmount ?? 0) -
+      advance +
+      Number(salary.paidAmount ?? 0);
+    const excess = round2(
+      Math.min(
+        advance,
+        advance +
+          others -
+          Number(salary.baseSalary ?? 0) -
+          Number(salary.bonusAmount ?? 0),
+      ),
+    );
+    if (excess <= 0) {
+      throw new BadRequestException("Bu oy uchun avans oylikdan ko'p emas");
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      await this.lockUser(manager, userId);
+      const advances = await manager
+        .getRepository(StaffDeduction)
+        .createQueryBuilder('d')
+        .where('d."userId" = :userId', { userId })
+        .andWhere('d."type" = :type', { type: StaffDeductionType.ADVANCE })
+        .andWhere('d."sourceForMonth" = :month', { month })
+        .orderBy('d.id', 'DESC')
+        .getMany();
+      let rest = excess;
+      for (const d of advances) {
+        if (rest <= 0) break;
+        const amount = Number(d.amount);
+        const take = round2(Math.min(amount, rest));
+        if (take >= amount) {
+          await manager.update(
+            StaffDeduction,
+            { id: d.id },
+            { sourceForMonth: next as any },
+          );
+        } else {
+          await manager.update(
+            StaffDeduction,
+            { id: d.id },
+            { amount: round2(amount - take) as any },
+          );
+          await manager.save(
+            manager.create(StaffDeduction, {
+              userId: d.userId,
+              centerId: d.centerId,
+              organizationId: d.organizationId,
+              sourceForMonth: next as any,
+              amount: take as any,
+              appliedAmount: 0 as any,
+              type: StaffDeductionType.ADVANCE,
+              reason: `${d.reason} (${dayjs(month).format('MM.YYYY')} dan o'tkazildi)`,
+              createdById: reqUser.userId ?? d.createdById ?? null,
+            }),
+          );
+        }
+        rest = round2(rest - take);
+      }
+      await this.rebuildUserTx(manager, userId);
+    });
+    return { moved: excess, toMonth: next };
+  }
+
+  /**
    * Ushlanmani u qo'llangan barcha oyliklardan qaytaradi (yozuvning o'zi
    * qoladi). Qaytarilgan oyliklarning `forMonth` lari o'sish tartibida.
    */
@@ -350,11 +438,9 @@ export class StaffDeductionsService {
    * Xodimning avans va jarimalari qaysi oy oyligidan qancha ushlanishini
    * NOLDAN hisoblab chiqadi va bazani shunga moslaydi (2026-11-28).
    *
-   * Qoida: oylar eskidan yangiga qarab to'ldiriladi. Har bir oyga avval
-   * eng eski ushlanma (o'zi tanlangan oy bo'yicha, keyin id) tushadi —
-   * ushlanma o'zi tanlangan oydan OLDINGI oyga tushmaydi. Oy oyligiga
-   * sig'magani keyingi oyga o'tadi. Ya'ni oldingi oyda joy bor ekan,
-   * avans keyingi oyga ushlanmaydi.
+   * Qoida: avans — o'zi berilgan oy oyligiga to'liq (oylikdan ko'p bo'lsa
+   * ham, o'zi ko'chmaydi). Jarima — oylar eskidan yangiga, sig'gancha;
+   * o'zi tanlangan oydan oldingi oyga tushmaydi, sig'magani keyingi oyga.
    *
    * Ilgari ushlanma "qo'llangan joyida" qolardi: noyabr oktyabrdan oldin
    * hisoblansa, oktyabr avansi noyabrga tushib, oktyabr keyin oshganda ham
@@ -410,9 +496,39 @@ export class StaffDeductionsService {
       );
     }
 
+    const advanceIds = new Set(
+      deductions
+        .filter((d) => d.type === StaffDeductionType.ADVANCE)
+        .map((d) => d.id),
+    );
     const monthStr = (s: StaffSalary) => dayjs(s.forMonth).format('YYYY-MM-DD');
     const srcStr = (d: StaffDeduction) =>
       dayjs(d.sourceForMonth).format('YYYY-MM-DD');
+    // 1) Avans — FAQAT o'zi berilgan oy oyligida, to'liq summasi bilan
+    // (2026-11-28, markaz egasi talabi). Oylikdan ko'p bo'lsa ham o'zi
+    // keyingi oyga o'tmaydi: sahifada ogohlantirish chiqadi va admin
+    // "keyingi oyga o'tkazish" ni bosadi (`carryAdvanceExcess`). O'sha oy
+    // oyligi hali yo'q (kelajak oy) — ochiq turadi, qator paydo bo'lganda tushadi.
+    const salaryByMonth = new Map(salaries.map((s) => [monthStr(s), s]));
+    for (const d of deductions) {
+      if (d.type !== StaffDeductionType.ADVANCE) continue;
+      const rest = left.get(d.id) ?? 0;
+      const own = salaryByMonth.get(srcStr(d));
+      if (!own || rest <= 0) continue;
+      const k = key(own.id, d.id);
+      target.set(k, round2((target.get(k) ?? 0) + rest));
+      left.set(d.id, 0);
+    }
+    const advanceOn = (salaryId: number) => {
+      let sum = 0;
+      for (const [k, amount] of target) {
+        const [sid, did] = k.split(':').map(Number);
+        if (sid === salaryId && advanceIds.has(did)) sum += amount;
+      }
+      return sum;
+    };
+
+    // 2) Jarima — sig'gancha, eskidan yangiga (sig'masa keyingi oyliklardan).
     for (const salary of salaries) {
       if (frozenIds.has(salary.id)) continue;
       let room = round2(
@@ -420,11 +536,13 @@ export class StaffDeductionsService {
           0,
           Number(salary.baseSalary ?? 0) +
             Number(salary.bonusAmount ?? 0) -
-            Number(salary.paidAmount ?? 0),
+            Number(salary.paidAmount ?? 0) -
+            advanceOn(salary.id),
         ),
       );
       for (const d of deductions) {
         if (room <= 0) break;
+        if (d.type === StaffDeductionType.ADVANCE) continue;
         if (srcStr(d) > monthStr(salary)) continue;
         const take = round2(Math.min(left.get(d.id) ?? 0, room));
         if (take <= 0) continue;
@@ -613,8 +731,15 @@ export class StaffDeductionsService {
           WHERE a."deductionId" = $1 ORDER BY s."forMonth"`,
         [id],
       );
+    // Shu oy uchun avanslar oylikdan ko'p bo'lsa — saqlangandan keyin ogohlantirish
+    const [salary] = await this.dataSource.query(
+      `SELECT "baseSalary", "bonusAmount", "deductionAmount", "paidAmount"
+         FROM "staff_salaries" WHERE "userId" = $1 AND "forMonth" = $2`,
+      [view.userId, view.sourceForMonth],
+    );
     return {
       ...view,
+      monthOver: salary ? salaryMoneyView(salary).overAmount : 0,
       allocations: rows.map((r) => ({
         month: dayjs(r.forMonth).format('YYYY-MM-01'),
         amount: Number(r.amount),

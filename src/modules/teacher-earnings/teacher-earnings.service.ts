@@ -279,6 +279,44 @@ export class TeacherEarningsService {
     return result;
   }
 
+  /**
+   * Shu oyda o'qituvchi qaysi guruhlarda va oyning qancha qismida dars
+   * bergan: 1 — butun oy, 0.4 — oy o'rtasida almashgan (kunlar ulushi).
+   * Taxminiy oylik (kutilayotgan/to'lanmagan to'lovlar ulushi) shundan.
+   */
+  async groupShareFactors(
+    teacherId: number,
+    month: string, // YYYY-MM-01
+  ): Promise<Map<number, number>> {
+    const manager = this.paymentRepo.manager;
+    const result = new Map<number, number>();
+    const groupRows: { id: number }[] = await manager.query(
+      `SELECT g."id" FROM "groups" g WHERE g."teacherId" = $1
+       UNION
+       SELECT tp."groupId" FROM "group_teacher_periods" tp WHERE tp."teacherId" = $1`,
+      [teacherId],
+    );
+    const monthStart = dayjs(month).startOf('month');
+    const days = Array.from({ length: monthStart.daysInMonth() }, (_, i) =>
+      monthStart.add(i, 'day').format('YYYY-MM-DD'),
+    );
+    for (const { id } of groupRows) {
+      const groupId = Number(id);
+      const resolver = await this.loadTeacherResolver(groupId);
+      if (!resolver) {
+        const [row] = await manager.query(
+          `SELECT "teacherId" FROM "groups" WHERE "id" = $1`,
+          [groupId],
+        );
+        if (Number(row?.teacherId) === teacherId) result.set(groupId, 1);
+        continue;
+      }
+      const mine = days.filter((d) => resolver(d) === teacherId).length;
+      if (mine > 0) result.set(groupId, mine / days.length);
+    }
+    return result;
+  }
+
   private async sumPaidForGroupMonth(
     groupId: number,
     month: string,

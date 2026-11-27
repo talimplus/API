@@ -96,4 +96,14 @@ export const salaryMoneyView = (s: SalaryMoney) => ({
   netSalary: salaryNet(s),
   paidAmount: n(s.paidAmount),
   remaining: salaryRemaining(s),
+  /** Shu oy uchun berilgan avans (+ jarima, berilgan pul) oylikdan shuncha ko'p. */
+  overAmount: round2(
+    Math.max(
+      0,
+      n(s.deductionAmount) +
+        n(s.paidAmount) -
+        n(s.baseSalary) -
+        n(s.bonusAmount),
+    ),
+  ),
 });

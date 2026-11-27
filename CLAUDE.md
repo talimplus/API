@@ -444,10 +444,15 @@ iyun oyligi iyunda turadi, pul iyulda berilsa ham. Ilgari bu to'lov oyi edi (iyu
   carryover'da qolardi (prod org 38). Ochiq oyda: shu oydan chiqib hech qayerga
   qo'shilmagan carryover o'chadi (pul `gross` da qayta sanaladi), boshqa oyga qo'shilgani
   komissiyadan ayiriladi (`50% × tushum − o'tkazilgan`); carryover faqat muzlagan oydan olinadi.
-- **Avans/jarima taqsimoti noldan quriladi** (2026-11-28, `rebuildUserTx`): har `resync` da
-  xodimning barcha ochiq oyliklari eskidan yangiga to'ldiriladi — ushlanma o'zi tanlangan oydan
-  oldin tushmaydi, sig'magani keyingi oyga. Ilgari "qo'llangan joyida" qolardi: noyabr oktyabrdan
-  oldin hisoblansa oktyabr avansi noyabrda qotardi (prod user 358). Muzlagan oylik tegilmaydi.
+- **Avans faqat o'z oyida** (2026-11-28, markaz egasi talabi, `rebuildUserTx`): avans o'zi
+  berilgan oy (`sourceForMonth`) oyligiga TO'LIQ yoziladi, oylikdan ko'p bo'lsa ham o'zi ko'chmaydi —
+  `overAmount` (javoblarda) ogohlantiradi, admin `POST /staff/advances/carry {userId, forMonth}`
+  bilan ortig'ini keyingi oyga o'tkazadi (oxirgi avansdan, kerak bo'lsa ikkiga bo'linadi).
+  Jarima — eskidan yangiga, sig'gancha. Muzlagan oylik ushlanmalari tegilmaydi.
+- **Taxminiy oylik**: `GET /staff-salaries/forecast?userId&forMonth` (`payroll.view|staffPerformance.view|payroll.pay`)
+  — o'qituvchi guruhlarida shu oy uchun to'lashi kerak / to'langan / tasdiqlash kutilmoqda /
+  to'lanmagan (o'qituvchi almashgan guruhda kunlar ulushi) va ustoz ulushi, `estimate`, `advanceGiven`.
+  Ro'yxat qatorida `forecast{pendingShare, unpaidShare, estimate}`, batafsilda `forecast`.
 - **O'tkazma manbasi** (migratsiya `…077`): `teacher_commission_carryovers.paymentId/receiptId/
   studentId/groupId` — qayta hisobni boshlagan to'lov (`sourcePaymentId`), eskilari vaqt bo'yicha.
 - **Batafsil hisob**: `GET /staff-salaries/details?userId&forMonth` va `/:id/details`

@@ -27,6 +27,7 @@ import {
 import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
 import { StaffDeductionType } from '@/modules/staff-salaries/enums/staff-deduction-type.enum';
 import {
+  CarryStaffAdvanceDto,
   CreateStaffAdvanceDto,
   CreateStaffBonusDto,
   UpdateStaffAdvanceDto,
@@ -116,12 +117,29 @@ export class StaffOverviewController {
     summary: 'Avans berish (keyingi oylikdan ushlanadi)',
     description:
       'Pul hozir beriladi va `forMonth` (default — joriy oy, keyingi oy ham mumkin) ' +
-      "oyligidan ushlanadi; oylikka sig'masa qolgani keyingi oyliklardan. " +
+      "oyligi hisobiga yoziladi. Oylikdan ko'p bo'lsa ham o'zi ko'chmaydi (`POST advances/carry`). " +
       "Jarima emas: oylik qatorida `advanceAmount`, hisobotda berilgan pulga qo'shiladi. " +
       'Javob — `staff_deductions` yozuvi (`type: "advance"`).',
   })
   createAdvance(@Body() dto: CreateStaffAdvanceDto, @Req() req: any) {
     return this.deductionsService.createAdvance(dto, req.user);
+  }
+
+  @Post('advances/carry')
+  @RequirePermissions('payroll.pay')
+  @ApiOperation({
+    summary: "Oy avansining oylikdan ortig'ini keyingi oyga o'tkazish",
+    description:
+      "Avans o'zi berilgan oyda turadi; oylikdan ko'p bo'lsa sahifada ogohlantirish chiqadi. " +
+      "Admin shu amalni bosganda ortig'i keyingi oyga o'tadi (oxirgi avansdan boshlab, " +
+      "kerak bo'lsa avans ikkiga bo'linadi). Javob: `{ moved, toMonth }`.",
+  })
+  carryAdvance(@Body() dto: CarryStaffAdvanceDto, @Req() req: any) {
+    return this.deductionsService.carryAdvanceExcess(
+      dto.userId,
+      dto.forMonth,
+      req.user,
+    );
   }
 
   @Patch('advances/:id')

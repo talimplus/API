@@ -123,7 +123,7 @@ async function loadSalaries(ds: DataSource): Promise<SalaryRow[]> {
 /**
  * `StaffDeductionsService.rebuildUserTx` ning xotiradagi nusxasi (dry-run):
  * muzlagan oyliklardagi ushlanmalar o'zgarmas, qolgan oylar eskidan yangiga
- * to'ldiriladi — ushlanma o'zi tanlangan oydan oldingi oyga tushmaydi.
+ * to'ldiriladi. Avans — faqat o'z oyiga; jarima — sig'gancha, eskidan yangiga.
  */
 function simulateRebuild(
   rows: SalaryRow[],
@@ -143,17 +143,45 @@ function simulateRebuild(
   const ordered = [...deductions].sort(
     (x, y) => x.sourceForMonth.localeCompare(y.sourceForMonth) || x.id - y.id,
   );
+  const add = (staffSalaryId: number, deductionId: number, amount: number) => {
+    const ex = next.find(
+      (a) => a.staffSalaryId === staffSalaryId && a.deductionId === deductionId,
+    );
+    if (ex) ex.amount = round2(ex.amount + amount);
+    else next.push({ staffSalaryId, deductionId, amount });
+  };
+  // Avans — faqat o'z oyiga, to'liq (o'zi ko'chmaydi).
+  for (const d of ordered) {
+    if (d.type !== StaffDeductionType.ADVANCE) continue;
+    const own = rows.find((r) => r.forMonth === d.sourceForMonth);
+    const rest = left.get(d.id) ?? 0;
+    if (!own || rest <= 0) continue;
+    add(own.id, d.id, rest);
+    left.set(d.id, 0);
+  }
+  // Jarima — sig'gancha, eskidan yangiga.
   for (const r of [...rows].sort((x, y) =>
     x.forMonth.localeCompare(y.forMonth),
   )) {
     if (frozen.has(r.id)) continue;
-    let room = round2(Math.max(0, r.baseSalary + r.bonusAmount - r.paidAmount));
+    const adv = next
+      .filter((a) => a.staffSalaryId === r.id)
+      .filter(
+        (a) =>
+          deductions.find((d) => d.id === a.deductionId)?.type ===
+          StaffDeductionType.ADVANCE,
+      )
+      .reduce((sum, a) => sum + a.amount, 0);
+    let room = round2(
+      Math.max(0, r.baseSalary + r.bonusAmount - r.paidAmount - adv),
+    );
     for (const d of ordered) {
       if (room <= 0) break;
+      if (d.type === StaffDeductionType.ADVANCE) continue;
       if (d.sourceForMonth > r.forMonth) continue;
       const take = round2(Math.min(left.get(d.id) ?? 0, room));
       if (take <= 0) continue;
-      next.push({ staffSalaryId: r.id, deductionId: d.id, amount: take });
+      add(r.id, d.id, take);
       left.set(d.id, round2((left.get(d.id) ?? 0) - take));
       room = round2(room - take);
     }
@@ -174,6 +202,15 @@ function simulateRebuild(
   }
   return next;
 }
+
+/** Shu oy uchun avans (+ jarima, berilgan pul) oylikdan qancha ko'p. */
+const overOf = (r: SalaryRow) =>
+  round2(
+    Math.max(
+      0,
+      r.deductionAmount + r.paidAmount - r.baseSalary - r.bonusAmount,
+    ),
+  );
 
 async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, {
@@ -273,7 +310,7 @@ async function main() {
           `${fmt(old.deductionAmount)} → **${fmt(r.deductionAmount)}** | ` +
           `${fmt(r.paidAmount)} | ` +
           `${fmt(salaryRemaining(old))} → **${fmt(salaryRemaining(r))}** | ` +
-          `${old.status} → ${r.status} | ${[by && `ushlanadi: ${by}`, notes.get(r.id)].filter(Boolean).join('; ')} |`,
+          `${old.status} → ${r.status}${overOf(r) > 0 ? ` · avans oylikdan ${fmt(overOf(r))} ko'p` : ''} | ${[by && `ushlanadi: ${by}`, notes.get(r.id)].filter(Boolean).join('; ')} |`,
       );
     });
     // Faqat ichki taqsimot o'zgargan bo'lsa ham (summalar bir xil) — yoziladi.

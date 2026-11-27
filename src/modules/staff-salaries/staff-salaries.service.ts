@@ -323,6 +323,22 @@ export class StaffSalariesService {
         teacherEarningById.set(e.teacherId, e);
       }
     }
+    const forecastByTeacher = new Map<
+      number,
+      { pendingShare: number; unpaidShare: number; estimate: number }
+    >();
+    for (const teacherId of teacherUserIds) {
+      const f = await this.detailsService.forecast(
+        organizationId,
+        teacherId,
+        month,
+      );
+      forecastByTeacher.set(teacherId, {
+        pendingShare: f.shares.pending,
+        unpaidShare: f.shares.unpaid,
+        estimate: f.estimate,
+      });
+    }
     const transfersByTeacher = await this.detailsService.transfersFor(
       teacherUserIds,
       month,
@@ -383,6 +399,9 @@ export class StaffSalariesService {
         out.transfersOut = transfers.out;
         out.transfersIn = transfers.in;
         // Shu oy uchun tushgan pulning to'liq ulushi (o'tkazma ayirilmagan)
+        // Shu oy uchun kutilayotgan pul: tasdiqlash kutilmoqda va hali
+        // to'lanmagan o'quvchi to'lovlarining ustoz ulushi + taxminiy oylik.
+        out.forecast = forecastByTeacher.get(r.userId) ?? null;
         out.earningCommissionGross =
           Number(out.earningCommissionAmount ?? 0) +
           transfers.out.reduce((sum, t) => sum + t.amount, 0);

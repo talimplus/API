@@ -144,6 +144,14 @@ async function main() {
       remaining: salaryRemaining(s),
     };
   };
+  const overOf = async (month: string) => {
+    const [x] = await ds.query(
+      `SELECT GREATEST(0, "deductionAmount" + "paidAmount" - "baseSalary" - "bonusAmount")::numeric AS o
+         FROM "staff_salaries" WHERE "userId" = $1 AND "forMonth" = $2`,
+      [TEACHER, month],
+    );
+    return Number(x?.o ?? 0);
+  };
   const list = (month: string) => salaries.findAll(ORG, month.slice(0, 7));
 
   // ── 1. Avans oylikni to'liq qoplaydi ────────────────────────────
@@ -157,32 +165,34 @@ async function main() {
   );
   await list(PREV);
   await list(CUR);
-  check("1a. o'tgan oy avans bilan yopildi", await row(PREV), {
+  // Avans faqat o'z oyida: 300 000 oktyabr oyligidan (200 000) ko'p, lekin
+  // o'zi noyabrga ko'chmaydi — ortig'i ko'rsatiladi.
+  check("1a. avans o'z oyida, oylikdan ko'p", await row(PREV), {
     base: 200000,
-    advance: 200000,
+    advance: 300000,
     paid: 0,
     status: 'paid',
     remaining: 0,
   });
-  check("1b. joriy oy — avans qoldig'i 100 000", await row(CUR), {
+  check("1a2. ortig'i 100 000", await overOf(PREV), 100000);
+  check('1b. joriy oyga avans tushmadi', await row(CUR), {
     base: 150000,
-    advance: 100000,
+    advance: 0,
     paid: 0,
     status: 'unpaid',
-    remaining: 50000,
+    remaining: 150000,
   });
 
   // ── 2. Keyin yangi chek tasdiqlanadi → oylik oshadi, 'paid' emas ──
   await pay(pPrev, 600000); // +300 000 komissiya
-  // Avans o'zi tanlangan oyga qaytadi: noyabrdagi 100 000 ham oktyabrga.
-  check("2a. o'tgan oy oshdi, avans to'liq o'z oyiga qaytdi", await row(PREV), {
+  check("2a. o'tgan oy oshdi, qoldiq paydo bo'ldi", await row(PREV), {
     base: 500000,
     advance: 300000,
     paid: 0,
     status: 'unpaid',
     remaining: 200000,
   });
-  check('2a2. joriy oydan avans olib tashlandi', await row(CUR), {
+  check('2a2. joriy oy tegilmadi', await row(CUR), {
     base: 150000,
     advance: 0,
     paid: 0,
@@ -214,18 +224,18 @@ async function main() {
     { userId: TEACHER, amount: 250000, forMonth: PREV.slice(0, 7) } as any,
     ADMIN,
   );
+  check("3. ikkinchi avans ham o'z oyida", await row(PREV), {
+    base: 500000,
+    advance: 550000,
+    paid: 0,
+    status: 'paid',
+    remaining: 0,
+  });
   check(
-    "3. ikkinchi avans o'tgan oydan ushlandi (200 000 sig'di)",
-    await row(PREV),
-    {
-      base: 500000,
-      advance: 500000,
-      paid: 0,
-      status: 'paid',
-      remaining: 0,
-    },
+    "3b. ortig'i 50 000, joriy oyga o'zi o'tmadi",
+    [await overOf(PREV), (await row(CUR))?.advance],
+    [50000, 0],
   );
-  check("3b. sig'magan 50 000 joriy oydan", (await row(CUR))?.advance, 50000);
 
   // ── 4. Rad etilgan chek summani oshirmaydi ──────────────────────
   // Admin bo'lmagan xodim qabul qilgan chek — `pending`, keyin rad etiladi.
@@ -253,39 +263,35 @@ async function main() {
     [pPrev],
   );
   await payments.recalcTeacherEarningsForGroupMonth(GROUP, PREV);
-  check(
-    "5a. o'tgan oy 50 000 ga tushdi, ortiqcha avans qaytdi",
-    await row(PREV),
-    {
-      base: 50000,
-      advance: 50000,
-      paid: 0,
-      status: 'paid',
-      remaining: 0,
-    },
-  );
-  await list(CUR);
-  check("5b. qaytgan avans joriy oyga o'tdi", await row(CUR), {
-    base: 150000,
-    advance: 150000,
+  check("5a. o'tgan oy 50 000 ga tushdi, avans joyida", await row(PREV), {
+    base: 50000,
+    advance: 550000,
     paid: 0,
     status: 'paid',
     remaining: 0,
+  });
+  await list(CUR);
+  check("5b. joriy oy o'zgarmadi", await row(CUR), {
+    base: 150000,
+    advance: 0,
+    paid: 0,
+    status: 'unpaid',
+    remaining: 150000,
   });
   const [open] = await ds.query(
     `SELECT COALESCE(SUM("amount" - "appliedAmount"), 0)::numeric AS left FROM "staff_deductions" WHERE "userId" = $1`,
     [TEACHER],
   );
-  check('5c. ochiq avans 350 000 (550 − 50 − 150)', Number(open.left), 350000);
+  check("5c. ochiq (hech qayerga yozilmagan) avans yo'q", Number(open.left), 0);
 
   // ── 6. Joriy oy avans bilan 'paid' bo'lsa ham yangi pul qo'shiladi ──
   await pay(pCur, 400000); // joriy oy: 700 000 → 350 000 komissiya
-  check('6. joriy oy oshdi, avans yana ushlandi', await row(CUR), {
+  check('6. joriy oy oshdi', await row(CUR), {
     base: 350000,
-    advance: 350000,
+    advance: 0,
     paid: 0,
-    status: 'paid',
-    remaining: 0,
+    status: 'unpaid',
+    remaining: 350000,
   });
 
   // ── 7. Pul berib yopilgan O'TGAN oy muzlaydi → carryover (eski qoida) ──
@@ -386,12 +392,9 @@ async function main() {
   const a2 = await giveAdvance(200000, PREV, 'Oktyabr oyligidan berildi');
   const a3: any = await giveAdvance(800000, PREV, 'Oktyabr oyidan avans');
   check(
-    '9a. avans javobida taqsimot (oktyabr 7 346.16, noyabr 792 653.84)',
-    a3.allocations.map((x: any) => [x.month, x.amount]),
-    [
-      [PREV, 7346.16],
-      [CUR, 792653.84],
-    ],
+    "9a. avans javobi: o'z oyiga to'liq, oylikdan 792 653.84 ko'p",
+    [a3.allocations.map((x: any) => [x.month, x.amount]), a3.monthOver],
+    [[[PREV, 800000]], 792653.84],
   );
   await giveAdvance(250000, CUR, 'abubakir');
   await list(CUR);
@@ -399,14 +402,52 @@ async function main() {
   await payCurFirst(o1, 1040000); // oktyabr ustamasi 727 346.16 ga oshdi
   await list(CUR);
   await list(PREV);
-  check("9b. oktyabr: avans bilan to'liq yopildi, qoldiq 0", await row(PREV), {
+  check("9b. oktyabr: 1 000 000 avans o'z oyida, qoldiq 0", await row(PREV), {
     base: 727346.16,
-    advance: 727346.16,
+    advance: 1000000,
     paid: 0,
     status: 'paid',
     remaining: 0,
   });
-  check('9c. noyabr: qoldiq 517 500.01', await row(CUR), {
+  check(
+    "9b2. oktyabr avansi oylikdan 272 653.84 ko'p",
+    await overOf(PREV),
+    272653.84,
+  );
+  check("9c. noyabr: o'zi ko'chmadi — qoldiq 790 153.85", await row(CUR), {
+    base: 1040153.85,
+    advance: 250000,
+    paid: 0,
+    status: 'unpaid',
+    remaining: 790153.85,
+  });
+
+  // Admin "keyingi oyga o'tkazish" ni bosadi
+  const moved = await deductions.carryAdvanceExcess(
+    TEACHER,
+    PREV.slice(0, 7),
+    ADMIN,
+  );
+  check(
+    "9c2. o'tkazildi 272 653.84",
+    [moved.moved, moved.toMonth],
+    [272653.84, CUR],
+  );
+  check(
+    "9c3. oktyabr: qoldiq 0, ortiqcha yo'q",
+    [await row(PREV), await overOf(PREV)],
+    [
+      {
+        base: 727346.16,
+        advance: 727346.16,
+        paid: 0,
+        status: 'paid',
+        remaining: 0,
+      },
+      0,
+    ],
+  );
+  check('9c4. noyabr: qoldiq 517 500.01', await row(CUR), {
     base: 1040153.85,
     advance: 522653.84,
     paid: 0,
@@ -429,20 +470,46 @@ async function main() {
     fines: 0,
     paid: 0,
     remaining: 0,
+    over: 0,
   });
   check(
-    '9f. batafsil: 800 000 avans — oktyabrdan 527 346.16, noyabrdan 272 653.84',
-    d9.advances
-      .filter((x: any) => x.id === a3.id)
-      .map((x: any) => [x.thisMonth, x.allocations.map((y: any) => y.amount)]),
-    [[527346.16, [527346.16, 272653.84]]],
+    "9f. 800 000 avans ikkiga bo'lindi: oktyabrda 527 346.16 qoldi",
+    d9.advances.map((x: any) => [x.id, x.amount, x.thisMonth]),
+    [
+      [a2.id, 200000, 200000],
+      [a3.id, 527346.16, 527346.16],
+    ],
+  );
+  const [split] = await ds.query(
+    `SELECT "amount", "reason" FROM "staff_deductions" WHERE "userId" = $1 AND "sourceForMonth" = $2 ORDER BY "id" DESC LIMIT 1`,
+    [TEACHER, CUR],
+  );
+  check(
+    '9f2. noyabrga yangi avans: 272 653.84, izohi bilan',
+    [
+      Number(split.amount),
+      String(split.reason).startsWith('Oktyabr oyidan avans'),
+    ],
+    [272653.84, true],
   );
   check(
     "9g. batafsil: ustama guruh bo'yicha",
     d9.commission.groups.map((g: any) => [g.groupId, g.paid, g.share]),
     [[GROUP, 1454692.32, 727346.16]],
   );
-  void a2;
+  // Prognoz: tasdiqlash kutayotgan va to'lanmagan pullar
+  const TEACHER_USER = {
+    userId: TEACHER,
+    role: UserRole.TEACHER,
+    organizationId: ORG,
+  } as any;
+  await payments.submitReceipt(n2, 100000, TEACHER_USER); // pending
+  const f9: any = await details.forecast(ORG, TEACHER, CUR);
+  check(
+    "9i. prognoz: kutilmoqda 50 000, to'lanmagan 3 909 846.15, taxminan 5 000 000",
+    [f9.shares.pending, f9.shares.unpaid, f9.estimate, f9.advanceGiven],
+    [50000, 3909846.15, 5000000, 522653.84],
+  );
   const [dupes] = await ds.query(
     `SELECT COUNT(*)::int AS n FROM (SELECT "staffSalaryId", "deductionId" FROM "staff_salary_deductions"
        GROUP BY 1, 2 HAVING COUNT(*) > 1) x`,
@@ -453,7 +520,7 @@ async function main() {
   await payCurFirst(o1, 600000); // oktyabr 1 027 346.16 — avanslardan oshdi
   await list(PREV);
   const prev10 = await row(PREV);
-  check("10a. oktyabr qoldig'i 27 346.16", prev10?.remaining, 27346.16);
+  check("10a. oktyabr qoldig'i 300 000", prev10?.remaining, 300000);
   await salaries.pay(prevSal.id, { amount: prev10!.remaining } as any, ADMIN);
   await payCurFirst(o1, 100000); // +50 000 ustama yopilgan oktyabrga
   check(
