@@ -36,7 +36,6 @@ import { UserRole } from '@/common/enums/user-role.enums';
 import {
   isSalaryFrozen,
   round2,
-  salaryCapacity,
   salaryRemaining,
   salaryStatusOf,
 } from '@/modules/staff-salaries/salary-math';
@@ -121,65 +120,59 @@ async function loadSalaries(ds: DataSource): Promise<SalaryRow[]> {
   }));
 }
 
-/** `StaffDeductionsService.resync` ning xotiradagi nusxasi (dry-run uchun). */
-function simulateResync(
-  s: SalaryRow,
+/**
+ * `StaffDeductionsService.rebuildUserTx` ning xotiradagi nusxasi (dry-run):
+ * muzlagan oyliklardagi ushlanmalar o'zgarmas, qolgan oylar eskidan yangiga
+ * to'ldiriladi — ushlanma o'zi tanlangan oydan oldingi oyga tushmaydi.
+ */
+function simulateRebuild(
+  rows: SalaryRow[],
   deductions: DeductionRow[],
   apps: AppRow[],
-) {
-  const byId = new Map(deductions.map((d) => [d.id, d]));
-  // releaseExcess
-  const room = s.baseSalary + s.bonusAmount - s.paidAmount;
-  let excess = round2(s.deductionAmount - Math.max(0, room));
-  if (excess > 0) {
-    const mine = apps
-      .filter((a) => a.staffSalaryId === s.id && a.amount > 0)
-      .sort((a, b) => {
-        const da = byId.get(a.deductionId)!;
-        const db = byId.get(b.deductionId)!;
-        return (
-          db.sourceForMonth.localeCompare(da.sourceForMonth) ||
-          b.deductionId - a.deductionId
-        );
-      });
-    for (const app of mine) {
-      if (excess <= 0) break;
-      const back = round2(Math.min(app.amount, excess));
-      const d = byId.get(app.deductionId)!;
-      app.amount = round2(app.amount - back);
-      d.appliedAmount = round2(d.appliedAmount - back);
-      s.deductionAmount = round2(s.deductionAmount - back);
-      if (d.type === StaffDeductionType.ADVANCE) {
-        s.advanceAmount = round2(s.advanceAmount - back);
-      }
-      excess = round2(excess - back);
+): AppRow[] {
+  const frozen = new Set(
+    rows.filter((r) => isSalaryFrozen(r as any)).map((r) => r.id),
+  );
+  const left = new Map(deductions.map((d) => [d.id, d.amount]));
+  const next: AppRow[] = [];
+  for (const a of apps) {
+    if (!frozen.has(a.staffSalaryId)) continue;
+    next.push({ ...a });
+    left.set(a.deductionId, round2((left.get(a.deductionId) ?? 0) - a.amount));
+  }
+  const ordered = [...deductions].sort(
+    (x, y) => x.sourceForMonth.localeCompare(y.sourceForMonth) || x.id - y.id,
+  );
+  for (const r of [...rows].sort((x, y) =>
+    x.forMonth.localeCompare(y.forMonth),
+  )) {
+    if (frozen.has(r.id)) continue;
+    let room = round2(Math.max(0, r.baseSalary + r.bonusAmount - r.paidAmount));
+    for (const d of ordered) {
+      if (room <= 0) break;
+      if (d.sourceForMonth > r.forMonth) continue;
+      const take = round2(Math.min(left.get(d.id) ?? 0, room));
+      if (take <= 0) continue;
+      next.push({ staffSalaryId: r.id, deductionId: d.id, amount: take });
+      left.set(d.id, round2((left.get(d.id) ?? 0) - take));
+      room = round2(room - take);
     }
   }
-  // applyOutstanding
-  let left = salaryCapacity(s);
-  const monthEnd = dayjs(s.forMonth).endOf('month').format('YYYY-MM-DD');
-  const open = deductions
-    .filter((d) => d.sourceForMonth <= monthEnd && d.amount > d.appliedAmount)
-    .sort(
-      (a, b) => a.sourceForMonth.localeCompare(b.sourceForMonth) || a.id - b.id,
+  const typeOf = new Map(deductions.map((d) => [d.id, d.type]));
+  for (const r of rows) {
+    const mine = next.filter((a) => a.staffSalaryId === r.id);
+    r.deductionAmount = round2(mine.reduce((sum, a) => sum + a.amount, 0));
+    r.advanceAmount = round2(
+      mine
+        .filter((a) => typeOf.get(a.deductionId) === StaffDeductionType.ADVANCE)
+        .reduce((sum, a) => sum + a.amount, 0),
     );
-  for (const d of open) {
-    if (left <= 0) break;
-    const take = round2(Math.min(d.amount - d.appliedAmount, left));
-    if (take <= 0) continue;
-    const app = apps.find(
-      (a) => a.staffSalaryId === s.id && a.deductionId === d.id,
-    );
-    if (app) app.amount = round2(app.amount + take);
-    else apps.push({ staffSalaryId: s.id, deductionId: d.id, amount: take });
-    d.appliedAmount = round2(d.appliedAmount + take);
-    s.deductionAmount = round2(s.deductionAmount + take);
-    if (d.type === StaffDeductionType.ADVANCE) {
-      s.advanceAmount = round2(s.advanceAmount + take);
-    }
-    left = round2(left - take);
+    if (!frozen.has(r.id)) r.status = salaryStatusOf(r);
   }
-  s.status = salaryStatusOf(s);
+  for (const d of deductions) {
+    d.appliedAmount = round2(d.amount - (left.get(d.id) ?? 0));
+  }
+  return next;
 }
 
 async function main() {
@@ -199,7 +192,11 @@ async function main() {
   }
 
   const report: string[] = [];
-  const changedUsers: { userId: number; rows: SalaryRow[] }[] = [];
+  const changedUsers: {
+    userId: number;
+    rows: SalaryRow[];
+    recalcBase: boolean;
+  }[] = [];
   let totalBaseDelta = 0;
 
   for (const [userId, rows] of byUser) {
@@ -207,9 +204,9 @@ async function main() {
       (r) =>
         (r.status === 'paid' && r.paidAmount === 0) || r.receiptsAfterCalc > 0,
     );
-    if (!ALL && !affected) continue;
-    const open = rows.filter((r) => !isSalaryFrozen(r as any));
-    if (!open.length) continue;
+    // Oylikni qayta hisoblash — faqat ta'sirlangan xodimlarda (yoki --all).
+    // Avans/jarima taqsimoti esa hamma xodimda qayta quriladi.
+    const recalcBase = ALL || affected;
 
     const deductions: DeductionRow[] = (
       await ds.query(
@@ -234,83 +231,93 @@ async function main() {
     ).map((a: any) => ({ ...a, amount: num(a.amount) }));
     const before = new Map(deductions.map((d) => [d.id, d.appliedAmount]));
 
-    const lines: string[] = [];
-    for (const r of open) {
-      const old = { ...r };
-      const sim = { ...r };
-      let note = '';
-      if (r.role === UserRole.TEACHER) {
-        const p = await earnings.previewMonth(userId, r.forMonth);
-        if (p && !p.frozen) {
-          sim.baseSalary = round2(p.totalEarning);
-          const parts = [
-            `komissiya ${fmt(p.commissionAmount)}`,
-            `carryover ${fmt(p.carryOverCommission)}`,
-          ];
-          if (p.absorbedCarryover) {
-            parts.push(`o'z oyiga qaytgan ${fmt(p.absorbedCarryover)}`);
-          }
-          if (p.carriedOut)
-            parts.push(`keyingi oyga o'tgan −${fmt(p.carriedOut)}`);
-          note = parts.join(', ');
-        }
+    const olds = rows.map((r) => ({ ...r }));
+    const notes = new Map<number, string>();
+    for (const r of rows) {
+      if (!recalcBase || r.role !== UserRole.TEACHER) continue;
+      if (isSalaryFrozen(r as any)) continue;
+      const p = await earnings.previewMonth(userId, r.forMonth);
+      if (!p || p.frozen) continue;
+      r.baseSalary = round2(p.totalEarning);
+      const parts = [`ustama ${fmt(p.commissionAmount)}`];
+      if (p.carryOverCommission) {
+        parts.push(`boshqa oydan +${fmt(p.carryOverCommission)}`);
       }
-      simulateResync(sim, deductions, apps);
-      Object.assign(r, sim);
-
-      const changed =
-        old.baseSalary !== sim.baseSalary ||
-        old.deductionAmount !== sim.deductionAmount ||
-        old.status !== sim.status;
-      if (!changed) continue;
-      const reason =
-        old.status === 'paid' && old.paidAmount === 0
-          ? 'avans bilan yopilgan'
-          : old.receiptsAfterCalc > 0
-            ? `hisobdan keyin ${old.receiptsAfterCalc} chek`
-            : 'boshqa';
-      totalBaseDelta += sim.baseSalary - old.baseSalary;
-      lines.push(
-        `| ${r.organizationId} | ${userId} ${r.fullName} | ${r.forMonth.slice(0, 7)} | ${reason} | ` +
-          `${fmt(old.baseSalary)} → **${fmt(sim.baseSalary)}** | ` +
-          `${fmt(old.advanceAmount)} → ${fmt(sim.advanceAmount)} | ` +
-          `${fmt(old.deductionAmount - old.advanceAmount)} → ${fmt(sim.deductionAmount - sim.advanceAmount)} | ` +
-          `${fmt(old.paidAmount)} | ` +
-          `${fmt(salaryRemaining(old))} → **${fmt(salaryRemaining(sim))}** | ` +
-          `${old.status} → ${sim.status} | ${note} |`,
-      );
+      if (p.carriedOut) parts.push(`keyingi oyga −${fmt(p.carriedOut)}`);
+      if (p.absorbedCarryover) {
+        parts.push(`o'z oyiga qaytgan ${fmt(p.absorbedCarryover)}`);
+      }
+      notes.set(r.id, parts.join(', '));
     }
-    if (!lines.length) continue;
+    const nextApps = simulateRebuild(rows, deductions, apps);
+
+    const lines: string[] = [];
+    rows.forEach((r, i) => {
+      const old = olds[i];
+      if (
+        old.baseSalary === r.baseSalary &&
+        old.deductionAmount === r.deductionAmount &&
+        old.advanceAmount === r.advanceAmount &&
+        old.status === r.status
+      ) {
+        return;
+      }
+      totalBaseDelta += r.baseSalary - old.baseSalary;
+      const by = nextApps
+        .filter((a) => a.staffSalaryId === r.id)
+        .map((a) => `#${a.deductionId} ${fmt(a.amount)}`)
+        .join(' + ');
+      lines.push(
+        `| ${r.organizationId} | ${userId} ${r.fullName} | ${r.forMonth.slice(0, 7)} | ` +
+          `${fmt(old.baseSalary)} → ${fmt(r.baseSalary)} | ` +
+          `${fmt(old.deductionAmount)} → **${fmt(r.deductionAmount)}** | ` +
+          `${fmt(r.paidAmount)} | ` +
+          `${fmt(salaryRemaining(old))} → **${fmt(salaryRemaining(r))}** | ` +
+          `${old.status} → ${r.status} | ${[by && `ushlanadi: ${by}`, notes.get(r.id)].filter(Boolean).join('; ')} |`,
+      );
+    });
+    // Faqat ichki taqsimot o'zgargan bo'lsa ham (summalar bir xil) — yoziladi.
+    const key = (a: AppRow) =>
+      `${a.staffSalaryId}:${a.deductionId}:${round2(a.amount)}`;
+    const appsChanged =
+      apps
+        .filter((a) => a.amount > 0)
+        .map(key)
+        .sort()
+        .join() !== nextApps.map(key).sort().join();
+    if (!lines.length && !appsChanged) continue;
     report.push(...lines);
     const dLines = deductions
       .filter((d) => before.get(d.id) !== d.appliedAmount)
       .map(
         (d) =>
-          `    ${d.type} #${d.id} (${fmt(d.amount)}): ushlangan ${fmt(before.get(d.id) ?? 0)} → ${fmt(d.appliedAmount)}`,
+          `${d.type === StaffDeductionType.ADVANCE ? 'avans' : 'jarima'} #${d.id} (${fmt(d.amount)}): ushlangan ${fmt(before.get(d.id) ?? 0)} → ${fmt(d.appliedAmount)}, qarz ${fmt(round2(d.amount - d.appliedAmount))}`,
       );
-    if (dLines.length)
+    if (dLines.length || (appsChanged && !lines.length)) {
       report.push(
-        `|  | ${userId}: avans/jarima |  |  |  |  |  |  |  |  | ${dLines.join('; ').trim()} |`,
+        `|  | ${userId} ${rows[0].fullName} |  |  |  |  |  |  | ${dLines.join('; ') || "faqat oylar orasidagi taqsimot o'zgaradi (summalar bir xil)"} |`,
       );
-    changedUsers.push({ userId, rows: open });
+    }
+    changedUsers.push({ userId, rows, recalcBase });
   }
 
   console.log(
     APPLY ? '\n=== APPLY ===' : '\n=== DRY-RUN (hech narsa yozilmadi) ===',
   );
   console.log(
-    '| org | xodim | oy | sabab | baseSalary | avans | jarima | berilgan | qoldiq | holat | izoh |',
+    '| org | xodim | oy | hisoblangan oylik | ushlangan (avans+jarima) | berilgan | qoldiq | holat | izoh |',
   );
-  console.log('|---|---|---|---|---|---|---|---|---|---|---|');
+  console.log('|---|---|---|---|---|---|---|---|---|');
   for (const l of report) console.log(l);
   console.log(
     `\nXodimlar: ${changedUsers.length}, baseSalary jami o'zgarishi: ${fmt(round2(totalBaseDelta))}`,
   );
 
   if (APPLY) {
-    for (const { userId, rows } of changedUsers) {
-      for (const r of rows) {
-        if (r.role === UserRole.TEACHER) {
+    for (const { userId, rows, recalcBase } of changedUsers) {
+      if (recalcBase) {
+        for (const r of rows) {
+          if (r.role !== UserRole.TEACHER || isSalaryFrozen(r as any)) continue;
           await earnings.calculateTeacherEarningsForMonth(
             r.organizationId,
             userId,
@@ -318,9 +325,9 @@ async function main() {
             { force: true },
           );
         }
-        // O'qituvchida calculate ham resync qiladi — takror chaqiruv idempotent.
-        await deductionsService.resync(r.id);
       }
+      // Avans/jarima taqsimotini noldan qayta quradi (idempotent).
+      await deductionsService.rebuildUser(userId);
     }
     console.log(
       "Yozildi. Tekshirish uchun skriptni yana dry-run bilan ishga tushiring — 0 o'zgarish chiqishi kerak.",

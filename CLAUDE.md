@@ -444,6 +444,15 @@ iyun oyligi iyunda turadi, pul iyulda berilsa ham. Ilgari bu to'lov oyi edi (iyu
   carryover'da qolardi (prod org 38). Ochiq oyda: shu oydan chiqib hech qayerga
   qo'shilmagan carryover o'chadi (pul `gross` da qayta sanaladi), boshqa oyga qo'shilgani
   komissiyadan ayiriladi (`50% × tushum − o'tkazilgan`); carryover faqat muzlagan oydan olinadi.
+- **Avans/jarima taqsimoti noldan quriladi** (2026-11-28, `rebuildUserTx`): har `resync` da
+  xodimning barcha ochiq oyliklari eskidan yangiga to'ldiriladi — ushlanma o'zi tanlangan oydan
+  oldin tushmaydi, sig'magani keyingi oyga. Ilgari "qo'llangan joyida" qolardi: noyabr oktyabrdan
+  oldin hisoblansa oktyabr avansi noyabrda qotardi (prod user 358). Muzlagan oylik tegilmaydi.
+- **O'tkazma manbasi** (migratsiya `…077`): `teacher_commission_carryovers.paymentId/receiptId/
+  studentId/groupId` — qayta hisobni boshlagan to'lov (`sourcePaymentId`), eskilari vaqt bo'yicha.
+- **Batafsil hisob**: `GET /staff-salaries/details?userId&forMonth` va `/:id/details`
+  (`StaffSalaryDetailsService`, faqat o'qiydi): guruh bo'yicha ustama, o'tkazmalar sababi bilan,
+  mukofot/jarima, avanslar (qaysi oydan qancha), berilgan pullar, yakuniy hisob.
 - Holat — `salaryStatusOf`: `paid + avans >= topgani` → `paid`, lekin 0 so'mlik oylik `paid` emas.
 - `StaffDeductionsService.resync(salaryId, {baseSalary?})` — oylikni ushlanmalar bilan moslashning
   yagona joyi (releaseExcess → applyOutstanding → holat), xodim bo'yicha `pg_advisory_xact_lock`

@@ -20,7 +20,7 @@ import {
 } from '@/modules/staff-salaries/dto/create-staff-adjustment.dto';
 import {
   round2,
-  salaryCapacity,
+  isSalaryFrozen,
   salaryStatusOf,
 } from '@/modules/staff-salaries/salary-math';
 
@@ -259,13 +259,7 @@ export class StaffDeductionsService {
    */
   private async reapplyFrom(userId: number, fromMonth?: string): Promise<void> {
     if (!fromMonth) return;
-    const salaries = await this.salaryRepo
-      .createQueryBuilder('s')
-      .where('s."userId" = :userId', { userId })
-      .andWhere('s."forMonth" >= :fromMonth', { fromMonth })
-      .orderBy('s."forMonth"', 'ASC')
-      .getMany();
-    for (const salary of salaries) await this.applyOutstanding(salary);
+    await this.rebuildUser(userId);
   }
 
   private assertAdvanceMonth(month: string): void {
@@ -297,13 +291,9 @@ export class StaffDeductionsService {
   }
 
   /**
-   * Oylik qatorini ushlanmalar bilan moslaydi — yagona kirish nuqtasi:
-   * 1) `baseSalary` berilsa — yoziladi (qayta hisoblangan daromad);
-   * 2) oylik kichraygan bo'lsa ortiqcha ushlanma qaytadi (`releaseExcess`);
-   * 3) ochiq jarima/avanslar sig'gancha qo'llanadi (`applyOutstanding`);
-   * 4) holat `salaryStatusOf` bo'yicha qayta qo'yiladi.
-   * Qator bazadan qulf ostida qayta o'qiladi — chaqiruvchidagi eski nusxa
-   * ishlatilmaydi. Idempotent.
+   * Oylik qatorini ushlanmalar bilan moslaydi — yagona kirish nuqtasi.
+   * `baseSalary` berilsa yoziladi, keyin xodimning BUTUN taqsimoti qayta
+   * quriladi (`rebuildUserTx`). Qulf ostida, idempotent.
    */
   async resync(
     salaryId: number,
@@ -314,34 +304,23 @@ export class StaffDeductionsService {
 
     return this.dataSource.transaction(async (manager) => {
       await this.lockUser(manager, head.userId);
-      const salary = await manager.findOne(StaffSalary, {
-        where: { id: salaryId },
-      });
-      if (!salary) return null;
       if (patch?.baseSalary !== undefined) {
-        salary.baseSalary = round2(patch.baseSalary) as any;
+        await manager.update(
+          StaffSalary,
+          { id: salaryId },
+          { baseSalary: round2(patch.baseSalary) as any },
+        );
       }
+      await this.rebuildUserTx(manager, head.userId);
+      return manager.findOne(StaffSalary, { where: { id: salaryId } });
+    });
+  }
 
-      await this.releaseExcessTx(manager, salary);
-      await this.applyOutstandingTx(manager, salary);
-
-      salary.status = salaryStatusOf(salary);
-      salary.paidAt =
-        salary.status === StaffSalaryStatus.PAID
-          ? (salary.paidAt ?? new Date())
-          : null;
-      await manager.update(
-        StaffSalary,
-        { id: salary.id },
-        {
-          baseSalary: salary.baseSalary as any,
-          deductionAmount: salary.deductionAmount as any,
-          advanceAmount: salary.advanceAmount as any,
-          status: salary.status,
-          paidAt: salary.paidAt,
-        },
-      );
-      return salary;
+  /** Xodimning taqsimotini qayta quradi (skript va avans yozilganda). */
+  async rebuildUser(userId: number): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      await this.lockUser(manager, userId);
+      await this.rebuildUserTx(manager, userId);
     });
   }
 
@@ -356,160 +335,191 @@ export class StaffDeductionsService {
     salary.paidAt = fresh.paidAt;
   }
 
-  /**
-   * Oylik kichraysa (mukofot bekor qilindi, hisoblangan oylik kamaydi) unga
-   * qo'llangan ushlanma sig'imdan oshib qoladi. Ortig'i qaytariladi — eng
-   * oxirgi qo'llangandan boshlab — va yana "keyingi oyliklardan ushlanadi"
-   * holatiga o'tadi. Berilgan pul (`paidAmount`) tegilmaydi. Idempotent.
-   */
+  /** Eski nom — endi butun taqsimotni qayta quradi. */
   async releaseExcess(salary: StaffSalary): Promise<void> {
     await this.resyncInto(salary);
   }
 
-  /**
-   * Xodimning ochiq jarimalarini shu oy oyligiga qo'llaydi (eskisidan boshlab).
-   *
-   * Idempotent: faqat hali ushlanmagan qismni va faqat oylikka sig'adigan
-   * miqdorni qo'llaydi, shuning uchun har o'qishda xavfsiz chaqiriladi.
-   * To'langan summadan pastga tushib ketmaydi — aks holda xodimga ortiqcha
-   * berilgan bo'lib qolardi.
-   */
+  /** Eski nom — endi butun taqsimotni qayta quradi. */
   async applyOutstanding(salary: StaffSalary): Promise<number> {
     await this.resyncInto(salary);
     return Number(salary.deductionAmount ?? 0);
   }
 
-  private async releaseExcessTx(
+  /**
+   * Xodimning avans va jarimalari qaysi oy oyligidan qancha ushlanishini
+   * NOLDAN hisoblab chiqadi va bazani shunga moslaydi (2026-11-28).
+   *
+   * Qoida: oylar eskidan yangiga qarab to'ldiriladi. Har bir oyga avval
+   * eng eski ushlanma (o'zi tanlangan oy bo'yicha, keyin id) tushadi —
+   * ushlanma o'zi tanlangan oydan OLDINGI oyga tushmaydi. Oy oyligiga
+   * sig'magani keyingi oyga o'tadi. Ya'ni oldingi oyda joy bor ekan,
+   * avans keyingi oyga ushlanmaydi.
+   *
+   * Ilgari ushlanma "qo'llangan joyida" qolardi: noyabr oktyabrdan oldin
+   * hisoblansa, oktyabr avansi noyabrga tushib, oktyabr keyin oshganda ham
+   * o'sha yerda qolib ketardi (prod, user 358).
+   *
+   * Muzlatilgan oylik (pul berib yopilgan o'tgan oy) tegilmaydi — undagi
+   * ushlanmalar o'zgarmas. Oy sig'imi = oylik + mukofot − berilgan pul.
+   * Faqat farq yoziladi: o'zgarmagan qatorlarga UPDATE yo'q, dublikat yo'q.
+   */
+  private async rebuildUserTx(
     manager: EntityManager,
-    salary: StaffSalary,
+    userId: number,
   ): Promise<void> {
-    const room =
-      Number(salary.baseSalary ?? 0) +
-      Number(salary.bonusAmount ?? 0) -
-      Number(salary.paidAmount ?? 0);
-    let excess = round2(
-      Number(salary.deductionAmount ?? 0) - Math.max(0, room),
-    );
-    if (excess <= 0) return;
+    const salaries = await manager
+      .getRepository(StaffSalary)
+      .createQueryBuilder('s')
+      .where('s."userId" = :userId', { userId })
+      .orderBy('s."forMonth"', 'ASC')
+      .getMany();
+    const deductions = await manager
+      .getRepository(StaffDeduction)
+      .createQueryBuilder('d')
+      .where('d."userId" = :userId', { userId })
+      .orderBy('d."sourceForMonth"', 'ASC')
+      .addOrderBy('d.id', 'ASC')
+      .getMany();
+    const salaryIds = salaries.map((s) => s.id);
+    const current = salaryIds.length
+      ? await manager
+          .getRepository(StaffSalaryDeduction)
+          .createQueryBuilder('a')
+          .where('a."staffSalaryId" IN (:...salaryIds)', { salaryIds })
+          .getMany()
+      : [];
 
-    const applications = await manager.find(StaffSalaryDeduction, {
-      where: { staffSalaryId: salary.id },
-      relations: ['deduction'],
-    });
-    applications.sort(
-      (a, b) =>
-        String(b.deduction?.sourceForMonth ?? '').localeCompare(
-          String(a.deduction?.sourceForMonth ?? ''),
-        ) || b.deductionId - a.deductionId,
+    const key = (salaryId: number, deductionId: number) =>
+      `${salaryId}:${deductionId}`;
+    const frozenIds = new Set(
+      salaries.filter((s) => isSalaryFrozen(s)).map((s) => s.id),
     );
 
-    let deductionAmount = Number(salary.deductionAmount ?? 0);
-    let advanceAmount = Number(salary.advanceAmount ?? 0);
-    for (const app of applications) {
-      if (excess <= 0) break;
-      const back = round2(Math.min(Number(app.amount), excess));
-      if (back <= 0) continue;
-      const left = round2(Number(app.amount) - back);
-      if (left > 0) {
+    // Qolgan (ushlanmagan) summa — muzlagan oyliklardagisi o'zgarmas.
+    const left = new Map<number, number>(
+      deductions.map((d) => [d.id, Number(d.amount)]),
+    );
+    const target = new Map<string, number>();
+    for (const app of current) {
+      if (!frozenIds.has(app.staffSalaryId)) continue;
+      target.set(key(app.staffSalaryId, app.deductionId), Number(app.amount));
+      left.set(
+        app.deductionId,
+        round2((left.get(app.deductionId) ?? 0) - Number(app.amount)),
+      );
+    }
+
+    const monthStr = (s: StaffSalary) => dayjs(s.forMonth).format('YYYY-MM-DD');
+    const srcStr = (d: StaffDeduction) =>
+      dayjs(d.sourceForMonth).format('YYYY-MM-DD');
+    for (const salary of salaries) {
+      if (frozenIds.has(salary.id)) continue;
+      let room = round2(
+        Math.max(
+          0,
+          Number(salary.baseSalary ?? 0) +
+            Number(salary.bonusAmount ?? 0) -
+            Number(salary.paidAmount ?? 0),
+        ),
+      );
+      for (const d of deductions) {
+        if (room <= 0) break;
+        if (srcStr(d) > monthStr(salary)) continue;
+        const take = round2(Math.min(left.get(d.id) ?? 0, room));
+        if (take <= 0) continue;
+        target.set(key(salary.id, d.id), take);
+        left.set(d.id, round2((left.get(d.id) ?? 0) - take));
+        room = round2(room - take);
+      }
+    }
+
+    // ── Farqni yozish ──
+    const seen = new Set<string>();
+    for (const app of current) {
+      const k = key(app.staffSalaryId, app.deductionId);
+      seen.add(k);
+      const want = target.get(k) ?? 0;
+      if (want <= 0) {
+        await manager.delete(StaffSalaryDeduction, { id: app.id });
+      } else if (round2(Number(app.amount)) !== want) {
         await manager.update(
           StaffSalaryDeduction,
           { id: app.id },
-          { amount: left as any },
+          { amount: want as any },
         );
-      } else {
-        await manager.delete(StaffSalaryDeduction, { id: app.id });
       }
-      await manager.update(
-        StaffDeduction,
-        { id: app.deductionId },
-        {
-          appliedAmount: round2(
-            Number(app.deduction.appliedAmount) - back,
-          ) as any,
-          settledAt: null,
-        },
-      );
-      deductionAmount = round2(deductionAmount - back);
-      if (app.deduction.type === StaffDeductionType.ADVANCE) {
-        advanceAmount = round2(advanceAmount - back);
-      }
-      excess = round2(excess - back);
     }
-    salary.deductionAmount = deductionAmount as any;
-    salary.advanceAmount = advanceAmount as any;
-  }
-
-  private async applyOutstandingTx(
-    manager: EntityManager,
-    salary: StaffSalary,
-  ): Promise<void> {
-    // Ushlab qolish mumkin bo'lgan eng katta summa (mukofot ham oylikka kiradi)
-    const capacity = salaryCapacity(salary);
-    if (capacity <= 0) return;
-
-    const monthEnd = dayjs(salary.forMonth).endOf('month').format('YYYY-MM-DD');
-    const open = await manager
-      .getRepository(StaffDeduction)
-      .createQueryBuilder('d')
-      .where('d."userId" = :userId', { userId: salary.userId })
-      .andWhere('d."sourceForMonth" <= :monthEnd', { monthEnd })
-      .andWhere('d."amount" > d."appliedAmount"')
-      .orderBy('d.sourceForMonth', 'ASC')
-      .addOrderBy('d.id', 'ASC')
-      .getMany();
-
-    let left = capacity;
-    let applied = Number(salary.deductionAmount ?? 0);
-    let advance = Number(salary.advanceAmount ?? 0);
-
-    for (const deduction of open) {
-      if (left <= 0) break;
-
-      const remaining = round2(
-        Number(deduction.amount) - Number(deduction.appliedAmount),
+    for (const [k, amount] of target) {
+      if (seen.has(k) || amount <= 0) continue;
+      const [staffSalaryId, deductionId] = k.split(':').map(Number);
+      await manager.save(
+        manager.create(StaffSalaryDeduction, {
+          staffSalaryId,
+          deductionId,
+          amount: amount as any,
+        }),
       );
-      if (remaining <= 0) continue;
+    }
 
-      const take = round2(Math.min(remaining, left));
-
-      // Bitta jarima bitta oylikka bir necha marta qo'llanishi mumkin
-      // (masalan baseSalary keyinroq oshsa) — shuning uchun upsert
-      const existing = await manager.findOne(StaffSalaryDeduction, {
-        where: { staffSalaryId: salary.id, deductionId: deduction.id },
-      });
-      if (existing) {
-        existing.amount = round2(Number(existing.amount) + take) as any;
-        await manager.save(existing);
-      } else {
-        await manager.save(
-          manager.create(StaffSalaryDeduction, {
-            staffSalaryId: salary.id,
-            deductionId: deduction.id,
-            amount: take as any,
-          }),
+    for (const d of deductions) {
+      const applied = round2(Number(d.amount) - (left.get(d.id) ?? 0));
+      const settled = applied >= Number(d.amount);
+      if (
+        round2(Number(d.appliedAmount)) !== applied ||
+        !!d.settledAt !== settled
+      ) {
+        await manager.update(
+          StaffDeduction,
+          { id: d.id },
+          {
+            appliedAmount: applied as any,
+            settledAt: settled ? (d.settledAt ?? new Date()) : null,
+          },
         );
-      }
-
-      const nextApplied = round2(Number(deduction.appliedAmount) + take);
-      await manager.update(
-        StaffDeduction,
-        { id: deduction.id },
-        {
-          appliedAmount: nextApplied as any,
-          settledAt:
-            nextApplied >= Number(deduction.amount) ? new Date() : null,
-        },
-      );
-
-      left = round2(left - take);
-      applied = round2(applied + take);
-      if (deduction.type === StaffDeductionType.ADVANCE) {
-        advance = round2(advance + take);
       }
     }
 
-    salary.deductionAmount = applied as any;
-    salary.advanceAmount = advance as any;
+    const typeById = new Map(deductions.map((d) => [d.id, d.type]));
+    for (const salary of salaries) {
+      let deduction = 0;
+      let advance = 0;
+      for (const [k, amount] of target) {
+        const [sid, did] = k.split(':').map(Number);
+        if (sid !== salary.id) continue;
+        deduction += amount;
+        if (typeById.get(did) === StaffDeductionType.ADVANCE) advance += amount;
+      }
+      const next = {
+        ...salary,
+        deductionAmount: round2(deduction),
+        advanceAmount: round2(advance),
+      };
+      const status = frozenIds.has(salary.id)
+        ? salary.status
+        : salaryStatusOf(next);
+      const paidAt =
+        status === StaffSalaryStatus.PAID
+          ? (salary.paidAt ?? new Date())
+          : null;
+      if (
+        round2(Number(salary.deductionAmount ?? 0)) !== next.deductionAmount ||
+        round2(Number(salary.advanceAmount ?? 0)) !== next.advanceAmount ||
+        salary.status !== status ||
+        !!salary.paidAt !== !!paidAt
+      ) {
+        await manager.update(
+          StaffSalary,
+          { id: salary.id },
+          {
+            deductionAmount: next.deductionAmount as any,
+            advanceAmount: next.advanceAmount as any,
+            status,
+            paidAt,
+          },
+        );
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -594,7 +604,22 @@ export class StaffDeductionsService {
   }
 
   async findOne(id: number, reqUser: any) {
-    return this.toView(await this.getOwned(id, reqUser));
+    const view = this.toView(await this.getOwned(id, reqUser));
+    // Qaysi oy oyligidan qancha ushlangani — avans saqlangandan keyingi xabar uchun
+    const rows: { forMonth: Date; amount: string }[] =
+      await this.dataSource.query(
+        `SELECT s."forMonth", a."amount" FROM "staff_salary_deductions" a
+           JOIN "staff_salaries" s ON s."id" = a."staffSalaryId"
+          WHERE a."deductionId" = $1 ORDER BY s."forMonth"`,
+        [id],
+      );
+    return {
+      ...view,
+      allocations: rows.map((r) => ({
+        month: dayjs(r.forMonth).format('YYYY-MM-01'),
+        amount: Number(r.amount),
+      })),
+    };
   }
 
   // ─────────────────────────────────────────────────────────────

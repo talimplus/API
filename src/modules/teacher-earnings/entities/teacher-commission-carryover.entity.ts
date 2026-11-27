@@ -40,6 +40,23 @@ export class TeacherCommissionCarryOver {
   @Column({ type: 'timestamp', nullable: true })
   appliedAt?: Date | null;
 
+  /**
+   * Manba: qaysi to'lov (chek) tufayli ulush boshqa oyga o'tdi. Bir nechta
+   * chek bitta qayta hisobga tushsa — eng oxirgisi. Eski yozuvlarda NULL
+   * bo'lishi mumkin (migratsiya `…077` vaqt bo'yicha to'ldirgan).
+   */
+  @Column({ type: 'int', nullable: true })
+  paymentId?: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  receiptId?: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  studentId?: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  groupId?: number | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt: Date;
 }

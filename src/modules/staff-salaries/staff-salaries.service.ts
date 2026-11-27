@@ -24,6 +24,7 @@ import {
   StaffDeductionsService,
 } from '@/modules/staff-salaries/staff-deductions.service';
 import { StaffBonusesService } from '@/modules/staff-salaries/staff-bonuses.service';
+import { StaffSalaryDetailsService } from '@/modules/staff-salaries/staff-salary-details.service';
 import {
   isSalaryFrozen,
   salaryMoneyView,
@@ -46,6 +47,7 @@ export class StaffSalariesService {
     private readonly deductionsService: StaffDeductionsService,
     private readonly userPayService: UserPayService,
     private readonly bonusesService: StaffBonusesService,
+    private readonly detailsService: StaffSalaryDetailsService,
   ) {}
 
   private normalizeForMonth(forMonth?: string): string {
@@ -321,6 +323,10 @@ export class StaffSalariesService {
         teacherEarningById.set(e.teacherId, e);
       }
     }
+    const transfersByTeacher = await this.detailsService.transfersFor(
+      teacherUserIds,
+      month,
+    );
 
     return rows.map((r: any) => {
       const paymentHistory = paymentHistoryMap.get(r.id) || [];
@@ -368,6 +374,18 @@ export class StaffSalariesService {
           );
           out.earningTotalEarning = Number((earning as any).totalEarning ?? 0);
         }
+        // Oylar orasidagi o'tkazmalar: shu oydan chiqqan (o'quvchi kech
+        // to'lagan) va boshqa oydan kelgan ustoz ulushi — sababi bilan.
+        const transfers = transfersByTeacher.get(r.userId) ?? {
+          out: [],
+          in: [],
+        };
+        out.transfersOut = transfers.out;
+        out.transfersIn = transfers.in;
+        // Shu oy uchun tushgan pulning to'liq ulushi (o'tkazma ayirilmagan)
+        out.earningCommissionGross =
+          Number(out.earningCommissionAmount ?? 0) +
+          transfers.out.reduce((sum, t) => sum + t.amount, 0);
       }
 
       return out;

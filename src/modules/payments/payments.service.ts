@@ -1991,6 +1991,8 @@ export class PaymentsService {
     await this.recalcTeacherEarningsForGroupMonth(
       Number(info.groupId),
       dayjs(info.forMonth).format('YYYY-MM-01'),
+      [],
+      paymentId,
     );
   }
 
@@ -2005,6 +2007,8 @@ export class PaymentsService {
     groupId: number,
     month: string,
     extraTeacherIds: number[] = [],
+    /** Qayta hisobni boshlagan to'lov — o'tkazma (carryover) manbasi uchun. */
+    sourcePaymentId?: number,
   ) {
     // O'qituvchi oyligi to'lov bilan bir xil oyda (ish oyi) turadi.
     // Kelajak oy uchun oldindan to'lov bo'lsa — o'sha oy ochilganda hisoblanadi.
@@ -2033,7 +2037,7 @@ export class PaymentsService {
           organizationId,
           teacherId,
           monthYm,
-          { force: true },
+          { force: true, sourcePaymentId },
         );
       } catch (e) {
         this.logger.warn(

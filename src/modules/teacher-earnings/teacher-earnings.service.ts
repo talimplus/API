@@ -44,6 +44,27 @@ export class TeacherEarningsService {
     private readonly deductionsService: StaffDeductionsService,
   ) {}
 
+  /** O'tkazma manbasi: to'lov qatori va uning oxirgi tasdiqlangan cheki. */
+  private async carrySource(m: EntityManager, paymentId?: number) {
+    if (!paymentId) return {};
+    const [row] = await m.query(
+      `SELECT p."id" AS "paymentId", p."studentId", p."groupId",
+              (SELECT r."id" FROM "payment_receipts" r
+                WHERE r."paymentId" = p."id" AND r."status" = 'confirmed'
+                ORDER BY r."confirmedAt" DESC NULLS LAST, r."id" DESC LIMIT 1
+              ) AS "receiptId"
+         FROM "payments" p WHERE p."id" = $1`,
+      [paymentId],
+    );
+    if (!row) return {};
+    return {
+      paymentId: Number(row.paymentId),
+      studentId: row.studentId ? Number(row.studentId) : null,
+      groupId: row.groupId ? Number(row.groupId) : null,
+      receiptId: row.receiptId ? Number(row.receiptId) : null,
+    };
+  }
+
   /** Bir o'qituvchi + oy uchun carryover hisobi bitta qulf ostida. */
   private async lockMonth(m: EntityManager, teacherId: number, month: string) {
     await m.query('SELECT pg_advisory_xact_lock($1, $2)', [
@@ -183,7 +204,26 @@ export class TeacherEarningsService {
     teacherId: number,
     month: string, // YYYY-MM-01
   ): Promise<number> {
+    const byGroup = await this.commissionBaseByGroup(teacherId, month);
+    let total = 0;
+    for (const v of byGroup.values()) total += v;
+    return this.round2(total);
+  }
+
+  /**
+   * Guruh bo'yicha: shu oy uchun o'quvchilardan tushgan pulning shu
+   * o'qituvchiga tegishli qismi (ulush foizi qo'llanmagan). Ish haqi
+   * sahifasidagi "ustama qayerdan keldi" jadvali shundan.
+   */
+  async commissionBaseByGroup(
+    teacherId: number,
+    month: string, // YYYY-MM-01
+  ): Promise<Map<number, number>> {
     const manager = this.paymentRepo.manager;
+    const result = new Map<number, number>();
+    const add = (groupId: number, v: number) => {
+      if (v > 0) result.set(groupId, (result.get(groupId) ?? 0) + v);
+    };
     const groupRows: { id: number }[] = await manager.query(
       `SELECT g."id" FROM "groups" g WHERE g."teacherId" = $1
        UNION
@@ -191,7 +231,6 @@ export class TeacherEarningsService {
       [teacherId],
     );
 
-    let total = 0;
     for (const { id: groupId } of groupRows) {
       const resolver = await this.loadTeacherResolver(Number(groupId));
       const monthStart = dayjs(month).startOf('month');
@@ -207,7 +246,10 @@ export class TeacherEarningsService {
           [groupId],
         );
         if (Number(row?.teacherId) === teacherId) {
-          total += await this.sumPaidForGroupMonth(Number(groupId), month);
+          add(
+            Number(groupId),
+            await this.sumPaidForGroupMonth(Number(groupId), month),
+          );
         }
         continue;
       }
@@ -215,20 +257,26 @@ export class TeacherEarningsService {
       const owners = new Set(monthDays.map((d) => resolver(d)));
       if (!owners.has(teacherId)) continue;
       if (owners.size === 1) {
-        total += await this.sumPaidForGroupMonth(Number(groupId), month);
+        add(
+          Number(groupId),
+          await this.sumPaidForGroupMonth(Number(groupId), month),
+        );
         continue;
       }
 
-      total += await this.splitPaidForGroupMonth(
+      add(
         Number(groupId),
-        month,
-        teacherId,
-        resolver,
-        monthDays,
+        await this.splitPaidForGroupMonth(
+          Number(groupId),
+          month,
+          teacherId,
+          resolver,
+          monthDays,
+        ),
       );
     }
 
-    return this.round2(total);
+    return result;
   }
 
   private async sumPaidForGroupMonth(
@@ -341,7 +389,8 @@ export class TeacherEarningsService {
     organizationId: number,
     teacherId: number,
     monthYM: string,
-    opts?: { force?: boolean },
+    /** `sourcePaymentId` — qayta hisobni qaysi to'lov boshlagani (o'tkazma manbasi). */
+    opts?: { force?: boolean; sourcePaymentId?: number },
   ) {
     const month = this.normalizeForMonthYM(monthYM);
     const force = !!opts?.force;
@@ -399,6 +448,7 @@ export class TeacherEarningsService {
           Number(existing.commissionAmount ?? 0) + Number(carried?.sum ?? 0);
         const d = this.round2(grossCommission - counted);
         if (d > 0) {
+          const source = await this.carrySource(m, opts?.sourcePaymentId);
           await m.getRepository(TeacherCommissionCarryOver).save(
             m.getRepository(TeacherCommissionCarryOver).create({
               teacherId,
@@ -406,6 +456,7 @@ export class TeacherEarningsService {
               amount: d as any,
               appliedForMonth: null,
               appliedAt: null,
+              ...source,
             }),
           );
         }

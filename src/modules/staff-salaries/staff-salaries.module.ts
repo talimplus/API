@@ -12,6 +12,7 @@ import { User } from '@/modules/users/entities/user.entity';
 import { StaffSalariesService } from '@/modules/staff-salaries/staff-salaries.service';
 import { StaffDeductionsService } from '@/modules/staff-salaries/staff-deductions.service';
 import { StaffOverviewService } from '@/modules/staff-salaries/staff-overview.service';
+import { StaffSalaryDetailsService } from '@/modules/staff-salaries/staff-salary-details.service';
 import { StaffSalariesController } from '@/modules/staff-salaries/staff-salaries.controller';
 import { StaffOverviewController } from '@/modules/staff-salaries/staff-overview.controller';
 import { TeacherEarningsModule } from '@/modules/teacher-earnings/teacher-earnings.module';
@@ -37,6 +38,7 @@ import { StaffAttendanceModule } from '@/modules/staff-attendance/staff-attendan
     StaffDeductionsService,
     StaffBonusesService,
     StaffOverviewService,
+    StaffSalaryDetailsService,
   ],
   controllers: [StaffSalariesController, StaffOverviewController],
   exports: [StaffSalariesService, StaffDeductionsService],
