@@ -110,6 +110,32 @@ const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
 };
 
 /** Oy (va guruh) uchun hisoblangan chegirma: foizlar va summalar yig'indisi. */
+/** Qayta hisoblashda o'zgargan (yoki o'chadigan) bitta to'lov qatori. */
+export interface PaymentRowChange {
+  paymentId: number;
+  studentId: number;
+  groupId: number | null;
+  forMonth: string;
+  kind: 'update' | 'delete';
+  /** `amountDue|amountPaid|refunded|planned|billable|excused|status|due|hardDue` */
+  before: string;
+  after: string | null;
+}
+
+export interface PaymentRecalcResult {
+  updated: number;
+  deleted: number;
+  changes: PaymentRowChange[];
+}
+
+/** `syncOpenPayments` natijasi: yaratilgan qatorlar + qayta hisob. */
+export interface PaymentsSyncResult extends PaymentRecalcResult {
+  created: number;
+  /** Yaratiladigan qatorlar: `studentId:groupId:YYYY-MM-01`. */
+  createdKeys: string[];
+  durationMs: number;
+}
+
 export interface ResolvedDiscount {
   percent: number;
   /** so'm/oy — faqat to'liq oylarga qo'llanadi */
@@ -2061,6 +2087,9 @@ export class PaymentsService {
     this.logger.log('Cron: Current month payments ensuring...');
     try {
       await this.ensurePaymentsForAllActiveStudents({ onlyCurrentMonth: true });
+      // Zaxira: oxirgi 3 oy yetishmagan qatorlari + ochiq qatorlar qayta
+      // hisobi (ilgari har bir `GET /payments` da qilinardi).
+      await this.syncOpenPaymentsForAllOrganizations();
       // Yangi oy qatorlari paydo bo'ldi — "keyingi oyga o'tkazilgan" pullar shu
       // yerda o'z oyiga yoziladi.
       await this.applyAllStudentCredits();
@@ -3777,9 +3806,10 @@ export class PaymentsService {
    */
   private async recalcOpenPaymentRows(
     payments: Payment[],
-    opts?: { force?: boolean },
-  ) {
-    if (!payments.length) return;
+    opts?: { force?: boolean; dryRun?: boolean },
+  ): Promise<PaymentRecalcResult> {
+    const result: PaymentRecalcResult = { updated: 0, deleted: 0, changes: [] };
+    if (!payments.length) return result;
 
     const toSave: Payment[] = [];
     const toDeleteIds: number[] = [];
@@ -3847,6 +3877,15 @@ export class PaymentsService {
       if (noLessons && amountPaid === 0 && !withReceipts.has(p.id)) {
         // Keraksiz nol qator — o'chiramiz.
         toDeleteIds.push(p.id);
+        result.changes.push({
+          paymentId: p.id,
+          studentId: p.studentId,
+          groupId: p.groupId ?? null,
+          forMonth,
+          kind: 'delete',
+          before: before.get(p.id)!,
+          after: null,
+        });
         continue;
       }
 
@@ -3886,8 +3925,25 @@ export class PaymentsService {
 
       // O'zgarmagan qator saqlanmaydi (ro'yxat har ochilganda minglab
       // keraksiz UPDATE bo'lmasligi uchun).
-      if (snapshot(p) !== before.get(p.id)) toSave.push(p);
+      const after = snapshot(p);
+      if (after !== before.get(p.id)) {
+        toSave.push(p);
+        result.changes.push({
+          paymentId: p.id,
+          studentId: p.studentId,
+          groupId: p.groupId ?? null,
+          forMonth,
+          kind: 'update',
+          before: before.get(p.id)!,
+          after,
+        });
+      }
     }
+
+    result.updated = toSave.length;
+    result.deleted = toDeleteIds.length;
+    // Faqat solishtirish: hech narsa yozilmaydi.
+    if (opts?.dryRun) return result;
 
     if (toDeleteIds.length) {
       // O'chirish paytida ham shart qayta tekshiriladi: shu orada pul yoki
@@ -3959,6 +4015,7 @@ export class PaymentsService {
         }
       })();
     }
+    return result;
   }
 
   /** Qayta hisoblash uchun ochiq to'lovlar oynasi (oxirgi N oy). */
@@ -4003,8 +4060,8 @@ export class PaymentsService {
    */
   async recalculateOpenPaymentsForOrganization(
     organizationId: number,
-    opts?: { maxMonthsBack?: number; centerId?: number },
-  ) {
+    opts?: { maxMonthsBack?: number; centerId?: number; dryRun?: boolean },
+  ): Promise<PaymentRecalcResult> {
     this.resetBillingCaches();
     this.joinedAtCache.clear();
     this.enrollmentsService.clearCache();
@@ -4018,7 +4075,7 @@ export class PaymentsService {
       })
       .getMany();
 
-    await this.recalcOpenPaymentRows(payments);
+    return this.recalcOpenPaymentRows(payments, { dryRun: opts?.dryRun });
   }
 
   /**
@@ -4031,6 +4088,11 @@ export class PaymentsService {
     groupId: number,
     opts?: { maxMonthsBack?: number; includePaid?: boolean; force?: boolean },
   ) {
+    // Avval yetishmagan qatorlar: tugash sanasi uzaytirildi, butun oyni
+    // yopgan pauza o'chirildi, jadval o'zgarib bo'sh oyga dars tushdi — bu
+    // oylarda qator yo'q (ilgari ularni `GET /payments` yaratardi).
+    await this.ensurePaymentsForGroupMembers(groupId, opts?.maxMonthsBack ?? 3);
+
     this.resetBillingCaches();
     this.joinedAtCache.clear();
     this.enrollmentsService.clearCache();
@@ -4048,6 +4110,26 @@ export class PaymentsService {
     await this.recalcOpenPaymentRows(payments, { force: opts?.force });
   }
 
+  /** Guruhning FAOL a'zolari uchun faqat SHU guruhdagi yetishmagan qatorlar. */
+  private async ensurePaymentsForGroupMembers(
+    groupId: number,
+    maxMonthsBack: number,
+  ): Promise<void> {
+    const students = await this.studentRepo
+      .createQueryBuilder('student')
+      .innerJoinAndSelect('student.groups', 'group', 'group.id = :groupId', {
+        groupId,
+      })
+      .leftJoinAndSelect('group.schedules', 'schedule')
+      .leftJoinAndSelect('student.center', 'center')
+      .where('student.status = :status', { status: StudentStatus.ACTIVE })
+      .getMany();
+    await this.ensurePaymentsForStudents(students, {
+      onlyCurrentMonth: false,
+      maxMonthsBack,
+    });
+  }
+
   /**
    * Ensure missing monthly payments exist for all ACTIVE students (and each group they belong to).
    * - Never overwrites existing payments
@@ -4055,8 +4137,8 @@ export class PaymentsService {
    */
   async ensurePaymentsForOrganization(
     organizationId: number,
-    opts?: { maxMonthsBack?: number; centerId?: number },
-  ) {
+    opts?: { maxMonthsBack?: number; centerId?: number; dryRun?: boolean },
+  ): Promise<string[]> {
     // Load active students within org + their groups + schedules (billing is schedule-based)
     const students = await this.studentRepo
       .createQueryBuilder('student')
@@ -4071,9 +4153,10 @@ export class PaymentsService {
       .andWhere('student.status = :status', { status: StudentStatus.ACTIVE })
       .getMany();
 
-    await this.ensurePaymentsForStudents(students, {
+    return this.ensurePaymentsForStudents(students, {
       onlyCurrentMonth: false,
       maxMonthsBack: opts?.maxMonthsBack,
+      dryRun: opts?.dryRun,
     });
   }
 
@@ -4188,11 +4271,16 @@ export class PaymentsService {
     }
   }
 
+  /** Yetishmagan qatorlarni yaratadi; yaratilganlar kalitini qaytaradi. */
   private async ensurePaymentsForStudents(
     students: Student[],
-    opts: { onlyCurrentMonth: boolean; maxMonthsBack?: number },
-  ) {
-    if (!students.length) return;
+    opts: {
+      onlyCurrentMonth: boolean;
+      maxMonthsBack?: number;
+      dryRun?: boolean;
+    },
+  ): Promise<string[]> {
+    if (!students.length) return [];
     this.resetBillingCaches();
     this.joinedAtCache.clear();
     this.enrollmentsService.clearCache();
@@ -4207,7 +4295,7 @@ export class PaymentsService {
       ),
     );
 
-    if (!groupIds.length) return;
+    if (!groupIds.length) return [];
 
     const existing = await this.paymentRepo
       .createQueryBuilder('payments')
@@ -4332,7 +4420,10 @@ export class PaymentsService {
       }
     }
 
-    if (!toCreate.length) return;
+    const createdKeys = toCreate.map(
+      (r) => `${r.studentId}:${r.groupId}:${r.forMonth}`,
+    );
+    if (!toCreate.length || opts.dryRun) return createdKeys;
 
     // Faqat qo'shish: parallel so'rov shu qatorni allaqachon yaratgan bo'lsa
     // `ON CONFLICT DO NOTHING` uni o'tkazib yuboradi. Ilgari bitta unique
@@ -4347,6 +4438,7 @@ export class PaymentsService {
         .orIgnore()
         .execute();
     }
+    return createdKeys;
   }
 
   private resolvePaymentsScope(
@@ -4368,21 +4460,37 @@ export class PaymentsService {
    * ACTIVE o'quvchilar uchun yetishmayotgan oylik to'lovlarni yaratadi
    * (ro'yxat ham, excel export ham shu holatdan o'qiydi).
    */
-  private async ensurePaymentsBeforeListing(
+  /**
+   * Tashkilot (yoki filial) to'lovlarini sinxronlaydi: oxirgi 3 oyning
+   * yetishmagan qatorlari yaratiladi va ochiq qatorlar qayta hisoblanadi.
+   *
+   * Ilgari bu `GET /payments` va eksportning **har bir** chaqiruvida ishlardi —
+   * katta markazda har ochilishda yuzlab qator qayta hisoblanib, sahifa
+   * sekin ochilardi. Endi: summani o'zgartiradigan har bir amal o'zi qayta
+   * hisoblaydi, bu esa faqat zaxira — tungi cron (00:10), "Yangilash" tugmasi
+   * (`POST /payments/recalculate`) va `dryRun` bilan solishtirish skripti.
+   */
+  async syncOpenPayments(
     organizationId: number,
-    effectiveCenterId?: number,
-  ) {
+    opts?: { centerId?: number; maxMonthsBack?: number; dryRun?: boolean },
+  ): Promise<PaymentsSyncResult> {
+    const startedAt = Date.now();
+    const maxMonthsBack = opts?.maxMonthsBack ?? 3;
     try {
-      await this.ensurePaymentsForOrganization(organizationId, {
-        maxMonthsBack: 3,
-        centerId: effectiveCenterId,
-      });
-      // Mavjud ochiq to'lovlarni ham yangilaymiz: guruh tugash sanasi,
-      // jadvali yoki narxi o'zgargan bo'lsa summalar eskirib qolmasin.
-      await this.recalculateOpenPaymentsForOrganization(organizationId, {
-        maxMonthsBack: 3,
-        centerId: effectiveCenterId,
-      });
+      const createdKeys = await this.ensurePaymentsForOrganization(
+        organizationId,
+        { maxMonthsBack, centerId: opts?.centerId, dryRun: opts?.dryRun },
+      );
+      const recalc = await this.recalculateOpenPaymentsForOrganization(
+        organizationId,
+        { maxMonthsBack, centerId: opts?.centerId, dryRun: opts?.dryRun },
+      );
+      return {
+        ...recalc,
+        created: createdKeys.length,
+        createdKeys,
+        durationMs: Date.now() - startedAt,
+      };
     } catch (e) {
       if (
         e instanceof QueryFailedError &&
@@ -4394,6 +4502,27 @@ export class PaymentsService {
         );
       }
       throw e;
+    }
+  }
+
+  /** Tungi zaxira: barcha tashkilotlar, har biri alohida (biri yiqilsa boshqasi to'xtamaydi). */
+  private async syncOpenPaymentsForAllOrganizations(): Promise<void> {
+    const orgs: { id: number }[] = await this.dataSource.query(
+      `SELECT id FROM organizations ORDER BY id`,
+    );
+    for (const { id } of orgs) {
+      try {
+        const r = await this.syncOpenPayments(id);
+        if (r.created || r.updated || r.deleted) {
+          this.logger.warn(
+            `Cron sync org=${id}: created=${r.created} updated=${r.updated} deleted=${r.deleted} (${r.durationMs}ms)`,
+          );
+        }
+      } catch (e) {
+        this.logger.error(
+          `Cron sync org=${id} failed: ${(e as any)?.message ?? e}`,
+        );
+      }
     }
   }
 
@@ -4668,12 +4797,8 @@ export class PaymentsService {
     },
     currentUser: CurrentUser,
   ) {
+    // Qayta hisob bu yerda YO'Q (sahifa sekinligi sababi edi) — `syncOpenPayments`.
     const scope = this.resolvePaymentsScope(filters.centerId, currentUser);
-
-    await this.ensurePaymentsBeforeListing(
-      organizationId,
-      scope.effectiveCenterId,
-    );
 
     const skip = (page - 1) * perPage;
     const [data, total] = await this.buildPaymentsListQuery(
@@ -4708,12 +4833,8 @@ export class PaymentsService {
     filters: PaymentListFilters,
     currentUser: CurrentUser,
   ): Promise<{ buffer: Buffer; fileName: string }> {
+    // Qayta hisob bu yerda YO'Q (sahifa sekinligi sababi edi) — `syncOpenPayments`.
     const scope = this.resolvePaymentsScope(filters.centerId, currentUser);
-
-    await this.ensurePaymentsBeforeListing(
-      organizationId,
-      scope.effectiveCenterId,
-    );
 
     const data = await this.buildPaymentsListQuery(
       organizationId,

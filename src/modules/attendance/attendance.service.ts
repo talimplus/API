@@ -704,9 +704,8 @@ export class AttendanceService {
 
     await this.logChanges(group, dto.lessonDate, upsertRows, previousStatuses);
 
-    // Recalculate payments for affected students: EXCUSED lessons are deducted
-    // from billing, and flipping a lesson back to PRESENT/ABSENT restores it.
-    // Failures here must not break attendance submission.
+    // Davomat to'lov summasini O'ZGARTIRMAYDI — faqat `lessonsExcused`
+    // (ma'lumot) yangilanadi. Xato davomat saqlanishini to'xtatmaydi.
     const affectedStudentIds = Array.from(
       new Set(dto.items.map((i) => i.studentId)),
     );

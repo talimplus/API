@@ -1,4 +1,5 @@
 import { dataSourceOptions } from 'db/data-source';
+import { AuditLogsModule } from '@/modules/audit-logs/audit-logs.module';
 import { StudentHistoryModule } from '@/modules/student-history/student-history.module';
 import { SubscriptionsModule } from '@/modules/subscriptions/subscriptions.module';
 import { OrganizationsModule } from '@/modules/organizations/organizations.module';
@@ -62,6 +63,7 @@ import { Module } from '@nestjs/common';
     LeadsModule,
     SyllabusModule,
     TelegramModule,
+    AuditLogsModule,
     // GroupScheduleModule,
     // AttendanceModule,
   ],

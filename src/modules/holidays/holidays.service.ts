@@ -154,10 +154,12 @@ export class HolidaysService {
 
   private async recalc(organizationId: number, centerId: number | null) {
     try {
-      await this.paymentsService.recalculateOpenPaymentsForOrganization(
-        organizationId,
-        { maxMonthsBack: 3, centerId: centerId ?? undefined },
-      );
+      // Yaratish + qayta hisob: butun oyni yopgan bayram o'chirilsa qator
+      // qayta paydo bo'lishi kerak.
+      await this.paymentsService.syncOpenPayments(organizationId, {
+        maxMonthsBack: 3,
+        centerId: centerId ?? undefined,
+      });
     } catch (e) {
       this.logger.warn(
         `Bayramdan keyin to'lovlarni qayta hisoblashda xato: ${

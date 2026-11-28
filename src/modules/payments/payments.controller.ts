@@ -18,6 +18,7 @@ import {
   Header,
   Param,
   ParseIntPipe,
+  Post,
   Put,
   Query,
   Req,
@@ -148,6 +149,44 @@ export class PaymentsController {
       },
       req.user,
     );
+  }
+
+  @Post('recalculate')
+  @RequirePermissions('payments.recalculate')
+  @ApiOperation({
+    summary: "To'lovlarni qayta hisoblash (Yangilash)",
+    description:
+      "Oxirgi 3 oyning yetishmagan qatorlarini yaratadi va ochiq to'lovlarni " +
+      'qayta hisoblaydi (`GET /payments` endi buni qilmaydi — tungi cron va shu ' +
+      'tugma). Admin `centerId` bersa — faqat shu filial, bermasa — butun ' +
+      "tashkilot; boshqalar o'z filialida.",
+  })
+  @ApiQuery({ name: 'centerId', required: false, type: Number })
+  @ApiResponse({
+    schema: {
+      example: { created: 2, updated: 5, deleted: 0, durationMs: 1840 },
+    },
+  })
+  async recalculateAll(@Req() req: any, @Query('centerId') centerId?: number) {
+    const isAdmin =
+      req.user.role === UserRole.ADMIN ||
+      req.user.role === UserRole.SUPER_ADMIN;
+    const requested = Number(centerId);
+    const effectiveCenterId = isAdmin
+      ? Number.isInteger(requested) && requested > 0
+        ? requested
+        : undefined
+      : req.user.centerId;
+    const r = await this.paymentsService.syncOpenPayments(
+      req.user.organizationId,
+      { centerId: effectiveCenterId },
+    );
+    return {
+      created: r.created,
+      updated: r.updated,
+      deleted: r.deleted,
+      durationMs: r.durationMs,
+    };
   }
 
   @Get('export')

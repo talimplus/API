@@ -480,6 +480,19 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     ],
   },
   {
+    key: 'audit',
+    label: { uz: 'Harakatlar jurnali', ru: 'Журнал действий' },
+    permissions: [
+      {
+        key: 'audit.view',
+        label: {
+          uz: 'Harakatlar jurnalini ko‘rish (kim, qachon, nimani o‘zgartirdi)',
+          ru: 'Просмотр журнала действий (кто, когда, что изменил)',
+        },
+      },
+    ],
+  },
+  {
     key: 'teacher',
     label: { uz: 'O‘qituvchi kabineti', ru: 'Кабинет преподавателя' },
     permissions: [

@@ -1889,7 +1889,9 @@ export class StudentsService {
       await this.syncLegacyFee(saved.id);
     }
 
-    if (Array.isArray(discountPeriods) && !clearDiscount) {
+    const discountPeriodsReplaced =
+      Array.isArray(discountPeriods) && !clearDiscount;
+    if (discountPeriodsReplaced) {
       await this.replaceDiscountPeriodsForStudent(saved.id, discountPeriods);
     }
 
@@ -1907,7 +1909,10 @@ export class StudentsService {
     // Guruhlar yuborilgan faol o'quvchi pastda baribir qayta hisoblanadi.
     const recalcBelow =
       shouldEnsureCurrentMonthPayments && saved.status === StudentStatus.ACTIVE;
-    if ((discountChanged || freeMonthsChanged) && !recalcBelow) {
+    if (
+      (discountChanged || freeMonthsChanged || discountPeriodsReplaced) &&
+      !recalcBelow
+    ) {
       await this.paymentsService
         .recalculateOpenPaymentsForStudent(saved.id, { maxMonthsBack: 3 })
         .catch(() => undefined);

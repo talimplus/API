@@ -111,6 +111,7 @@ Yangi servis metodi yozayotganda `organizationId` parametri **majburiy**.
 | `syllabus` | `/syllabuses`, `/groups/:id/plan`, `/teachers/me` | kurs rejasi, AI yordamchi (OpenAI), o'qituvchining bugungi darslari |
 | `telegram` | `/telegram` | **ota-onalar boti** — QR ulanish, to'lov/davomat/qarz xabarlari |
 | `statistics` | `/statistics/dashboard`, `/statistics/overview`, `/statistics/trend`, `/statistics/details/:kind`, `/teachers/me/dashboard` | dashboard ko'rsatkichlari. **Kun oralig'idagi statistika** (2026-11-16, `StatisticsOverviewService` + `StatisticsDetailsService`, `statistics-range.util.ts`): `fromDate/toDate` (YYYY-MM-DD, inclusive, default joriy oy). Kassa — pul haqiqatan qaysi kunda harakatlangan: tasdiqlangan cheklar `COALESCE(paidAt, receivedAt, createdAt)` kuni (ko'chirilgan chek emas), `refundedAt`, xarajat (`forMonth` oyi ichida kiritilgan bo'lsa — `createdAt` kuni, aks holda oyning 1-sanasi), `staff_salary_payments.paidAt` + avans `createdAt`; `balance = kirim − qaytarilgan − xarajat − oylik`. O'quvchi to'lovlari/qarz — oraliq **tegadigan oylar** bo'yicha. `details/{income,expenses,salaries,students,debts}` — blok ortidagi qatorlar (`summary` blok raqamiga teng). `trend?months=6|12` — sahifa davriga bog'liq emas. Eski `/statistics/dashboard` (oy bo'yicha) eski front uchun saqlangan; **o'qituvchi dashboardi** (`TeacherDashboardService`, `teacher.dashboard`): o'z guruhlari bo'yicha oy to'lovlari, qarz, davomat, 6 oylik trend, qarzdorlar; `groups[].students` — guruhning shu oydagi BARCHA o'quvchilari (a'zolik oynasi / shu oy qatori / eski qarz) holati va summalari bilan. O'qituvchi doim o'zini ko'radi, boshqa rol `teacherId` bilan |
+| `audit-logs` | `/audit-logs` | **harakatlar jurnali** — global interceptor, har bir o'zgartiruvchi so'rov (6.12) |
 | `student-history` | `/students/:id/timeline` | **o'quvchi tarixi** (timeline) + `student_events` jurnali (6.5.3) |
 | `lessons` | — | **bo'sh stub modul** (entity bor, logika yo'q) |
 
@@ -401,6 +402,22 @@ amountDue = baseMonthlyFee
   qayta hisoblanadi; pul (yoki `pending` chek) bor oyga tegadigan o'zgarish — eski
   oraliq ham, yangisi ham — bloklanadi.
 - Oyna: oxirgi 3 oy (`maxMonthsBack`, `openPaymentsWindow`).
+- **`GET /payments` va eksport qayta HISOBLAMAYDI** (2026-11-28): ilgari har ochilishda
+  `ensurePaymentsBeforeListing` butun tashkilotning ochiq qatorlarini qayta hisoblardi
+  (prod org 27 — 647 qator, sahifa sekin ochilardi). Endi bu zaxira `syncOpenPayments`
+  da: tungi cron (00:10, `syncOpenPaymentsForAllOrganizations` — o'zgarish bo'lsa
+  `warn` log), "Yangilash" tugmasi `POST /payments/recalculate` (`payments.recalculate`,
+  `centerId` ⊕) va `dryRun`. Summani o'zgartiradigan **yangi amal yozilsa, qayta
+  hisobni o'zi chaqirishi shart** — ro'yxat endi buni yopib qo'ymaydi.
+  `recalculateOpenPaymentsForGroup` avval guruhning FAOL a'zolari uchun yetishmagan
+  qatorlarni yaratadi (`ensurePaymentsForGroupMembers`): tugash sanasi uzaytirilsa,
+  butun oyni yopgan pauza o'chirilsa, bo'sh oyga dars tushsa. Bayram — `syncOpenPayments`.
+  Ssenariy (lokal, API orqali, har qadamdan keyin drift = 0): narx, chegirma, qisman
+  to'lov, pauza, bayram, jadval 3→4, to'xtatish, sanani qisqartirib-uzaytirish, oylik pauza/bayram.
+- Solishtirish (faqat o'qiydi): `node dist/src/scripts/payments-drift.js [--org=ID] [--verbose]`
+  — har tashkilotda yaratiladigan/o'zgaradigan/o'chadigan qatorlar. Deploy'dan keyin
+  billing qoidasi o'zgargan bo'lsa ham shu bilan ko'rinadi (2026-11-28 lokal: 1 ta —
+  eski qoidadagi `lessonsPlanned`).
 - Chaqiruv nuqtalari: guruh sanasi/jadvali o'zgarganda, o'quvchi tahrirlanganda,
   davomat o'zgarganda (`recalcPaymentForAttendanceChange` — bu **PAID** larga ham tegadi
   va kerak bo'lsa refund yozadi), `PUT /payments/calculate/:id`.
@@ -941,6 +958,30 @@ logotipini ko'rsatadi: `organizations.name` + `logoUrl` + `faviconUrl`.
   yozish kifoya, o'qiydigan kod ikkalasini ham qabul qiladi.
 - Cheklovlar: logo ≤ ~300 KB, favicon ≤ ~100 KB (DTO'da `MaxLength` bilan);
   bo'sh satr yuborilsa rasm olib tashlanadi.
+
+### 6.12 Harakatlar jurnali (`audit-logs`, 2026-11-28)
+
+`audit_logs` (migratsiya `…078`) — tashkilotda ma'lumotni o'zgartirgan **har bir**
+so'rov: kim (`actorId`), qachon, bo'lim (`module`), amal (`action`: `action`=POST,
+`update`=PUT/PATCH, `delete`, `login`, `logout`), route shabloni + haqiqiy URL,
+Swagger `summary`, obyekt (`entityId` — `:id` yoki yaratilgan yozuv `id` si),
+`params/query/body`, natija (`statusCode`, `success`, `errorMessage`), IP, qurilma, vaqt.
+
+- Yozuvchi — global `AuditLogInterceptor` (`APP_INTERCEPTOR`, `AuditLogsModule`).
+  Modullar hech narsa chaqirmaydi: yangi endpoint o'zi jurnalga tushadi.
+- Guard'lardan keyin ishlaydi: 401/403 yozilmaydi; 422/400/500 — `success=false` bilan.
+- Yozilmaydi: GET, `…preview…` yo'llari, `/group-schedule/conflicts`, `/auth/register`,
+  `@SkipAudit()` qo'yilgan endpoint (hech narsa yozmaydigan yangi POST uchun shu qo'yiladi).
+  Login `@Public()` — xodim javobdagi tokendan olinadi, login body umuman saqlanmaydi.
+- `sanitizeForAudit`: kalit nomida `password/token/secret/passport/jshshir/pinfl` bo'lsa
+  `[hidden]`, `data:` URL → `[file N KB]`, satr > 300, ro'yxat > 50, umumiy > 16 000 belgi qisqartiriladi.
+- `record` kutilmaydi va **hech qachon xato tashlamaydi** (fire-and-forget).
+- Bo'lim — route'ning birinchi bo'lagidan (`resolveAuditModule`); yangi controller
+  prefiksi bo'lsa `SEGMENT_MODULE` ga va front `AuditModule` enum + i18n'ga qo'shiladi.
+- O'qish: `GET /audit-logs` (filtrlar: sana, xodim, bo'lim, amal, natija, qidiruv),
+  `GET /audit-logs/:id` (body bilan). Ruxsat `audit.view` (presetlarda yo'q — admin).
+  Tashkilot bo'yicha, `centerId` filtri yo'q (`centerId` ustuni faqat ma'lumot).
+- Tozalash cron'i yo'q — jadval o'sib boradi (indekslar `organizationId, createdAt`).
 
 ## 7. Migratsiyalar
 
